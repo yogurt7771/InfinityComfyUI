@@ -348,7 +348,11 @@ describe('NodeViews', () => {
     expect(textInput).toHaveValue('workflow negative')
     expect(screen.getByTestId('function-input-slot-negative_prompt')).toHaveClass('text-primitive-slot')
     fireEvent.change(textInput, { target: { value: 'avoid blur' } })
+    expect(onUpdateFunctionInputValue).not.toHaveBeenCalledWith('node_fn', 'negative_prompt', 'avoid blur')
+    expect(textInput).toHaveValue('avoid blur')
+    fireEvent.blur(textInput)
     expect(onUpdateFunctionInputValue).toHaveBeenCalledWith('node_fn', 'negative_prompt', 'avoid blur')
+    onUpdateFunctionInputValue.mockClear()
 
     const numberInput = screen.getByRole('spinbutton', { name: 'Scale By inline value' })
     expect(numberInput).toHaveValue(1.25)
@@ -379,6 +383,58 @@ describe('NodeViews', () => {
 
     expect(screen.queryByRole('textbox', { name: 'Negative Prompt inline value' })).not.toBeInTheDocument()
     expect(screen.getByTestId('function-input-slot-negative_prompt')).toHaveTextContent('new text resource')
+  })
+
+  it('keeps optional text edits local while Chinese IME composition is active', () => {
+    const onUpdateFunctionInputValue = vi.fn()
+    const functionWithOptionalPrompt: GenerationFunction = {
+      ...renderFunction,
+      inputs: [
+        renderFunction.inputs[0]!,
+        {
+          key: 'negative_prompt',
+          label: 'Negative Prompt',
+          type: 'text',
+          required: false,
+          defaultValue: '',
+          bind: { nodeId: '7', nodeTitle: 'Negative Prompt', path: 'inputs.text' },
+          upload: { strategy: 'none' },
+        },
+      ],
+    }
+    render(
+      <ReactFlowProvider>
+        <FunctionNodeView
+          {...({
+            id: 'node_fn',
+            selected: false,
+            data: {
+              ...baseNodeData,
+              functionsById: { fn_render: functionWithOptionalPrompt },
+              functionId: 'fn_render',
+              title: 'LTX 2.3 I2V',
+              inputValues: { negative_prompt: '' },
+              onUpdateFunctionInputValue,
+            },
+          } as unknown as ComponentProps<typeof FunctionNodeView>)}
+        />
+      </ReactFlowProvider>,
+    )
+
+    const textInput = screen.getByRole('textbox', { name: 'Negative Prompt inline value' })
+    textInput.focus()
+    fireEvent.compositionStart(textInput)
+    fireEvent.change(textInput, { target: { value: 'n' } })
+    fireEvent.change(textInput, { target: { value: 'nv' } })
+    fireEvent.compositionEnd(textInput)
+    fireEvent.change(textInput, { target: { value: '女孩' } })
+
+    expect(document.activeElement).toBe(textInput)
+    expect(textInput).toHaveValue('女孩')
+    expect(onUpdateFunctionInputValue).not.toHaveBeenCalled()
+
+    fireEvent.blur(textInput)
+    expect(onUpdateFunctionInputValue).toHaveBeenCalledWith('node_fn', 'negative_prompt', '女孩')
   })
 
   it('renders selected function nodes with a resize handle', () => {

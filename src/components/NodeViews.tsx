@@ -178,6 +178,17 @@ function OptionalPrimitiveInput({
   minHeight?: number
 }) {
   const label = `${input.label || input.key} inline value`
+  const externalTextValue = String(value ?? '')
+  const textComposingRef = useRef(false)
+  const [textDraft, setTextDraft] = useState({
+    draft: externalTextValue,
+    editing: false,
+  })
+  const visibleTextValue = textDraft.editing ? textDraft.draft : externalTextValue
+  const commitTextDraft = (nextValue: string) => {
+    setTextDraft({ draft: nextValue, editing: false })
+    if (nextValue !== externalTextValue) onUpdate(nodeId, input.key, nextValue)
+  }
 
   if (input.type === 'number') {
     return (
@@ -202,8 +213,39 @@ function OptionalPrimitiveInput({
       className="slot-inline-input slot-inline-textarea nodrag nopan"
       rows={5}
       style={minHeight ? { minHeight } : undefined}
-      value={String(value ?? '')}
-      onChange={(event) => onUpdate(nodeId, input.key, event.target.value)}
+      value={visibleTextValue}
+      onFocus={() =>
+        setTextDraft((current) => ({
+          draft: current.editing ? current.draft : externalTextValue,
+          editing: true,
+        }))
+      }
+      onChange={(event) => {
+        const nextValue = event.target.value
+        setTextDraft({
+          draft: nextValue,
+          editing: true,
+        })
+      }}
+      onCompositionStart={() => {
+        textComposingRef.current = true
+        setTextDraft((current) => ({
+          draft: current.draft,
+          editing: true,
+        }))
+      }}
+      onCompositionEnd={(event) => {
+        const nextValue = event.currentTarget.value
+        textComposingRef.current = false
+        setTextDraft({
+          draft: nextValue,
+          editing: true,
+        })
+      }}
+      onBlur={(event) => {
+        if (textComposingRef.current) return
+        commitTextDraft(event.currentTarget.value)
+      }}
       onDoubleClick={(event) => event.stopPropagation()}
     />
   )
