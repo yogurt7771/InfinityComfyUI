@@ -771,6 +771,23 @@ test('keeps the add-node menu inside the viewport near canvas edges', async ({ p
     })
 })
 
+test('filters the add-node menu with a focused keyword search', async ({ page }) => {
+  await page.goto('/')
+  const canvas = page.getByLabel('Canvas')
+  await canvas.dblclick({ position: { x: 420, y: 260 } })
+
+  const search = page.getByRole('searchbox', { name: 'Search nodes' })
+  await expect(search).toBeFocused()
+  await search.fill('open image')
+
+  await expect(page.getByRole('menuitem', { name: 'OpenAI Generate Image' })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: 'Gemini Generate Image' })).not.toBeVisible()
+  await expect(page.getByRole('menuitem', { name: 'Text Asset' })).not.toBeVisible()
+
+  await search.fill('image asset')
+  await expect(page.getByRole('menuitem', { name: 'Image Asset' })).toBeVisible()
+})
+
 test('creates asset nodes from canvas menu and blank-canvas drops', async ({ page }) => {
   await page.goto('/')
 

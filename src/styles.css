@@ -1280,6 +1280,19 @@ textarea[aria-invalid="true"] {
   overflow: auto;
 }
 
+.add-node-search {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  color: var(--ink);
+  background: #fff;
+  font-size: 14px;
+  font-weight: 700;
+}
+
 .add-node-menu button {
   justify-content: flex-start;
   min-height: 34px;
@@ -1288,6 +1301,12 @@ textarea[aria-invalid="true"] {
 .add-node-menu button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+.add-node-empty {
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .compare-toolbar {
@@ -1605,6 +1624,91 @@ textarea[aria-invalid="true"] {
   border-color: #f0c2b4;
   color: var(--danger);
   background: #fff5f1;
+}
+
+.node-title .node-reference-empty {
+  flex: 0 0 auto;
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 800;
+  overflow: visible;
+  white-space: nowrap;
+}
+
+.node-reference {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.node-reference-button {
+  min-height: 24px;
+  padding: 0 8px;
+  border-color: #c9dce4;
+  border-radius: 999px;
+  color: #0f7b83;
+  background: #edf9fa;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.node-reference-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 25;
+  display: grid;
+  width: 190px;
+  max-height: 220px;
+  overflow: auto;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 18px 38px rgba(15, 23, 42, 0.18);
+}
+
+.node-reference-popover button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 6px;
+  justify-content: stretch;
+  height: auto;
+  min-height: 38px;
+  padding: 6px 8px;
+  border-color: transparent;
+  background: #f8fbfc;
+  text-align: left;
+}
+
+.node-reference-popover button:hover {
+  border-color: var(--teal);
+  background: #eefafa;
+}
+
+.node-reference-popover button span {
+  flex: 0 0 auto;
+  overflow: visible;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.node-reference-popover button strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-reference-popover button small {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .result-run-control {
@@ -2537,7 +2641,7 @@ textarea[aria-invalid="true"] {
   font-weight: 700;
 }
 
-.run-detail-field textarea,
+.run-detail-field input,
 .run-input-value {
   min-width: 0;
   width: 100%;
@@ -2551,9 +2655,8 @@ textarea[aria-invalid="true"] {
   line-height: 1.45;
 }
 
-.run-detail-field textarea {
+.run-detail-field input {
   min-height: 32px;
-  resize: horizontal;
   white-space: pre;
 }
 
@@ -2628,19 +2731,19 @@ textarea[aria-invalid="true"] {
   color: #d8e2ff;
 }
 
-.json-key {
-  color: #6ee7b7;
+.run-workflow-json .json-key {
+  color: #38f0a3;
 }
 
-.json-string {
-  color: #bfdbfe;
+.run-workflow-json .json-string {
+  color: #dbeafe;
 }
 
-.json-number {
+.run-workflow-json .json-number {
   color: #fbbf24;
 }
 
-.json-literal {
+.run-workflow-json .json-literal {
   color: #f0abfc;
 }
 
@@ -2655,6 +2758,9 @@ textarea[aria-invalid="true"] {
 .history-list {
   display: grid;
   gap: 8px;
+  max-height: 360px;
+  overflow: auto;
+  padding-right: 2px;
 }
 
 .history-row {
@@ -2667,6 +2773,37 @@ textarea[aria-invalid="true"] {
   color: var(--ink-soft);
   background: var(--panel);
   font-size: 12px;
+}
+
+.history-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.history-row-actions button,
+.history-row-actions a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--teal);
+  background: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.history-row-actions button:hover,
+.history-row-actions a:hover {
+  border-color: var(--teal);
+  background: #eefafa;
+  text-decoration: none;
 }
 
 .history-row > div {

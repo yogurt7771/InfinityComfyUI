@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { targetInputInitialResourceValue } from '../domain/inputInitialValue'
+import { buildNodeReferenceMap } from '../domain/nodeReferences'
 import type { ProjectState } from '../domain/types'
 
 const projectWithOptionalInput = (inputValues: Record<string, unknown> = {}): ProjectState => ({
@@ -74,6 +75,41 @@ const projectWithOptionalInput = (inputValues: Record<string, unknown> = {}): Pr
 })
 
 describe('CanvasWorkspace helpers', () => {
+  it('builds incoming and outgoing node reference summaries from canvas edges', () => {
+    const project = projectWithOptionalInput()
+    project.canvas.nodes.push({
+      id: 'node_text',
+      type: 'resource',
+      position: { x: 100, y: 0 },
+      data: { resourceId: 'res_text' },
+    })
+    project.resources.res_text = {
+      id: 'res_text',
+      type: 'text',
+      name: 'Prompt',
+      value: 'hello',
+      source: { kind: 'manual_input' },
+      metadata: { createdAt: '2026-05-09T00:00:00.000Z' },
+    }
+    project.canvas.edges = [
+      {
+        id: 'edge_1',
+        source: { nodeId: 'node_text', handleId: 'resource:res_text', resourceId: 'res_text' },
+        target: { nodeId: 'node_fn', inputKey: 'negative_prompt' },
+        type: 'resource_to_input',
+      },
+    ]
+
+    const references = buildNodeReferenceMap(project)
+
+    expect(references.node_text).toEqual([
+      { nodeId: 'node_fn', title: 'Render', type: 'function', direction: 'outgoing' },
+    ])
+    expect(references.node_fn).toEqual([
+      { nodeId: 'node_text', title: 'Prompt', type: 'resource', direction: 'incoming' },
+    ])
+  })
+
   it('uses edited optional primitive values when creating assets from dangling input connections', () => {
     const project = projectWithOptionalInput({
       negative_prompt: 'avoid blur',

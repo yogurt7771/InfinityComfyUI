@@ -74,12 +74,37 @@ const matchingWorkflowInputKey = (node: WorkflowNode, input: FunctionInputDef) =
 
 const inputPathTail = (path: string) => path.split('.').filter(Boolean).at(-1) ?? ''
 
+const primitiveValueAtPath = (source: unknown, path: string) => {
+  if (!source || typeof source !== 'object') return undefined
+
+  let cursor: unknown = source
+  for (const segment of path.split('.').filter(Boolean)) {
+    if (!cursor || typeof cursor !== 'object' || !(segment in cursor)) return undefined
+    cursor = (cursor as Record<string, unknown>)[segment]
+  }
+
+  return typeof cursor === 'string' || typeof cursor === 'number' || cursor === null ? cursor : undefined
+}
+
 const resolvedWorkflowBindPath = (node: WorkflowNode, input: FunctionInputDef) => {
   const matchedKey = matchingWorkflowInputKey(node, input)
   if (!matchedKey) return input.bind.path
 
   const configuredKey = inputPathTail(input.bind.path)
   return normalizedWorkflowKey(configuredKey) === normalizedWorkflowKey(matchedKey) ? input.bind.path : `inputs.${matchedKey}`
+}
+
+export function workflowPrimitiveInputValue(
+  functionDef: GenerationFunction,
+  input: FunctionInputDef,
+): PrimitiveInputValue | undefined {
+  const workflow = functionDef.workflow.rawJson
+  const workflowNode =
+    (input.bind.nodeId ? workflow[input.bind.nodeId] : undefined) ??
+    Object.values(workflow).find((node) => input.bind.nodeTitle && node._meta?.title === input.bind.nodeTitle)
+  if (!workflowNode) return undefined
+
+  return primitiveValueAtPath(workflowNode, resolvedWorkflowBindPath(workflowNode, input))
 }
 
 export function parseWorkflowNodes(workflow: ComfyWorkflow): ParsedWorkflowNode[] {

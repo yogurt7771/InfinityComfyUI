@@ -285,7 +285,7 @@ function RunInspector({
         {detailRows.map((row) => (
           <label key={row.key} className="run-detail-field">
             <span>{row.label}</span>
-            <textarea aria-label={`Run detail ${row.label}`} readOnly rows={1} value={row.value} />
+            <input aria-label={`Run detail ${row.label}`} readOnly value={row.value} />
           </label>
         ))}
       </div>
@@ -1748,15 +1748,31 @@ export function RightPanel() {
                   </div>
                   <code>{item.taskId}</code>
                   <span>{item.endpointName ?? 'endpoint unknown'}</span>
-                  {item.historyPath && item.historyUrl ? (
-                    <a href={item.historyUrl} target="_blank" rel="noreferrer">
-                      {item.historyPath}
-                    </a>
-                  ) : item.historyPath ? (
-                    <code>{item.historyPath}</code>
-                  ) : (
-                    <em>No ComfyUI prompt id</em>
-                  )}
+                  <div className="history-row-actions">
+                    {item.resultNodeId ? (
+                      <button
+                        type="button"
+                        onClick={() => focusCanvasNode(item.resultNodeId!)}
+                        aria-label={`Locate ${item.runLabel} result node`}
+                      >
+                        Locate node
+                      </button>
+                    ) : null}
+                    {item.historyPath && item.historyUrl ? (
+                      <a
+                        href={item.historyUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        aria-label={`Open ComfyUI history for ${item.runLabel}`}
+                      >
+                        Open history
+                      </a>
+                    ) : item.historyPath ? (
+                      <code>{item.historyPath}</code>
+                    ) : (
+                      <em>No ComfyUI prompt id</em>
+                    )}
+                  </div>
                   {item.errorMessage ? <p className="job-error">{item.errorMessage}</p> : null}
                 </div>
               ))}

@@ -2478,6 +2478,97 @@ describe('project store actions', () => {
     expect(queuedWorkflows[0]).toEqual(task.compiledWorkflowSnapshot)
   })
 
+  it('captures unedited optional primitive workflow values in run snapshots', async () => {
+    const ids = ['fn_1', 'node_fn_1', 'task_1', 'node_result_1', 'asset_1', 'res_video_1']
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now: () => '2026-05-08T09:00:00.000Z',
+      randomInt: () => 42,
+      createComfyClient: () => ({
+        queuePrompt: async () => ({ prompt_id: 'prompt_1', number: 1 }),
+        getHistory: async () => ({
+          prompt_1: {
+            outputs: {
+              '75': {
+                images: [{ filename: 'clip.mp4', subfolder: 'video', type: 'output' }],
+                animated: [true],
+              },
+            },
+          },
+        }),
+      }),
+      comfyRunOptions: {
+        maxPollAttempts: 1,
+        pollIntervalMs: 1,
+      },
+    })
+
+    slice.getState().addFunctionFromWorkflow('Video Render', {
+      '75': {
+        class_type: 'SaveVideo',
+        _meta: { title: 'Save Video' },
+        inputs: {
+          frame_rate: 25,
+          duration: 5,
+        },
+      },
+    })
+    slice.setState((state) => ({
+      project: {
+        ...state.project,
+        functions: {
+          ...state.project.functions,
+          fn_1: {
+            ...state.project.functions.fn_1!,
+            inputs: [
+              {
+                key: 'fps',
+                label: 'Fps',
+                type: 'number',
+                required: false,
+                bind: { nodeId: '75', nodeTitle: 'Save Video', path: 'inputs.frame_rate' },
+                upload: { strategy: 'none' },
+              },
+              {
+                key: 'duration',
+                label: 'Duration',
+                type: 'number',
+                required: false,
+                bind: { nodeId: '75', nodeTitle: 'Save Video', path: 'inputs.duration' },
+                upload: { strategy: 'none' },
+              },
+            ],
+            outputs: [
+              {
+                key: 'video',
+                label: 'Video',
+                type: 'video',
+                bind: { nodeId: '75', nodeTitle: 'Save Video' },
+                extract: { source: 'history', multiple: true },
+              },
+            ],
+          },
+        },
+      },
+    }))
+    slice.getState().addFunctionNode('fn_1')
+
+    await slice.getState().runFunctionNodeWithComfy('node_fn_1', 1)
+
+    expect(slice.getState().project.tasks.task_1.inputValuesSnapshot).toMatchObject({
+      fps: {
+        label: 'Fps',
+        source: 'default',
+        value: 25,
+      },
+      duration: {
+        label: 'Duration',
+        source: 'default',
+        value: 5,
+      },
+    })
+  })
+
   it('queues Comfy workflows with connected number overrides resolved by workflow input key', async () => {
     const ids = ['fn_1', 'res_batch_size', 'node_fn_1', 'task_1', 'node_result_1', 'asset_1', 'res_img_1']
     const queuedWorkflows: unknown[] = []

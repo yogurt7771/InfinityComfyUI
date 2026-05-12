@@ -28,6 +28,7 @@ import { GitCompareArrows, X } from 'lucide-react'
 import { EmptyNodeView, FunctionNodeView, GroupNodeView, ResourceNodeView, ResultGroupNodeView } from './NodeViews'
 import { buildCanvasFlowEdges } from '../domain/canvasEdges'
 import { targetInputInitialResourceValue } from '../domain/inputInitialValue'
+import { buildNodeReferenceMap } from '../domain/nodeReferences'
 import { readFileAsMediaResource } from '../domain/resourceFiles'
 import { useProjectStore } from '../store/projectStore'
 import { shouldIgnoreCanvasShortcut } from './canvasKeyboard'
@@ -87,6 +88,17 @@ const resourceIdFromHandle = (handleId?: string | null) => {
 
 const functionAcceptsResourceType = (fn: GenerationFunction, resourceType?: ResourceType) =>
   !resourceType || fn.inputs.some((input) => input.type === resourceType)
+
+const addMenuItemMatches = (label: string, query: string) => {
+  const tokens = query
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+  if (tokens.length === 0) return true
+  const normalizedLabel = label.toLowerCase()
+  return tokens.every((token) => normalizedLabel.includes(token))
+}
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
 
@@ -283,7 +295,9 @@ function CanvasSurface() {
   const [addMenu, setAddMenu] = useState<AddNodeMenuState | null>(null)
   const [comparePair, setComparePair] = useState<CompareImagePair | null>(null)
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([])
+  const [addMenuQuery, setAddMenuQuery] = useState('')
   const addMenuRef = useRef<HTMLDivElement | null>(null)
+  const addMenuSearchRef = useRef<HTMLInputElement | null>(null)
   const canvasRef = useRef<HTMLElement | null>(null)
   const connectionStart = useRef<ConnectionStartState | null>(null)
   const copiedNodeIds = useRef<string[]>([])
@@ -294,6 +308,14 @@ function CanvasSurface() {
   const activeSelectedNodeIds = useMemo(
     () => (selectedNodeIds.length ? selectedNodeIds : selectedNodeId ? [selectedNodeId] : []),
     [selectedNodeId, selectedNodeIds],
+  )
+  const nodeReferenceMap = useMemo(() => buildNodeReferenceMap(project), [project])
+  const focusCanvasNode = useCallback(
+    (nodeId: string) => {
+      selectNode(nodeId)
+      window.dispatchEvent(new CustomEvent('infinity-focus-node', { detail: { nodeId } }))
+    },
+    [selectNode],
   )
 
   useEffect(() => {
@@ -328,9 +350,11 @@ function CanvasSurface() {
         style: flowNodeStyle(node, project.functions),
         data: {
           ...node.data,
+          nodeReferences: nodeReferenceMap[node.id] ?? [],
           resourcesById: project.resources,
           functionsById: project.functions,
           tasksById: project.tasks,
+          onFocusReferenceNode: focusCanvasNode,
           onRunFunction: (nodeId: string) => {
             void runFunctionNodeWithComfy(nodeId)
           },
@@ -354,6 +378,8 @@ function CanvasSurface() {
       })),
     [
       deleteNode,
+      focusCanvasNode,
+      nodeReferenceMap,
       project.canvas.nodes,
       project.functions,
       project.resources,
@@ -626,6 +652,7 @@ function CanvasSurface() {
     clientY: number,
     connection?: AddNodeMenuState['connection'],
   ) => {
+    setAddMenuQuery('')
     setAddMenu({
       screen: { x: clientX, y: clientY },
       flow: screenToFlowPosition({ x: clientX, y: clientY }),
@@ -636,6 +663,17 @@ function CanvasSurface() {
   const addMenuFunctions = Object.values(project.functions).filter((fn) =>
     addMenu?.connection?.kind === 'target' ? false : functionAcceptsResourceType(fn, addMenu?.connection?.resourceType),
   )
+  const assetTypeAllowedInMenu = (type: ResourceType) =>
+    addMenu?.connection?.kind !== 'target' || addMenu.connection.resourceType === type
+  const addMenuAssetOptions = [
+    { type: 'text' as const, label: 'Text Asset' },
+    { type: 'number' as const, label: 'Number Asset' },
+    { type: 'image' as const, label: 'Image Asset' },
+    { type: 'video' as const, label: 'Video Asset' },
+    { type: 'audio' as const, label: 'Audio Asset' },
+  ].filter((item) => assetTypeAllowedInMenu(item.type))
+  const filteredAddMenuAssets = addMenuAssetOptions.filter((item) => addMenuItemMatches(item.label, addMenuQuery))
+  const filteredAddMenuFunctions = addMenuFunctions.filter((fn) => addMenuItemMatches(fn.name, addMenuQuery))
 
   useLayoutEffect(() => {
     if (!addMenu) return
@@ -652,7 +690,8 @@ function CanvasSurface() {
     menu.style.left = `${left}px`
     menu.style.top = `${top}px`
     menu.style.maxHeight = rect.height > maxHeight ? `${maxHeight}px` : ''
-  }, [addMenu, addMenuFunctions.length])
+    addMenuSearchRef.current?.focus()
+  }, [addMenu, filteredAddMenuAssets.length, filteredAddMenuFunctions.length])
 
   const createFunctionFromMenu = (functionId: string) => {
     if (!addMenu) return
@@ -666,9 +705,6 @@ function CanvasSurface() {
     }
     setAddMenu(null)
   }
-
-  const assetTypeAllowedInMenu = (type: ResourceType) =>
-    addMenu?.connection?.kind !== 'target' || addMenu.connection.resourceType === type
 
   const createAssetFromMenu = (type: ResourceType) => {
     if (!addMenu) return
@@ -902,36 +938,31 @@ function CanvasSurface() {
             top: addMenu.screen.y,
           }}
         >
-          {assetTypeAllowedInMenu('text') ? (
-            <button role="menuitem" type="button" onClick={() => createAssetFromMenu('text')}>
-              Text Asset
+          <input
+            ref={addMenuSearchRef}
+            aria-label="Search nodes"
+            className="add-node-search nodrag nopan"
+            placeholder="Search nodes"
+            role="searchbox"
+            value={addMenuQuery}
+            onChange={(event) => setAddMenuQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') setAddMenu(null)
+            }}
+          />
+          {filteredAddMenuAssets.map((item) => (
+            <button key={item.type} role="menuitem" type="button" onClick={() => createAssetFromMenu(item.type)}>
+              {item.label}
             </button>
-          ) : null}
-          {assetTypeAllowedInMenu('number') ? (
-            <button role="menuitem" type="button" onClick={() => createAssetFromMenu('number')}>
-              Number Asset
-            </button>
-          ) : null}
-          {assetTypeAllowedInMenu('image') ? (
-            <button role="menuitem" type="button" onClick={() => createAssetFromMenu('image')}>
-              Image Asset
-            </button>
-          ) : null}
-          {assetTypeAllowedInMenu('video') ? (
-            <button role="menuitem" type="button" onClick={() => createAssetFromMenu('video')}>
-              Video Asset
-            </button>
-          ) : null}
-          {assetTypeAllowedInMenu('audio') ? (
-            <button role="menuitem" type="button" onClick={() => createAssetFromMenu('audio')}>
-              Audio Asset
-            </button>
-          ) : null}
-          {addMenuFunctions.map((fn) => (
+          ))}
+          {filteredAddMenuFunctions.map((fn) => (
             <button key={fn.id} role="menuitem" type="button" onClick={() => createFunctionFromMenu(fn.id)}>
               {fn.name}
             </button>
           ))}
+          {filteredAddMenuAssets.length === 0 && filteredAddMenuFunctions.length === 0 ? (
+            <div className="add-node-empty">No matching nodes</div>
+          ) : null}
         </div>
       ) : null}
       {selectedComparePair ? (

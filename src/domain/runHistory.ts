@@ -6,10 +6,14 @@ export type NodeRunHistoryItem = {
   runLabel: string
   endpointName?: string
   comfyPromptId?: string
+  resultNodeId?: string
   historyPath?: string
   historyUrl?: string
   errorMessage?: string
 }
+
+const resultNodeIdForTask = (project: ProjectState, taskId: string) =>
+  project.canvas.nodes.find((node) => node.type === 'result_group' && node.data.taskId === taskId)?.id
 
 const toHistoryItem = (project: ProjectState, task: ExecutionTask): NodeRunHistoryItem => {
   const endpoint = project.comfy.endpoints.find((item) => item.id === task.endpointId)
@@ -21,6 +25,7 @@ const toHistoryItem = (project: ProjectState, task: ExecutionTask): NodeRunHisto
     runLabel: `Run ${task.runIndex}/${task.runTotal}`,
     endpointName: endpoint?.name ?? task.endpointId,
     comfyPromptId: task.comfyPromptId,
+    resultNodeId: resultNodeIdForTask(project, task.id),
     historyPath,
     historyUrl: endpoint && historyPath ? `${endpoint.baseUrl.replace(/\/+$/, '')}${historyPath}` : undefined,
     errorMessage: task.error?.message,

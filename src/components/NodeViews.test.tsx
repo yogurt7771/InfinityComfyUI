@@ -83,6 +83,7 @@ const baseNodeData = {
   onDeleteNode: vi.fn(),
   onRenameNode: vi.fn(),
   onUpdateTextResourceValue: vi.fn(),
+  onUpdateNumberResourceValue: vi.fn(),
   onUpdateFunctionInputValue: vi.fn(),
   onReplaceResourceMedia: vi.fn(),
 }
@@ -118,6 +119,38 @@ describe('NodeViews', () => {
     fireEvent.change(editor, { target: { value: 'edited prompt\nsecond line' } })
 
     expect(onUpdateTextResourceValue).toHaveBeenCalledWith('res_text', 'edited prompt\nsecond line')
+  })
+
+  it('shows node reference counts and locates referenced nodes from the popover', () => {
+    const onFocusReferenceNode = vi.fn()
+    const props = {
+      id: 'node_text',
+      selected: false,
+      data: {
+        ...baseNodeData,
+        resourcesById: { res_text: textResource },
+        resourceId: 'res_text',
+        title: 'Prompt',
+        nodeReferences: [
+          { nodeId: 'node_fn', title: 'Flux Render', type: 'function', direction: 'outgoing' },
+          { nodeId: 'node_result', title: 'Run 1', type: 'result_group', direction: 'incoming' },
+        ],
+        onFocusReferenceNode,
+      },
+    } as unknown as ComponentProps<typeof ResourceNodeView>
+
+    render(
+      <ReactFlowProvider>
+        <ResourceNodeView {...props} />
+      </ReactFlowProvider>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show 2 node references' }))
+
+    expect(screen.getByText('Flux Render')).toBeVisible()
+    expect(screen.getByText('Run 1')).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Locate referenced node Flux Render' }))
+    expect(onFocusReferenceNode).toHaveBeenCalledWith('node_fn')
   })
 
   it('adds upload, download, and drop replacement controls to media resources', async () => {

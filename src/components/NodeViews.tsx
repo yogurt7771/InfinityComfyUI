@@ -76,6 +76,13 @@ type WorkbenchNodeData = {
   resourcesById: Record<string, Resource>
   functionsById: Record<string, GenerationFunction>
   tasksById?: Record<string, ExecutionTask>
+  nodeReferences?: Array<{
+    nodeId: string
+    title: string
+    type: string
+    direction: 'incoming' | 'outgoing'
+  }>
+  onFocusReferenceNode?: (nodeId: string) => void
   onRunFunction: (nodeId: string) => void
   onRerunResultNode: (nodeId: string) => void
   onCancelResultRun: (nodeId: string) => void
@@ -1278,6 +1285,65 @@ function EditableNodeTitle({
   )
 }
 
+function NodeReferenceBadge({
+  references,
+  onFocusReferenceNode,
+}: {
+  references?: WorkbenchNodeData['nodeReferences']
+  onFocusReferenceNode?: (nodeId: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const count = references?.length ?? 0
+
+  if (count === 0) return <span className="node-reference-empty">0 refs</span>
+
+  return (
+    <div className="node-reference">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-label={`Show ${count} node references`}
+        className="node-reference-button nodrag nopan"
+        onClick={(event) => {
+          event.stopPropagation()
+          setOpen((current) => !current)
+        }}
+      >
+        {count} refs
+      </button>
+      {open ? (
+        <div className="node-reference-popover nodrag nopan" role="dialog" aria-label="Node references">
+          {references?.map((reference) => (
+            <button
+              key={`${reference.direction}-${reference.nodeId}`}
+              type="button"
+              aria-label={`Locate referenced node ${reference.title}`}
+              onClick={(event) => {
+                event.stopPropagation()
+                onFocusReferenceNode?.(reference.nodeId)
+                setOpen(false)
+              }}
+            >
+              <span>{reference.direction === 'incoming' ? 'From' : 'To'}</span>
+              <strong>{reference.title}</strong>
+              <small>{reference.type}</small>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function nodeReferenceBadge(nodeData: WorkbenchNodeData) {
+  return (
+    <NodeReferenceBadge
+      references={nodeData.nodeReferences}
+      onFocusReferenceNode={nodeData.onFocusReferenceNode}
+    />
+  )
+}
+
 function SelectedResizeControl({
   id,
   minHeight,
@@ -1345,6 +1411,7 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
         />
       ) : null}
       <EditableNodeTitle
+        actions={nodeReferenceBadge(nodeData)}
         icon={resource?.type === 'number' ? <Hash size={16} /> : <FileText size={16} />}
         isSelected={Boolean(selected)}
         nodeId={id}
@@ -1444,6 +1511,7 @@ export const FunctionNodeView = memo(({ id, data, selected }: NodeProps) => {
         selected={Boolean(selected)}
       />
       <EditableNodeTitle
+        actions={nodeReferenceBadge(nodeData)}
         icon={<Cpu size={16} />}
         isSelected={Boolean(selected)}
         nodeId={id}
@@ -1576,7 +1644,12 @@ export const ResultGroupNodeView = memo(({ id, data, selected }: NodeProps) => {
         type="target"
       />
       <EditableNodeTitle
-        actions={runControl}
+        actions={
+          <>
+            {nodeReferenceBadge(nodeData)}
+            {runControl}
+          </>
+        }
         icon={<Sparkles size={16} />}
         isSelected={Boolean(selected)}
         nodeId={id}
@@ -1661,6 +1734,7 @@ export const GroupNodeView = memo(({ id, data, selected }: NodeProps) => {
       <div className="node-title">
         <Layers size={16} />
         <span>Group</span>
+        {nodeReferenceBadge(nodeData)}
       </div>
     </div>
   )
@@ -1675,6 +1749,7 @@ export const EmptyNodeView = memo(({ id, data, selected }: NodeProps) => {
       <div className="node-title">
         <Box size={16} />
         <span>Node</span>
+        {nodeReferenceBadge(nodeData)}
       </div>
     </div>
   )

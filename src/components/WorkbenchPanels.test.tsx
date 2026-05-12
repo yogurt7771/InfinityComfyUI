@@ -618,6 +618,7 @@ describe('LeftPanel', () => {
 
     expect(screen.getByRole('heading', { name: 'Run Details' })).toBeVisible()
     expect(screen.getByText('Started')).toBeVisible()
+    expect(screen.getByRole('textbox', { name: 'Run detail Status' }).tagName).toBe('INPUT')
     expect(screen.getByRole('textbox', { name: 'Run detail Started' })).toHaveValue('2026-05-09T00:00:05.000Z')
     expect(screen.getByText('Completed')).toBeVisible()
     expect(screen.getByRole('textbox', { name: 'Run detail Completed' })).toHaveValue('2026-05-09T00:00:10.000Z')
@@ -686,8 +687,8 @@ describe('LeftPanel', () => {
     fireEvent.click(taskCard)
 
     expect(screen.getByRole('heading', { name: 'Run Details' })).toBeVisible()
-    expect(screen.getByText('2026-05-09T00:00:05.000Z')).toBeVisible()
-    expect(screen.getByText('2026-05-09T00:00:10.000Z')).toBeVisible()
+    expect(screen.getByRole('textbox', { name: 'Run detail Started' })).toHaveValue('2026-05-09T00:00:05.000Z')
+    expect(screen.getByRole('textbox', { name: 'Run detail Completed' })).toHaveValue('2026-05-09T00:00:10.000Z')
     expect(screen.getByRole('heading', { name: 'Inputs' })).toBeVisible()
     expect(screen.getByText('sunlit kitchen')).toBeVisible()
     expect(screen.getByText('low quality')).toBeVisible()
@@ -718,5 +719,33 @@ describe('LeftPanel', () => {
     expect(screen.getByText('No runs for selected node')).toBeVisible()
     expect(screen.queryByRole('heading', { name: 'Project Tasks' })).not.toBeInTheDocument()
     expect(screen.queryByText('task_running')).not.toBeInTheDocument()
+  })
+
+  it('shows selected node run queue cards with locate and ComfyUI history actions', () => {
+    const state = panelProject()
+    state.canvas.nodes = [
+      { id: 'node_fn_render', type: 'function', position: { x: 0, y: 0 }, data: { functionId: 'fn_render' } },
+      { id: 'node_result_1', type: 'result_group', position: { x: 240, y: 0 }, data: { taskId: 'task_running' } },
+    ]
+    state.tasks.task_running = {
+      ...state.tasks.task_running,
+      runTotal: 2,
+      comfyPromptId: 'prompt_1',
+      status: 'succeeded',
+    }
+    projectStore.setState({ project: state, selectedNodeId: 'node_fn_render' })
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
+
+    render(<RightPanel />)
+
+    const queue = screen.getByLabelText('Selected node run history')
+    expect(within(queue).getByText('Run 1/2')).toBeVisible()
+    fireEvent.click(within(queue).getByRole('button', { name: 'Locate Run 1/2 result node' }))
+    expect(projectStore.getState().selectedNodeId).toBe('node_result_1')
+    expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'infinity-focus-node' }))
+    expect(within(queue).getByRole('link', { name: 'Open ComfyUI history for Run 1/2' })).toHaveAttribute(
+      'href',
+      'http://127.0.0.1:27707/history/prompt_1',
+    )
   })
 })

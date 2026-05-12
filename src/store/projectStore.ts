@@ -35,7 +35,7 @@ import {
 import { createConfigPackage, createProjectPackage, type ConfigPackage, type FullProjectPackage } from '../domain/projectPackage'
 import { randomizeWorkflowSeeds } from '../domain/seed'
 import { selectEndpoint } from '../domain/scheduler'
-import { createGenerationFunctionFromWorkflow, injectWorkflowInputs } from '../domain/workflow'
+import { createGenerationFunctionFromWorkflow, injectWorkflowInputs, workflowPrimitiveInputValue } from '../domain/workflow'
 import { isBuiltInFunction, withoutBuiltInProjectFunctions } from '../domain/builtInFunctions'
 import type { MediaResourcePayload, MediaResourceKind } from '../domain/resourceFiles'
 import type {
@@ -660,12 +660,12 @@ const valueForInputSnapshot = (resource: Resource | undefined, fallback: Primiti
 }
 
 const executionInputSnapshot = (
-  inputs: FunctionInputDef[],
+  functionDef: GenerationFunction,
   inputValues: RuntimeInputValues,
   resources: Record<string, Resource>,
 ): Record<string, ExecutionInputSnapshot> =>
   Object.fromEntries(
-    inputs.map((input) => {
+    functionDef.inputs.map((input) => {
       const value = inputValues[input.key]
       if (isResourceRef(value)) {
         const resource = resources[value.resourceId]
@@ -698,7 +698,8 @@ const executionInputSnapshot = (
         ]
       }
 
-      if (input.defaultValue !== undefined) {
+      const defaultValue = workflowPrimitiveInputValue(functionDef, input) ?? input.defaultValue
+      if (defaultValue !== undefined) {
         return [
           input.key,
           {
@@ -707,7 +708,7 @@ const executionInputSnapshot = (
             type: input.type,
             required: input.required,
             source: 'default',
-            value: input.defaultValue,
+            value: defaultValue,
           },
         ]
       }
@@ -2098,7 +2099,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           status: 'queued',
           inputRefs: resourceInputRefs(inputValues),
           inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
-          inputValuesSnapshot: executionInputSnapshot(functionDef.inputs, inputValues, state.project.resources),
+          inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
           paramsSnapshot: {
             runCount,
             mode: 'openai_chat_completions',
@@ -2196,7 +2197,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           status: 'queued',
           inputRefs: resourceInputRefs(inputValues),
           inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
-          inputValuesSnapshot: executionInputSnapshot(functionDef.inputs, inputValues, state.project.resources),
+          inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
           paramsSnapshot: {
             runCount,
             mode: 'gemini_generate_content',
@@ -2294,7 +2295,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           status: 'queued',
           inputRefs: resourceInputRefs(inputValues),
           inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
-          inputValuesSnapshot: executionInputSnapshot(functionDef.inputs, inputValues, state.project.resources),
+          inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
           paramsSnapshot: {
             runCount,
             mode: 'openai_image_generation',
@@ -2395,7 +2396,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           status: 'queued',
           inputRefs: resourceInputRefs(inputValues),
           inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
-          inputValuesSnapshot: executionInputSnapshot(functionDef.inputs, inputValues, state.project.resources),
+          inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
           paramsSnapshot: {
             runCount,
             mode: 'gemini_image_generation',
@@ -3374,7 +3375,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           status: endpoint ? 'succeeded' : 'failed',
           inputRefs: resourceInputRefs(inputValues),
           inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
-          inputValuesSnapshot: executionInputSnapshot(functionDef.inputs, inputValues, state.project.resources),
+          inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
           paramsSnapshot: { runCount },
           workflowTemplateSnapshot: functionDef.workflow.rawJson,
           compiledWorkflowSnapshot: randomized.workflow,
@@ -3486,7 +3487,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           status: 'queued',
           inputRefs: resourceInputRefs(inputValues),
           inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
-          inputValuesSnapshot: executionInputSnapshot(functionDef.inputs, inputValues, state.project.resources),
+          inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
           paramsSnapshot: { runCount, mode: 'comfy' },
           workflowTemplateSnapshot: functionDef.workflow.rawJson,
           compiledWorkflowSnapshot: functionDef.workflow.rawJson,
