@@ -119,9 +119,18 @@ describe('NodeViews', () => {
     const editor = screen.getByLabelText('Prompt text')
     expect(editor).toHaveValue('new text resource')
 
-    fireEvent.change(editor, { target: { value: 'edited prompt\nsecond line' } })
+    editor.focus()
+    fireEvent.compositionStart(editor)
+    fireEvent.change(editor, { target: { value: 'bianji' } })
+    fireEvent.compositionEnd(editor)
+    fireEvent.change(editor, { target: { value: '编辑 prompt\nsecond line' } })
 
-    expect(onUpdateTextResourceValue).toHaveBeenCalledWith('res_text', 'edited prompt\nsecond line')
+    expect(document.activeElement).toBe(editor)
+    expect(editor).toHaveValue('编辑 prompt\nsecond line')
+    expect(onUpdateTextResourceValue).not.toHaveBeenCalled()
+
+    fireEvent.blur(editor)
+    expect(onUpdateTextResourceValue).toHaveBeenCalledWith('res_text', '编辑 prompt\nsecond line')
   })
 
   it('shows node reference counts and locates referenced nodes from the popover', () => {
@@ -598,17 +607,36 @@ describe('NodeViews', () => {
     expect(screen.getByTestId('function-output-slot-text')).toBeVisible()
     expect(container.querySelectorAll('.output-column .slot-spacer')).toHaveLength(5)
     expect(container.querySelector('.output-column .slot-spacer')).toHaveAttribute('aria-hidden', 'true')
-    fireEvent.change(screen.getByLabelText('OpenAI base URL'), { target: { value: 'https://proxy.local/v1' } })
+    const openAiBaseUrl = screen.getByLabelText('OpenAI base URL')
+    fireEvent.change(openAiBaseUrl, { target: { value: 'https://proxy.local/v1' } })
     expect(onUpdateOpenAiConfig).toHaveBeenCalledWith(
       'node_openai',
       expect.objectContaining({ baseUrl: 'https://proxy.local/v1' }),
     )
+    onUpdateOpenAiConfig.mockClear()
 
     expect(screen.queryByLabelText('OpenAI message role 1')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Edit messages' }))
     const dialog = screen.getByRole('dialog', { name: 'OpenAI Messages' })
     expect(within(dialog).getAllByText('system')[0]).toBeVisible()
     expect(within(dialog).getAllByText('user')[0]).toBeVisible()
+    const messageContent = within(dialog).getByLabelText('OpenAI content 2.1')
+    fireEvent.change(messageContent, { target: { value: '描述这些图片' } })
+    expect(onUpdateOpenAiConfig).toHaveBeenLastCalledWith(
+      'node_openai',
+      expect.objectContaining({
+        messages: [
+          expect.any(Object),
+          expect.objectContaining({
+            content: [
+              expect.objectContaining({ type: 'text', content: '描述这些图片' }),
+              expect.any(Object),
+            ],
+          }),
+        ],
+      }),
+    )
+    onUpdateOpenAiConfig.mockClear()
     fireEvent.change(within(dialog).getByLabelText('OpenAI message role 1'), { target: { value: 'developer' } })
     expect(onUpdateOpenAiConfig).toHaveBeenLastCalledWith(
       'node_openai',
@@ -706,7 +734,8 @@ describe('NodeViews', () => {
 
     expect(screen.getAllByTestId(/^function-input-slot-image_/)).toHaveLength(6)
     expect(screen.getByTestId('function-output-slot-text')).toBeVisible()
-    fireEvent.change(screen.getByLabelText('Gemini model'), { target: { value: 'gemini-3-flash-preview' } })
+    const geminiModel = screen.getByLabelText('Gemini model')
+    fireEvent.change(geminiModel, { target: { value: 'gemini-3-flash-preview' } })
     expect(onUpdateGeminiConfig).toHaveBeenCalledWith(
       'node_gemini',
       expect.objectContaining({ model: 'gemini-3-flash-preview' }),
@@ -799,7 +828,8 @@ describe('NodeViews', () => {
     expect(screen.getByTestId('function-input-slot-prompt')).toBeVisible()
     expect(screen.getAllByTestId(/^function-input-slot-image_/)).toHaveLength(10)
     expect(screen.getByTestId('function-output-slot-image')).toBeVisible()
-    fireEvent.change(screen.getByLabelText('OpenAI image model'), { target: { value: 'gpt-image-2-2026-04-21' } })
+    const openAiImageModel = screen.getByLabelText('OpenAI image model')
+    fireEvent.change(openAiImageModel, { target: { value: 'gpt-image-2-2026-04-21' } })
     expect(onUpdateOpenAiImageConfig).toHaveBeenCalledWith(
       'node_openai_image',
       expect.objectContaining({ model: 'gpt-image-2-2026-04-21' }),

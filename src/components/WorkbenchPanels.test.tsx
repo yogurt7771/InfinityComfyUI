@@ -170,8 +170,16 @@ describe('LeftPanel', () => {
     const activeProjectSelect = screen.getByRole('combobox', { name: 'Active project' })
     expect(activeProjectSelect).toHaveDisplayValue('Panel Test')
 
-    fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'Edited Panel' } })
-    fireEvent.change(screen.getByLabelText('Project description'), { target: { value: 'A renamed project' } })
+    const projectName = screen.getByLabelText('Project name')
+    const projectDescription = screen.getByLabelText('Project description')
+    projectName.focus()
+    fireEvent.compositionStart(projectName)
+    fireEvent.change(projectName, { target: { value: 'bianji' } })
+    fireEvent.compositionEnd(projectName)
+    fireEvent.change(projectName, { target: { value: 'Edited Panel' } })
+    fireEvent.change(projectDescription, { target: { value: 'A renamed project' } })
+
+    expect(document.activeElement).toBe(projectName)
 
     expect(projectStore.getState().project.project).toMatchObject({
       id: 'project_test',
@@ -180,7 +188,8 @@ describe('LeftPanel', () => {
     })
 
     fireEvent.click(screen.getByRole('button', { name: 'New project' }))
-    fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'Second Board' } })
+    const secondProjectName = screen.getByLabelText('Project name')
+    fireEvent.change(secondProjectName, { target: { value: 'Second Board' } })
 
     expect(projectStore.getState().project.project.name).toBe('Second Board')
     expect(screen.getByRole('combobox', { name: 'Active project' })).toHaveDisplayValue('Second Board')
@@ -205,7 +214,15 @@ describe('LeftPanel', () => {
     expect(within(dialog).queryByLabelText('New workflow name')).not.toBeInTheDocument()
     expect(within(dialog).queryByLabelText('New workflow JSON')).not.toBeInTheDocument()
 
-    fireEvent.change(within(dialog).getByLabelText('Function name'), { target: { value: 'Flux Render Edited' } })
+    const functionName = within(dialog).getByLabelText('Function name')
+    functionName.focus()
+    fireEvent.compositionStart(functionName)
+    fireEvent.change(functionName, { target: { value: 'xuanran' } })
+    fireEvent.compositionEnd(functionName)
+    fireEvent.change(functionName, { target: { value: 'Flux Render Edited' } })
+    expect(document.activeElement).toBe(functionName)
+    expect(projectStore.getState().project.functions.fn_render.name).toBe('Flux Render')
+    fireEvent.blur(functionName)
     const inputWorkflowCombo = within(dialog).getByRole('combobox', { name: 'Input workflow field prompt' })
     inputWorkflowCombo.focus()
     fireEvent.change(inputWorkflowCombo, { target: { value: '7 · Negative Prompt / inputs.text' } })
@@ -433,6 +450,11 @@ describe('LeftPanel', () => {
     })
 
     expect(projectStore.getState().project.functions.fn_render.workflow.rawJson).toMatchObject({
+      '6': { class_type: 'CLIPTextEncode', _meta: { title: 'Positive Prompt' } },
+    })
+    fireEvent.blur(selectedWorkflowJson)
+
+    expect(projectStore.getState().project.functions.fn_render.workflow.rawJson).toMatchObject({
       '42': { class_type: 'SaveImage', _meta: { title: 'Edited Result' } },
     })
 
@@ -444,6 +466,7 @@ describe('LeftPanel', () => {
     expect(selectedPreview.querySelector('.json-key')).not.toBeNull()
 
     fireEvent.change(selectedWorkflowJson, { target: { value: '{"42":' } })
+    fireEvent.blur(selectedWorkflowJson)
 
     expect(selectedWorkflowJson).toHaveAttribute('aria-invalid', 'true')
     expect(within(dialog).getByText(/Invalid workflow JSON/)).toBeVisible()
@@ -464,9 +487,12 @@ describe('LeftPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'ComfyUI Server Management' }))
     const dialog = screen.getByRole('dialog', { name: 'ComfyUI Server Management' })
 
-    fireEvent.change(within(dialog).getByLabelText('Endpoint URL Local ComfyUI'), {
+    const endpointUrl = within(dialog).getByLabelText('Endpoint URL Local ComfyUI')
+    fireEvent.change(endpointUrl, {
       target: { value: 'http://127.0.0.1:8188' },
     })
+    expect(projectStore.getState().project.comfy.endpoints[0]?.baseUrl).toBe('http://127.0.0.1:27707')
+    fireEvent.blur(endpointUrl)
 
     expect(projectStore.getState().project.comfy.endpoints[0]).toMatchObject({
       baseUrl: 'http://127.0.0.1:8188',
@@ -480,12 +506,27 @@ describe('LeftPanel', () => {
     const dialog = screen.getByRole('dialog', { name: 'ComfyUI Server Management' })
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Header' }))
-    fireEvent.change(within(dialog).getByLabelText('Header name Local ComfyUI 1'), {
+    const headerName = within(dialog).getByLabelText('Header name Local ComfyUI 1')
+    headerName.focus()
+    fireEvent.compositionStart(headerName)
+    fireEvent.change(headerName, {
+      target: { value: 'X-Gongzuoqu' },
+    })
+    fireEvent.compositionEnd(headerName)
+    fireEvent.change(headerName, {
       target: { value: 'X-Workspace' },
     })
-    fireEvent.change(within(dialog).getByLabelText('Header value Local ComfyUI 1'), {
+    expect(document.activeElement).toBe(headerName)
+    expect(projectStore.getState().project.comfy.endpoints[0]?.customHeaders).toEqual({ '': '' })
+    fireEvent.blur(headerName)
+    const headerValue = within(dialog).getByLabelText('Header value Local ComfyUI 1')
+    fireEvent.change(headerValue, {
       target: { value: 'infinity' },
     })
+    expect(projectStore.getState().project.comfy.endpoints[0]?.customHeaders).toEqual({
+      'X-Workspace': '',
+    })
+    fireEvent.blur(headerValue)
 
     expect(projectStore.getState().project.comfy.endpoints[0]?.customHeaders).toEqual({
       'X-Workspace': 'infinity',

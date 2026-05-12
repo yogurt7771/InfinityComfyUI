@@ -42,6 +42,13 @@ const outputSources: FunctionOutputDef['extract']['source'][] = [
 
 const activeTaskStatuses = new Set<ExecutionTask['status']>(['queued', 'running', 'fetching_outputs'])
 
+const commitActiveTextControl = () => {
+  const activeElement = document.activeElement
+  if (activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement) {
+    activeElement.blur()
+  }
+}
+
 const mediaValue = (resource: Resource) =>
   typeof resource.value === 'object' && resource.value !== null && 'url' in resource.value ? resource.value : undefined
 
@@ -482,7 +489,13 @@ function ModalShell({
       <div className={`manager-modal${modalClassName ? ` ${modalClassName}` : ''}`} role="dialog" aria-modal="true" aria-label={label}>
         <div className="manager-header">
           <h3>{label}</h3>
-          <button type="button" className="icon-button" aria-label={`Close ${label}`} onClick={onClose}>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label={`Close ${label}`}
+            onMouseDown={commitActiveTextControl}
+            onClick={onClose}
+          >
             <X size={16} />
           </button>
         </div>
@@ -521,6 +534,99 @@ const optionMatches = (option: SearchableOption, query: string) => {
   const value = normalizedSearch(query)
   if (!value) return true
   return normalizedSearch(`${option.label} ${option.value} ${option.meta ?? ''} ${option.searchText ?? ''}`).includes(value)
+}
+
+function useCommittedTextDraft(value: string | number | null | undefined, onCommit: (value: string) => void) {
+  const externalValue = String(value ?? '')
+  const composingRef = useRef(false)
+  const [draft, setDraft] = useState({
+    value: externalValue,
+    editing: false,
+  })
+  const visibleValue = draft.editing ? draft.value : externalValue
+
+  const commit = (nextValue: string) => {
+    if (composingRef.current) return
+    setDraft({ value: nextValue, editing: false })
+    if (nextValue !== externalValue) onCommit(nextValue)
+  }
+
+  return {
+    value: visibleValue,
+    begin: () =>
+      setDraft((current) => ({
+        value: current.editing ? current.value : externalValue,
+        editing: true,
+      })),
+    change: (nextValue: string) => setDraft({ value: nextValue, editing: true }),
+    compositionStart: () => {
+      composingRef.current = true
+      setDraft((current) => ({ ...current, editing: true }))
+    },
+    compositionEnd: (nextValue: string) => {
+      composingRef.current = false
+      setDraft({ value: nextValue, editing: true })
+    },
+    commit,
+  }
+}
+
+function CommittedTextInput({
+  ariaLabel,
+  className,
+  value,
+  onCommit,
+}: {
+  ariaLabel: string
+  className?: string
+  value: string | number | null | undefined
+  onCommit: (value: string) => void
+}) {
+  const draft = useCommittedTextDraft(value, onCommit)
+
+  return (
+    <input
+      aria-label={ariaLabel}
+      className={className}
+      value={draft.value}
+      onBlur={(event) => draft.commit(event.currentTarget.value)}
+      onChange={(event) => draft.change(event.target.value)}
+      onCompositionEnd={(event) => draft.compositionEnd(event.currentTarget.value)}
+      onCompositionStart={draft.compositionStart}
+      onFocus={draft.begin}
+      onKeyDown={(event) => {
+        if (event.nativeEvent.isComposing) return
+        if (event.key === 'Enter') event.currentTarget.blur()
+      }}
+    />
+  )
+}
+
+function CommittedTextarea({
+  ariaLabel,
+  rows,
+  value,
+  onCommit,
+}: {
+  ariaLabel: string
+  rows?: number
+  value: string | number | null | undefined
+  onCommit: (value: string) => void
+}) {
+  const draft = useCommittedTextDraft(value, onCommit)
+
+  return (
+    <textarea
+      aria-label={ariaLabel}
+      rows={rows}
+      value={draft.value}
+      onBlur={(event) => draft.commit(event.currentTarget.value)}
+      onChange={(event) => draft.change(event.target.value)}
+      onCompositionEnd={(event) => draft.compositionEnd(event.currentTarget.value)}
+      onCompositionStart={draft.compositionStart}
+      onFocus={draft.begin}
+    />
+  )
 }
 
 function SearchableSelect({
@@ -938,7 +1044,21 @@ function FunctionManager({
     })
   }
 
-  const updateSelectedWorkflowJson = (value: string) => {
+  const editSelectedWorkflowJson = (value: string) => {
+    if (!selectedFunction) return
+    try {
+      JSON.parse(value)
+      setSelectedWorkflowDraft({ functionId: selectedFunction.id, value })
+    } catch (err) {
+      setSelectedWorkflowDraft({
+        functionId: selectedFunction.id,
+        value,
+        error: `Invalid workflow JSON: ${err instanceof Error ? err.message : 'Invalid JSON'}`,
+      })
+    }
+  }
+
+  const commitSelectedWorkflowJson = (value: string) => {
     if (!selectedFunction) return
 
     try {
@@ -1034,25 +1154,27 @@ function FunctionManager({
               <div className="manager-grid">
                 <label className="field">
                   <span>Function name</span>
-                  <input
-                    aria-label="Function name"
+                  <CommittedTextInput
+                    ariaLabel="Function name"
                     value={selectedFunction.name}
-                    onChange={(event) => onUpdateFunction(selectedFunction.id, { name: event.target.value })}
+                    onCommit={(name) => onUpdateFunction(selectedFunction.id, { name })}
                   />
                 </label>
                 <label className="field">
                   <span>Category</span>
-                  <input
+                  <CommittedTextInput
+                    ariaLabel="Function category"
                     value={selectedFunction.category ?? ''}
-                    onChange={(event) => onUpdateFunction(selectedFunction.id, { category: event.target.value })}
+                    onCommit={(category) => onUpdateFunction(selectedFunction.id, { category })}
                   />
                 </label>
               </div>
               <label className="field">
                 <span>Description</span>
-                <textarea
+                <CommittedTextarea
+                  ariaLabel="Function description"
                   value={selectedFunction.description ?? ''}
-                  onChange={(event) => onUpdateFunction(selectedFunction.id, { description: event.target.value })}
+                  onCommit={(description) => onUpdateFunction(selectedFunction.id, { description })}
                   rows={2}
                 />
               </label>
@@ -1074,7 +1196,8 @@ function FunctionManager({
                       aria-invalid={selectedWorkflowJsonError ? true : undefined}
                       aria-label="Selected workflow JSON"
                       value={selectedWorkflowJson}
-                      onChange={(event) => updateSelectedWorkflowJson(event.target.value)}
+                      onBlur={(event) => commitSelectedWorkflowJson(event.currentTarget.value)}
+                      onChange={(event) => editSelectedWorkflowJson(event.target.value)}
                       rows={11}
                     />
                   </label>
@@ -1110,12 +1233,10 @@ function FunctionManager({
                           value={workflowBindingDisplay(selectedFunction.workflow.rawJson, input.bind)}
                           onCommit={(value) => updateInputBindingSelection(selectedFunction, index, value, onUpdateFunction)}
                         />
-                        <input
-                          aria-label={`Input label ${input.key}`}
+                        <CommittedTextInput
+                          ariaLabel={`Input label ${input.key}`}
                           value={input.label}
-                          onChange={(event) =>
-                            updateInput(selectedFunction, index, { label: event.target.value }, onUpdateFunction)
-                          }
+                          onCommit={(label) => updateInput(selectedFunction, index, { label }, onUpdateFunction)}
                         />
                         <select
                           aria-label={`Input type ${input.key}`}
@@ -1195,12 +1316,10 @@ function FunctionManager({
                           value={nodeDisplayValue(selectedFunction.workflow.rawJson, output.bind)}
                           onCommit={(value) => updateOutputBindingSelection(selectedFunction, index, value, onUpdateFunction)}
                         />
-                        <input
-                          aria-label={`Output label ${output.key}`}
+                        <CommittedTextInput
+                          ariaLabel={`Output label ${output.key}`}
                           value={output.label}
-                          onChange={(event) =>
-                            updateOutput(selectedFunction, index, { label: event.target.value }, onUpdateFunction)
-                          }
+                          onCommit={(label) => updateOutput(selectedFunction, index, { label }, onUpdateFunction)}
                         />
                         <select
                           aria-label={`Output type ${output.key}`}
@@ -1365,18 +1484,18 @@ function EndpointManager({
               <div className="manager-grid endpoint-grid">
                 <label className="field">
                   <span>Name</span>
-                  <input
-                    aria-label={`Endpoint name ${endpoint.name}`}
+                  <CommittedTextInput
+                    ariaLabel={`Endpoint name ${endpoint.name}`}
                     value={endpoint.name}
-                    onChange={(event) => onUpdateEndpoint(endpoint.id, { name: event.target.value })}
+                    onCommit={(name) => onUpdateEndpoint(endpoint.id, { name })}
                   />
                 </label>
                 <label className="field">
                   <span>URL</span>
-                  <input
-                    aria-label={`Endpoint URL ${endpoint.name}`}
+                  <CommittedTextInput
+                    ariaLabel={`Endpoint URL ${endpoint.name}`}
                     value={endpoint.baseUrl}
-                    onChange={(event) => onUpdateEndpoint(endpoint.id, { baseUrl: event.target.value })}
+                    onCommit={(baseUrl) => onUpdateEndpoint(endpoint.id, { baseUrl })}
                   />
                 </label>
                 <label className="field">
@@ -1441,15 +1560,15 @@ function EndpointManager({
                 <div className="header-list">
                   {endpointHeaders(endpoint).map(([key, value], index) => (
                     <div className="header-row" key={`${endpoint.id}_${index}_${key}`}>
-                      <input
-                        aria-label={`Header name ${endpoint.name} ${index + 1}`}
+                      <CommittedTextInput
+                        ariaLabel={`Header name ${endpoint.name} ${index + 1}`}
                         value={key}
-                        onChange={(event) => updateEndpointHeader(endpoint, index, event.target.value, value, onUpdateEndpoint)}
+                        onCommit={(nextKey) => updateEndpointHeader(endpoint, index, nextKey, value, onUpdateEndpoint)}
                       />
-                      <input
-                        aria-label={`Header value ${endpoint.name} ${index + 1}`}
+                      <CommittedTextInput
+                        ariaLabel={`Header value ${endpoint.name} ${index + 1}`}
                         value={value}
-                        onChange={(event) => updateEndpointHeader(endpoint, index, key, event.target.value, onUpdateEndpoint)}
+                        onCommit={(nextValue) => updateEndpointHeader(endpoint, index, key, nextValue, onUpdateEndpoint)}
                       />
                       <button
                         type="button"

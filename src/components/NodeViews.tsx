@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { memo, useEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { Handle, NodeResizeControl, Position, type NodeProps } from '@xyflow/react'
 import {
@@ -107,6 +107,13 @@ const resourceHandleId = (resourceId: string) => `resource:${resourceId}`
 const resultHandleId = (resourceId: string) => `result:${resourceId}`
 const activeResultStatuses = new Set(['queued', 'running', 'fetching_outputs'])
 
+const commitActiveTextControl = () => {
+  const activeElement = document.activeElement
+  if (activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement) {
+    activeElement.blur()
+  }
+}
+
 const isResourceRef = (value: PrimitiveInputValue | ResourceRef | undefined): value is ResourceRef =>
   typeof value === 'object' && value !== null && 'resourceId' in value
 
@@ -164,6 +171,78 @@ function workflowPrimitiveValue(functionDef: GenerationFunction | undefined, inp
   return keyedValue !== undefined ? keyedValue : primitiveValueAtPath(node, input.bind.path)
 }
 
+function useCommittedTextDraft(value: string, onCommit: (value: string) => void) {
+  const externalValue = String(value ?? '')
+  const composingRef = useRef(false)
+  const [draft, setDraft] = useState({
+    value: externalValue,
+    editing: false,
+  })
+  const visibleValue = draft.editing ? draft.value : externalValue
+
+  const commit = (nextValue: string) => {
+    if (composingRef.current) return
+    setDraft({ value: nextValue, editing: false })
+    if (nextValue !== externalValue) onCommit(nextValue)
+  }
+
+  return {
+    value: visibleValue,
+    begin: () =>
+      setDraft((current) => ({
+        value: current.editing ? current.value : externalValue,
+        editing: true,
+      })),
+    change: (nextValue: string) => setDraft({ value: nextValue, editing: true }),
+    compositionStart: () => {
+      composingRef.current = true
+      setDraft((current) => ({ ...current, editing: true }))
+    },
+    compositionEnd: (nextValue: string) => {
+      composingRef.current = false
+      setDraft({ value: nextValue, editing: true })
+    },
+    commit,
+  }
+}
+
+function CommittedTextarea({
+  ariaLabel,
+  className,
+  placeholder,
+  rows,
+  style,
+  value,
+  onCommit,
+}: {
+  ariaLabel: string
+  className?: string
+  placeholder?: string
+  rows?: number
+  style?: CSSProperties
+  value: string
+  onCommit: (value: string) => void
+}) {
+  const draft = useCommittedTextDraft(value, onCommit)
+
+  return (
+    <textarea
+      aria-label={ariaLabel}
+      className={className}
+      placeholder={placeholder}
+      rows={rows}
+      style={style}
+      value={draft.value}
+      onBlur={(event) => draft.commit(event.currentTarget.value)}
+      onChange={(event) => draft.change(event.target.value)}
+      onCompositionEnd={(event) => draft.compositionEnd(event.currentTarget.value)}
+      onCompositionStart={draft.compositionStart}
+      onDoubleClick={(event) => event.stopPropagation()}
+      onFocus={draft.begin}
+    />
+  )
+}
+
 function OptionalPrimitiveInput({
   input,
   nodeId,
@@ -178,17 +257,6 @@ function OptionalPrimitiveInput({
   minHeight?: number
 }) {
   const label = `${input.label || input.key} inline value`
-  const externalTextValue = String(value ?? '')
-  const textComposingRef = useRef(false)
-  const [textDraft, setTextDraft] = useState({
-    draft: externalTextValue,
-    editing: false,
-  })
-  const visibleTextValue = textDraft.editing ? textDraft.draft : externalTextValue
-  const commitTextDraft = (nextValue: string) => {
-    setTextDraft({ draft: nextValue, editing: false })
-    if (nextValue !== externalTextValue) onUpdate(nodeId, input.key, nextValue)
-  }
 
   if (input.type === 'number') {
     return (
@@ -208,45 +276,13 @@ function OptionalPrimitiveInput({
   }
 
   return (
-    <textarea
-      aria-label={label}
+    <CommittedTextarea
+      ariaLabel={label}
       className="slot-inline-input slot-inline-textarea nodrag nopan"
       rows={5}
       style={minHeight ? { minHeight } : undefined}
-      value={visibleTextValue}
-      onFocus={() =>
-        setTextDraft((current) => ({
-          draft: current.editing ? current.draft : externalTextValue,
-          editing: true,
-        }))
-      }
-      onChange={(event) => {
-        const nextValue = event.target.value
-        setTextDraft({
-          draft: nextValue,
-          editing: true,
-        })
-      }}
-      onCompositionStart={() => {
-        textComposingRef.current = true
-        setTextDraft((current) => ({
-          draft: current.draft,
-          editing: true,
-        }))
-      }}
-      onCompositionEnd={(event) => {
-        const nextValue = event.currentTarget.value
-        textComposingRef.current = false
-        setTextDraft({
-          draft: nextValue,
-          editing: true,
-        })
-      }}
-      onBlur={(event) => {
-        if (textComposingRef.current) return
-        commitTextDraft(event.currentTarget.value)
-      }}
-      onDoubleClick={(event) => event.stopPropagation()}
+      value={String(value ?? '')}
+      onCommit={(nextValue) => onUpdate(nodeId, input.key, nextValue)}
     />
   )
 }
@@ -832,7 +868,12 @@ function LlmMessagesModal({
             <h2>{providerLabel} Messages</h2>
             <p>{description}</p>
           </div>
-          <button type="button" aria-label={`Close ${providerLabel} Messages`} onClick={onClose}>
+          <button
+            type="button"
+            aria-label={`Close ${providerLabel} Messages`}
+            onMouseDown={commitActiveTextControl}
+            onClick={onClose}
+          >
             Close
           </button>
         </div>
@@ -1516,12 +1557,11 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
       {resource?.type === 'text' ? (
         <>
           <ResourceActions canUpload={false} resource={resource} />
-          <textarea
-            aria-label={`${title} text`}
+          <CommittedTextarea
+            ariaLabel={`${title} text`}
             className="resource-text-editor nodrag nopan"
             value={String(resource.value)}
-            onChange={(event) => nodeData.onUpdateTextResourceValue(resource.id, event.target.value)}
-            onDoubleClick={(event) => event.stopPropagation()}
+            onCommit={(value) => nodeData.onUpdateTextResourceValue(resource.id, value)}
           />
         </>
       ) : resource?.type === 'number' ? (
@@ -1675,7 +1715,12 @@ export const FunctionNodeView = memo(({ id, data, selected }: NodeProps) => {
             onChange={(event) => nodeData.onUpdateFunctionRunCount(id, normalizedRunCount(event.target.value))}
           />
         </label>
-        <button type="button" aria-label="Run function" onClick={() => nodeData.onRunFunction(id)}>
+        <button
+          type="button"
+          aria-label="Run function"
+          onMouseDown={commitActiveTextControl}
+          onClick={() => nodeData.onRunFunction(id)}
+        >
           <Play size={14} />
           Run
         </button>
