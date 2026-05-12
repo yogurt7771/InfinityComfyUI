@@ -81,6 +81,9 @@ const extensionForMime = (mimeType) => {
 
 const fileExtension = (filename, mimeType) => path.extname(filename || '') || extensionForMime(mimeType)
 
+const appIconPath = () =>
+  app.isPackaged ? path.join(process.resourcesPath, 'icon.ico') : path.join(__dirname, '..', 'build', 'icon.ico')
+
 const mediaValue = (resource) => {
   const value = resource?.value
   return value && typeof value === 'object' && typeof value.url === 'string' ? value : undefined
@@ -260,6 +263,7 @@ function createWindow() {
     minWidth: 1100,
     minHeight: 720,
     title: 'Infinity ComfyUI',
+    icon: appIconPath(),
     backgroundColor: '#eef2f3',
     webPreferences: {
       contextIsolation: true,
