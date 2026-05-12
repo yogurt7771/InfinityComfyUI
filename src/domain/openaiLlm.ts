@@ -12,6 +12,7 @@ import type {
 export const OPENAI_LLM_FUNCTION_ID = 'fn_openai_llm'
 
 type RuntimeInputValues = Record<string, PrimitiveInputValue | ResourceRef>
+type ResourceBlobLoader = (resource: Resource) => Promise<Blob>
 
 type ChatCompletionTextPart = {
   type: 'text'
@@ -171,23 +172,23 @@ export const mergedOpenAILlmConfig = (base?: OpenAILlmConfig, override?: Partial
 const isResourceRef = (value: PrimitiveInputValue | ResourceRef | undefined): value is ResourceRef =>
   typeof value === 'object' && value !== null && 'resourceId' in value
 
-const mediaUrl = (resource: Resource) =>
-  typeof resource.value === 'object' && resource.value !== null && 'url' in resource.value ? resource.value.url : undefined
+const mediaValue = (resource: Resource) =>
+  typeof resource.value === 'object' && resource.value !== null && 'url' in resource.value ? resource.value : undefined
 
-const imageUrlFromContent = (
+const imageResourceFromContent = (
   content: string,
   inputValues: RuntimeInputValues,
   resources: Record<string, Resource>,
 ) => {
   const value = content.trim()
-  if (value.startsWith('http://') || value.startsWith('https://') || value.startsWith('data:image/')) return value
+  if (value.startsWith('http://') || value.startsWith('https://') || value.startsWith('data:image/')) return undefined
 
   const inputValue = inputValues[value]
   if (!isResourceRef(inputValue)) return undefined
 
   const resource = resources[inputValue.resourceId]
   if (!resource || resource.type !== 'image') return undefined
-  return mediaUrl(resource)
+  return resource
 }
 
 const bytesToBase64 = (bytes: Uint8Array) => {
@@ -211,11 +212,24 @@ const imageUrlAsDataUrl = async (url: string) => {
   return `data:${mimeType};base64,${bytesToBase64(bytes)}`
 }
 
+const imageResourceAsDataUrl = async (resource: Resource, loadResourceBlob?: ResourceBlobLoader) => {
+  const media = mediaValue(resource)
+  if (!media?.url) return undefined
+  if (media.url.startsWith('data:image/')) return media.url
+
+  if (!loadResourceBlob) return imageUrlAsDataUrl(media.url)
+  const blob = await loadResourceBlob(resource)
+  const mimeType = blob.type || media.mimeType || 'image/png'
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  return `data:${mimeType};base64,${bytesToBase64(bytes)}`
+}
+
 const contentPartForMessage = async (
   role: OpenAILlmMessage['role'],
   part: OpenAILlmContentPart,
   inputValues: RuntimeInputValues,
   resources: Record<string, Resource>,
+  loadResourceBlob?: ResourceBlobLoader,
 ): Promise<ChatCompletionContentPart | undefined> => {
   if (part.type === 'text') {
     const text = part.content.trim()
@@ -223,13 +237,19 @@ const contentPartForMessage = async (
   }
 
   if (role !== 'user') return undefined
-  const imageUrl = imageUrlFromContent(part.content, inputValues, resources)
-  if (!imageUrl) return undefined
+  const directValue = part.content.trim()
+  const imageUrl =
+    directValue.startsWith('http://') || directValue.startsWith('https://') || directValue.startsWith('data:image/')
+      ? directValue
+      : undefined
+  const imageResource = imageResourceFromContent(part.content, inputValues, resources)
+  const resolvedImageUrl = imageResource ? await imageResourceAsDataUrl(imageResource, loadResourceBlob) : imageUrl
+  if (!resolvedImageUrl) return undefined
 
   return {
     type: 'image_url',
     image_url: {
-      url: await imageUrlAsDataUrl(imageUrl),
+      url: imageResource ? resolvedImageUrl : await imageUrlAsDataUrl(resolvedImageUrl),
       detail: part.detail ?? 'auto',
     },
   }
@@ -239,12 +259,15 @@ export async function createOpenAIChatCompletionRequest(
   config: OpenAILlmConfig,
   inputValues: RuntimeInputValues,
   resources: Record<string, Resource>,
+  loadResourceBlob?: ResourceBlobLoader,
 ): Promise<OpenAIChatCompletionRequest> {
   const messages = await Promise.all(
     config.messages.map(async (message) => ({
       role: message.role,
       content: (
-        await Promise.all(message.content.map((part) => contentPartForMessage(message.role, part, inputValues, resources)))
+        await Promise.all(
+          message.content.map((part) => contentPartForMessage(message.role, part, inputValues, resources, loadResourceBlob)),
+        )
       ).filter((part): part is ChatCompletionContentPart => Boolean(part)),
     })),
   )

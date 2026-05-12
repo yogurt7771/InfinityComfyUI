@@ -25,6 +25,7 @@ import { defaultGeminiLlmConfig, isGeminiLlmFunction, mergedGeminiLlmConfig } fr
 import { defaultOpenAIImageConfig, isOpenAIImageFunction, mergedOpenAIImageConfig } from '../domain/openaiImage'
 import { defaultGeminiImageConfig, isGeminiImageFunction, mergedGeminiImageConfig } from '../domain/geminiImage'
 import { readFileAsMediaResource, type MediaResourceKind, type MediaResourcePayload } from '../domain/resourceFiles'
+import { projectStore } from '../store/projectStore'
 import type {
   FunctionInputDef,
   FunctionOutputDef,
@@ -352,6 +353,17 @@ const mediaValue = (resource: Resource) =>
 
 const mediaAccept = (type: MediaResourceKind) => `${type}/*`
 
+const fetchResourceBlob = async (resource: Resource) => {
+  if (projectStore.getState().project.resources[resource.id]) {
+    return projectStore.getState().fetchResourceBlob(resource.id)
+  }
+  const media = mediaValue(resource)
+  if (!media?.url) throw new Error(`Resource is missing a URL: ${resource.id}`)
+  const response = await fetch(media.url)
+  if (!response.ok) throw new Error(`Failed to fetch resource: ${response.status}`)
+  return response.blob()
+}
+
 const copyResource = async (resource: Resource) => {
   const media = mediaValue(resource)
   if (!media?.url) {
@@ -361,10 +373,7 @@ const copyResource = async (resource: Resource) => {
 
   if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') return
 
-  const response = await fetch(media.url)
-  if (!response.ok) throw new Error(`Failed to copy resource: ${response.status}`)
-
-  const blob = await response.blob()
+  const blob = await fetchResourceBlob(resource)
   const mimeType = blob.type || media.mimeType
   const clipboardBlob = blob.type ? blob : blob.slice(0, blob.size, mimeType)
   await navigator.clipboard.write([new ClipboardItem({ [mimeType]: clipboardBlob })])
@@ -380,13 +389,15 @@ const resourceDownloadName = (resource: Resource) => {
   return resource.name ?? resource.id
 }
 
-function downloadResource(resource: Resource) {
+async function downloadResource(resource: Resource) {
   const media = mediaValue(resource)
   const anchor = document.createElement('a')
   let objectUrl: string | undefined
 
   if (media?.url) {
-    anchor.href = media.url
+    const blob = await fetchResourceBlob(resource)
+    objectUrl = URL.createObjectURL(blob)
+    anchor.href = objectUrl
   } else {
     const blob = new Blob([String(resource.value)], { type: 'text/plain;charset=utf-8' })
     objectUrl = URL.createObjectURL(blob)
@@ -398,20 +409,60 @@ function downloadResource(resource: Resource) {
   if (objectUrl) window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
 }
 
-function FullResourcePreview({ resource }: { resource: Resource }) {
+function usePreviewMediaSource(resource: Resource) {
   const media = mediaValue(resource)
+  const key =
+    media?.url && (media.comfy || resource.metadata?.endpointId)
+      ? [
+          resource.id,
+          media.url,
+          media.comfy?.endpointId ?? resource.metadata?.endpointId ?? '',
+          media.comfy?.filename ?? '',
+          media.comfy?.subfolder ?? '',
+          media.comfy?.type ?? '',
+        ].join('|')
+      : undefined
+  const [objectUrl, setObjectUrl] = useState<{ key: string; url: string }>()
+
+  useEffect(() => {
+    if (!key) return undefined
+
+    let canceled = false
+    let nextObjectUrl: string | undefined
+    fetchResourceBlob(resource)
+      .then((blob) => {
+        if (canceled) return
+        nextObjectUrl = URL.createObjectURL(blob)
+        setObjectUrl({ key, url: nextObjectUrl })
+      })
+      .catch(() => {
+        if (!canceled) setObjectUrl((current) => (current?.key === key ? undefined : current))
+      })
+
+    return () => {
+      canceled = true
+      if (nextObjectUrl) URL.revokeObjectURL(nextObjectUrl)
+    }
+  }, [key, resource])
+
+  if (!media?.url) return undefined
+  return key ? (objectUrl?.key === key ? objectUrl.url : undefined) : media.url
+}
+
+function FullResourcePreview({ resource }: { resource: Resource }) {
+  const mediaSource = usePreviewMediaSource(resource)
   const label = resourceDownloadName(resource)
 
-  if (resource.type === 'image' && media?.url) {
-    return <img className="full-preview-image" src={String(media.url)} alt={label} />
+  if (resource.type === 'image' && mediaSource) {
+    return <img className="full-preview-image" src={String(mediaSource)} alt={label} />
   }
 
-  if (resource.type === 'video' && media?.url) {
-    return <video className="full-preview-video" src={String(media.url)} controls aria-label={`${label} full preview`} />
+  if (resource.type === 'video' && mediaSource) {
+    return <video className="full-preview-video" src={String(mediaSource)} controls aria-label={`${label} full preview`} />
   }
 
-  if (resource.type === 'audio' && media?.url) {
-    return <audio className="full-preview-audio" src={String(media.url)} controls aria-label={`${label} full preview`} />
+  if (resource.type === 'audio' && mediaSource) {
+    return <audio className="full-preview-audio" src={String(mediaSource)} controls aria-label={`${label} full preview`} />
   }
 
   const textValue = typeof resource.value === 'string' ? resource.value : JSON.stringify(resource.value, null, 2)
@@ -570,7 +621,7 @@ function ResourceActions({
         type="button"
         aria-label="Download asset"
         disabled={!hasDownloadableValue}
-        onClick={() => downloadResource(resource)}
+        onClick={() => void downloadResource(resource).catch(() => undefined)}
       >
         <Download size={14} />
       </button>
@@ -1702,7 +1753,7 @@ export const ResultGroupNodeView = memo(({ id, data, selected }: NodeProps) => {
               <button type="button" aria-label="Copy result" onClick={() => void copyResource(resource).catch(() => undefined)}>
                 <Copy size={14} />
               </button>
-              <button type="button" aria-label="Download result" onClick={() => downloadResource(resource)}>
+              <button type="button" aria-label="Download result" onClick={() => void downloadResource(resource).catch(() => undefined)}>
                 <Download size={14} />
               </button>
             </div>

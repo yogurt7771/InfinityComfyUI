@@ -30,6 +30,12 @@ export type MediaResourceValue = {
   height?: number
   durationMs?: number
   thumbnailUrl?: string
+  comfy?: {
+    endpointId: string
+    filename: string
+    subfolder?: string
+    type: string
+  }
 }
 
 export type Resource = {

@@ -98,7 +98,7 @@ describe('ComfyClient', () => {
     })
   })
 
-  it('builds ComfyUI history and view requests like the Python reference client', async () => {
+  it('builds ComfyUI history and view requests like the Python reference client with custom headers', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ prompt: { outputs: {} } }),
@@ -107,6 +107,7 @@ describe('ComfyClient', () => {
     const client = new ComfyClient({
       baseUrl: 'http://localhost:8188',
       clientId: 'client-1',
+      headers: { 'X-Workspace': 'infinity' },
       fetchImpl: fetchMock,
     })
 
@@ -114,14 +115,14 @@ describe('ComfyClient', () => {
     await client.viewFile({ filename: 'out 1.png', subfolder: 'renders', type: 'output' })
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://localhost:8188/history/prompt-1', {
-      headers: {},
+      headers: { 'X-Workspace': 'infinity' },
       method: 'GET',
     })
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       'http://localhost:8188/view?filename=out+1.png&subfolder=renders&type=output',
       {
-        headers: {},
+        headers: { 'X-Workspace': 'infinity' },
         method: 'GET',
       },
     )

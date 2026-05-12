@@ -11,6 +11,7 @@ import type {
 export const GEMINI_LLM_FUNCTION_ID = 'fn_gemini_llm'
 
 type RuntimeInputValues = Record<string, PrimitiveInputValue | ResourceRef>
+type ResourceBlobLoader = (resource: Resource) => Promise<Blob>
 
 type GeminiTextPart = {
   text: string
@@ -173,20 +174,20 @@ const isResourceRef = (value: PrimitiveInputValue | ResourceRef | undefined): va
 const mediaValue = (resource: Resource) =>
   typeof resource.value === 'object' && resource.value !== null && 'url' in resource.value ? resource.value : undefined
 
-const imageUrlFromContent = (
+const imageResourceFromContent = (
   content: string,
   inputValues: RuntimeInputValues,
   resources: Record<string, Resource>,
 ) => {
   const value = content.trim()
-  if (value.startsWith('http://') || value.startsWith('https://') || value.startsWith('data:image/')) return value
+  if (value.startsWith('http://') || value.startsWith('https://') || value.startsWith('data:image/')) return undefined
 
   const inputValue = inputValues[value]
   if (!isResourceRef(inputValue)) return undefined
 
   const resource = resources[inputValue.resourceId]
   if (!resource || resource.type !== 'image') return undefined
-  return mediaValue(resource)?.url
+  return resource
 }
 
 const bytesToBase64 = (bytes: Uint8Array) => {
@@ -232,11 +233,40 @@ const imageUrlAsInlineData = async (url: string): Promise<GeminiInlineDataPart> 
   }
 }
 
+const imageResourceAsInlineData = async (
+  resource: Resource,
+  loadResourceBlob?: ResourceBlobLoader,
+): Promise<GeminiInlineDataPart | undefined> => {
+  const media = mediaValue(resource)
+  if (!media?.url) return undefined
+  const dataUrl = parseImageDataUrl(media.url)
+  if (dataUrl) {
+    return {
+      inline_data: {
+        mime_type: dataUrl.mimeType,
+        data: dataUrl.data,
+      },
+    }
+  }
+
+  if (!loadResourceBlob) return imageUrlAsInlineData(media.url)
+  const blob = await loadResourceBlob(resource)
+  const mimeType = blob.type || media.mimeType || 'image/png'
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  return {
+    inline_data: {
+      mime_type: mimeType,
+      data: bytesToBase64(bytes),
+    },
+  }
+}
+
 const contentPartForMessage = async (
   role: GeminiLlmMessage['role'],
   part: GeminiLlmContentPart,
   inputValues: RuntimeInputValues,
   resources: Record<string, Resource>,
+  loadResourceBlob?: ResourceBlobLoader,
 ): Promise<GeminiRequestPart | undefined> => {
   if (part.type === 'text') {
     const text = part.content.trim()
@@ -244,7 +274,13 @@ const contentPartForMessage = async (
   }
 
   if (role !== 'user') return undefined
-  const imageUrl = imageUrlFromContent(part.content, inputValues, resources)
+  const directValue = part.content.trim()
+  const imageUrl =
+    directValue.startsWith('http://') || directValue.startsWith('https://') || directValue.startsWith('data:image/')
+      ? directValue
+      : undefined
+  const imageResource = imageResourceFromContent(part.content, inputValues, resources)
+  if (imageResource) return imageResourceAsInlineData(imageResource, loadResourceBlob)
   if (!imageUrl) return undefined
 
   return imageUrlAsInlineData(imageUrl)
@@ -254,13 +290,16 @@ export async function createGeminiGenerateContentRequest(
   config: GeminiLlmConfig,
   inputValues: RuntimeInputValues,
   resources: Record<string, Resource>,
+  loadResourceBlob?: ResourceBlobLoader,
 ): Promise<GeminiGenerateContentRequest> {
   const systemParts: GeminiTextPart[] = []
   const contents: GeminiRequestContent[] = []
 
   for (const message of config.messages) {
     const parts = (
-      await Promise.all(message.content.map((part) => contentPartForMessage(message.role, part, inputValues, resources)))
+      await Promise.all(
+        message.content.map((part) => contentPartForMessage(message.role, part, inputValues, resources, loadResourceBlob)),
+      )
     ).filter((part): part is GeminiRequestPart => Boolean(part))
 
     if (parts.length === 0) continue

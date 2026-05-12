@@ -128,6 +128,7 @@ const panelProject = (): ProjectState => ({
 describe('LeftPanel', () => {
   afterEach(() => {
     cleanup()
+    vi.unstubAllGlobals()
     vi.restoreAllMocks()
   })
 
@@ -721,8 +722,13 @@ describe('LeftPanel', () => {
     expect(screen.queryByText('task_running')).not.toBeInTheDocument()
   })
 
-  it('shows selected node run queue cards with locate and ComfyUI history actions', () => {
+  it('shows selected node run queue cards with locate and proxied ComfyUI history actions', async () => {
     const state = panelProject()
+    state.comfy.endpoints[0] = {
+      ...state.comfy.endpoints[0]!,
+      id: 'endpoint_local',
+      customHeaders: { 'X-Workspace': 'infinity' },
+    }
     state.canvas.nodes = [
       { id: 'node_fn_render', type: 'function', position: { x: 0, y: 0 }, data: { functionId: 'fn_render' } },
       { id: 'node_result_1', type: 'result_group', position: { x: 240, y: 0 }, data: { taskId: 'task_running' } },
@@ -732,9 +738,12 @@ describe('LeftPanel', () => {
       runTotal: 2,
       comfyPromptId: 'prompt_1',
       status: 'succeeded',
+      endpointId: 'endpoint_local',
     }
     projectStore.setState({ project: state, selectedNodeId: 'node_fn_render' })
     const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ prompt_1: { outputs: {} } }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
 
     render(<RightPanel />)
 
@@ -743,9 +752,12 @@ describe('LeftPanel', () => {
     fireEvent.click(within(queue).getByRole('button', { name: 'Locate Run 1/2 result node' }))
     expect(projectStore.getState().selectedNodeId).toBe('node_result_1')
     expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'infinity-focus-node' }))
-    expect(within(queue).getByRole('link', { name: 'Open ComfyUI history for Run 1/2' })).toHaveAttribute(
-      'href',
-      'http://127.0.0.1:27707/history/prompt_1',
-    )
+    fireEvent.click(within(queue).getByRole('button', { name: 'Open ComfyUI history for Run 1/2' }))
+    await screen.findByRole('dialog', { name: 'ComfyUI history' })
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:27707/history/prompt_1', {
+      method: 'GET',
+      headers: { 'X-Workspace': 'infinity' },
+    })
+    expect(screen.getByText(/"prompt_1"/)).toBeVisible()
   })
 })

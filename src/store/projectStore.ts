@@ -2,6 +2,7 @@ import { useStore } from 'zustand'
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import { get as getIdb, set as setIdb } from 'idb-keyval'
 import { ComfyClient, type ComfyUploadImageOptions, type ComfyUploadImageResult } from '../domain/comfyClient'
+import { ComfyServer, comfyFileFromResource } from '../domain/comfyServer'
 import { extractComfyOutputs, type ComfyFileRef } from '../domain/comfyOutputs'
 import { runComfyPrompt, type ComfyPromptClient } from '../domain/comfyRunner'
 import {
@@ -73,6 +74,7 @@ type RuntimeComfyClient = ComfyPromptClient & {
   testConnection?: () => Promise<unknown>
   interrupt?: () => Promise<unknown>
   uploadImage?: (file: File, options?: ComfyUploadImageOptions) => Promise<ComfyUploadImageResult>
+  viewFile?: (params: ComfyFileRef) => Promise<Blob>
 }
 
 type QueuedComfyRun = {
@@ -160,9 +162,20 @@ type ProjectMetadataPatch = {
   name?: string
   description?: string
 }
-type ProjectLibraryPackage = {
+export type ProjectLibraryPackage = {
   currentProjectId: string
   projects: Record<string, ProjectState>
+}
+
+type DesktopProjectStorage = {
+  loadProjectLibrary: () => Promise<ProjectLibraryPackage | undefined>
+  saveProjectLibrary: (payload: ProjectLibraryPackage) => Promise<{ ok: boolean; rootPath?: string; error?: string }>
+}
+
+declare global {
+  interface Window {
+    infinityComfyUIStorage?: DesktopProjectStorage
+  }
 }
 
 export type ProjectStoreState = {
@@ -177,6 +190,8 @@ export type ProjectStoreState = {
   deleteProject: (projectId: string) => void
   checkEndpointStatus: (endpointId: string) => Promise<void>
   checkComfyEndpointStatuses: () => Promise<void>
+  fetchResourceBlob: (resourceId: string) => Promise<Blob>
+  fetchComfyHistory: (endpointId: string, promptId: string) => Promise<unknown>
   addTextResource: (name: string, value: string) => void
   addTextResourceAtPosition: (name: string, value: string, position: { x: number; y: number }) => string
   addEmptyResourceAtPosition: (
@@ -383,6 +398,7 @@ const mediaValueWithAsset = (assetId: string, media: MediaResourcePayload): Medi
   height: media.height,
   durationMs: media.durationMs,
   thumbnailUrl: media.thumbnailUrl,
+  comfy: media.comfy,
 })
 
 const uniqueIds = (nodeIds: string[]) => [...new Set(nodeIds.filter(Boolean))]
@@ -782,11 +798,52 @@ const resourceUrl = (resource: Resource) => {
   return undefined
 }
 
+const dataUrlToBlob = (url: string) => {
+  const match = url.match(/^data:([^;,]+)?(;base64)?,(.*)$/)
+  if (!match) return undefined
+  const mimeType = match[1] || 'application/octet-stream'
+  const payload = match[3] ?? ''
+  const binary = match[2] ? atob(payload) : decodeURIComponent(payload)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+  return new Blob([bytes], { type: mimeType })
+}
+
+const fetchUrlBlob = async (url: string) => {
+  const dataBlob = dataUrlToBlob(url)
+  if (dataBlob) return dataBlob
+  const response = await fetch(url)
+  if (!response.ok) throw new Error(`Resource fetch failed: ${response.status}`)
+  return response.blob()
+}
+
+const comfyEndpointForResource = (project: ProjectState, resource: Resource) =>
+  project.comfy.endpoints.find((endpoint) => comfyFileFromResource(resource, endpoint))
+
+const readProjectResourceBlob = async (
+  project: ProjectState,
+  resource: Resource,
+  createComfyClient: ProjectStoreDeps['createComfyClient'],
+) => {
+  const endpoint = comfyEndpointForResource(project, resource)
+  if (endpoint) {
+    const server = new ComfyServer(endpoint, createComfyClient(endpoint))
+    return server.readResourceBlob(resource)
+  }
+
+  const url = resourceUrl(resource)
+  if (!url) throw new Error(`Resource is missing a URL: ${resource.id}`)
+  return fetchUrlBlob(url)
+}
+
 const prepareComfyInputValues = async (
   client: RuntimeComfyClient,
   inputs: FunctionInputDef[],
   inputValues: RuntimeInputValues,
   resources: Record<string, Resource>,
+  loadResourceBlob: (resource: Resource) => Promise<Blob>,
 ): Promise<RuntimeInputValues> => {
   const prepared: RuntimeInputValues = { ...inputValues }
 
@@ -801,9 +858,7 @@ const prepareComfyInputValues = async (
     const url = resourceUrl(resource)
     if (!url) throw new Error(`Image resource is missing a URL: ${value.resourceId}`)
 
-    const response = await fetch(url)
-    if (!response.ok) throw new Error(`Image resource fetch failed: ${response.status}`)
-    const blob = await response.blob()
+    const blob = await loadResourceBlob(resource)
     const file = new File([blob], resourceFilename(resource), { type: blob.type || resourceMimeType(resource) })
     const uploaded = await client.uploadImage(file, {
       subfolder: input.upload.targetSubfolder,
@@ -1076,6 +1131,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             item.functionDef.inputs,
             item.inputValues,
             get().project.resources,
+            (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
           )
           if (taskWasCanceled(item.taskId)) return
           const compiledWithInputs = injectWorkflowInputs(
@@ -1157,6 +1213,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
                 filename: file.filename,
                 mimeType,
                 sizeBytes: 0,
+                comfy: {
+                  endpointId: endpoint.id,
+                  filename: file.filename,
+                  subfolder: file.subfolder ?? '',
+                  type: file.type,
+                },
               },
               source: {
                 kind: 'function_output',
@@ -1327,7 +1389,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       try {
         if (!item.config.apiKey.trim()) throw new Error('OpenAI API key is required')
 
-        const request = await createOpenAIChatCompletionRequest(item.config, item.inputValues, get().project.resources)
+        const request = await createOpenAIChatCompletionRequest(
+          item.config,
+          item.inputValues,
+          get().project.resources,
+          (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
+        )
         if (request.messages.length === 0) throw new Error('OpenAI messages are empty')
         set((current) => ({
           project: {
@@ -1504,7 +1571,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       try {
         if (!item.config.apiKey.trim()) throw new Error('Gemini API key is required')
 
-        const request = await createGeminiGenerateContentRequest(item.config, item.inputValues, get().project.resources)
+        const request = await createGeminiGenerateContentRequest(
+          item.config,
+          item.inputValues,
+          get().project.resources,
+          (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
+        )
         if (request.contents.length === 0) throw new Error('Gemini contents are empty')
         set((current) => ({
           project: {
@@ -1686,6 +1758,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           item.inputValues,
           get().project.resources,
           defaultPrompt,
+          (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
         )
         const requestSnapshot =
           request.kind === 'edit'
@@ -1902,6 +1975,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           item.inputValues,
           get().project.resources,
           defaultPrompt,
+          (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
         )
         set((current) => ({
           project: {
@@ -2738,6 +2812,19 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       checkComfyEndpointStatuses: async () => {
         const endpoints = get().project.comfy.endpoints.filter((endpoint) => endpoint.enabled)
         await Promise.all(endpoints.map((endpoint) => get().checkEndpointStatus(endpoint.id)))
+      },
+
+      fetchResourceBlob: async (resourceId) => {
+        const resource = get().project.resources[resourceId]
+        if (!resource) throw new Error(`Resource not found: ${resourceId}`)
+        return readProjectResourceBlob(get().project, resource, runtime.createComfyClient)
+      },
+
+      fetchComfyHistory: async (endpointId, promptId) => {
+        const endpoint = get().project.comfy.endpoints.find((item) => item.id === endpointId)
+        if (!endpoint) throw new Error(`ComfyUI endpoint not found: ${endpointId}`)
+        const server = new ComfyServer(endpoint, runtime.createComfyClient(endpoint))
+        return server.getHistory(promptId)
       },
 
     addTextResource: (name, value) => {
@@ -4333,7 +4420,7 @@ const loadProjectLibrary = (payload: ProjectLibraryPackage | undefined, now: str
   return true
 }
 
-if (typeof window !== 'undefined' && typeof indexedDB !== 'undefined') {
+const loadIndexedDbProjectLibrary = () =>
   getIdb<ProjectLibraryPackage>(PROJECT_LIBRARY_STORAGE_KEY)
     .then(async (savedLibrary) => {
       const now = new Date().toISOString()
@@ -4350,10 +4437,49 @@ if (typeof window !== 'undefined' && typeof indexedDB !== 'undefined') {
     })
     .catch(() => undefined)
 
+const startIndexedDbProjectPersistence = () => {
+  void loadIndexedDbProjectLibrary()
+
   projectStore.subscribe((state) => {
     void setIdb(PROJECT_STORAGE_KEY, withoutBuiltInProjectFunctions(state.project)).catch(() => undefined)
     void setIdb(PROJECT_LIBRARY_STORAGE_KEY, serializeProjectLibrary(state)).catch(() => undefined)
   })
+}
+
+const startDesktopProjectPersistence = (storage: DesktopProjectStorage) => {
+  void storage
+    .loadProjectLibrary()
+    .then((savedLibrary) => {
+      const now = new Date().toISOString()
+      loadProjectLibrary(savedLibrary, now)
+    })
+    .catch(() => undefined)
+
+  let saveTimer: number | undefined
+
+  const saveProjectLibrary = (state: ProjectStoreState) =>
+    storage.saveProjectLibrary(serializeProjectLibrary(state)).catch(() => undefined)
+
+  projectStore.subscribe((state) => {
+    if (saveTimer !== undefined) window.clearTimeout(saveTimer)
+    saveTimer = window.setTimeout(() => {
+      saveTimer = undefined
+      void saveProjectLibrary(state)
+    }, 250)
+  })
+
+  window.addEventListener('beforeunload', () => {
+    if (saveTimer !== undefined) window.clearTimeout(saveTimer)
+    void saveProjectLibrary(projectStore.getState())
+  })
+}
+
+if (typeof window !== 'undefined') {
+  if (window.infinityComfyUIStorage) {
+    startDesktopProjectPersistence(window.infinityComfyUIStorage)
+  } else if (typeof indexedDB !== 'undefined') {
+    startIndexedDbProjectPersistence()
+  }
 }
 
 export function useProjectStore<T>(selector: (state: ProjectStoreState) => T): T {

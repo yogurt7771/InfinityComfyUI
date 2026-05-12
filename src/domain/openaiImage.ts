@@ -13,6 +13,7 @@ import type {
 export const OPENAI_IMAGE_FUNCTION_ID = 'fn_openai_image'
 
 type RuntimeInputValues = Record<string, PrimitiveInputValue | ResourceRef>
+type ResourceBlobLoader = (resource: Resource) => Promise<Blob>
 
 export type OpenAIImageGenerationRequest = {
   model: string
@@ -198,7 +199,7 @@ const filenameForImageResource = (resource: Resource, mimeType: string, index: n
   return `image-${index + 1}.${extensionForMimeType(mimeType)}`
 }
 
-const imageResourceAsFile = async (resource: Resource, index: number) => {
+const imageResourceAsFile = async (resource: Resource, index: number, loadResourceBlob?: ResourceBlobLoader) => {
   const media = mediaValue(resource)
   if (!media?.url) throw new Error(`Image resource is missing a URL: ${resource.id}`)
 
@@ -208,12 +209,14 @@ const imageResourceAsFile = async (resource: Resource, index: number) => {
     return new File([bytes], filenameForImageResource(resource, parsed.mimeType, index), { type: parsed.mimeType })
   }
 
-  const response = await fetch(media.url)
-  if (!response.ok) throw new Error(`Image download failed before OpenAI image edit request: ${response.status}`)
-
-  const blob = await response.blob()
-  const mimeType = blob.type || media.mimeType || response.headers.get('Content-Type')?.split(';')[0] || 'image/png'
-  return new File([blob], filenameForImageResource(resource, mimeType, index), { type: mimeType })
+  const blob = loadResourceBlob
+    ? await loadResourceBlob(resource)
+    : await fetch(media.url).then((response) => {
+        if (!response.ok) throw new Error(`Image download failed before OpenAI image edit request: ${response.status}`)
+        return response.blob()
+      })
+  const mimeType = blob.type || media.mimeType || 'image/png'
+  return new File([await blob.arrayBuffer()], filenameForImageResource(resource, mimeType, index), { type: mimeType })
 }
 
 const appendOptionalFormField = (body: FormData, key: string, value: string | number | undefined) => {
@@ -250,6 +253,7 @@ export async function createOpenAIImageApiRequest(
   inputValues: RuntimeInputValues,
   resources: Record<string, Resource>,
   defaultPrompt?: string | number | null,
+  loadResourceBlob?: ResourceBlobLoader,
 ): Promise<OpenAIImageApiRequest> {
   const images = imageResourceRefsFromInput(inputValues, resources)
   const normalized = mergedOpenAIImageConfig(undefined, config)
@@ -273,7 +277,7 @@ export async function createOpenAIImageApiRequest(
   appendOptionalFormField(body, 'user', normalized.user)
 
   for (let index = 0; index < images.length; index += 1) {
-    body.append('image', await imageResourceAsFile(images[index]!, index))
+    body.append('image', await imageResourceAsFile(images[index]!, index, loadResourceBlob))
   }
 
   return {

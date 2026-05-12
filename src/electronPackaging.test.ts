@@ -13,4 +13,27 @@ describe('Electron packaging configuration', () => {
 
     expect(html).toContain('<title>Infinity ComfyUI</title>')
   })
+
+  it('packages an Electron preload bridge for project file persistence', () => {
+    const packageJson = JSON.parse(readFileSync(resolve(__dirname, '..', 'package.json'), 'utf8')) as {
+      build?: { files?: string[] }
+    }
+    const main = readFileSync(resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
+
+    expect(packageJson.build?.files).toContain('electron/**/*')
+    expect(main).toContain("preload: path.join(__dirname, 'preload.cjs')")
+    expect(main).toContain("ipcMain.handle('infinity-storage:load'")
+    expect(main).toContain("ipcMain.handle('infinity-storage:save'")
+  })
+
+  it('stores desktop projects beside the executable with per-project config and assets folders', () => {
+    const main = readFileSync(resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
+
+    expect(main).toContain("path.dirname(app.getPath('exe'))")
+    expect(main).toContain("'projects'")
+    expect(main).toContain("'config'")
+    expect(main).toContain("'assets'")
+    expect(main).toContain("'project.json'")
+    expect(main).toContain("'assets.json'")
+  })
 })

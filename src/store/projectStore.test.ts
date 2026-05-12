@@ -901,6 +901,133 @@ describe('project store actions', () => {
     }
   })
 
+  it('loads ComfyUI image resources through endpoint headers before OpenAI image edits', async () => {
+    const ids = ['node_openai_image', 'task_1', 'node_result_1', 'asset_1', 'res_image_1']
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        blob: async () => new Blob(['secure-ref'], { type: 'image/png' }),
+      })
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: [{ b64_json: 'ZWRpdGVk', output_format: 'png' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = fetchMock as typeof fetch
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now: () => '2026-05-09T00:00:00.000Z',
+      randomInt: () => 1,
+    })
+
+    try {
+      slice.setState((state) => ({
+        project: {
+          ...state.project,
+          comfy: {
+            ...state.project.comfy,
+            endpoints: [
+              {
+                ...state.project.comfy.endpoints[0]!,
+                id: 'endpoint_secure',
+                baseUrl: 'http://127.0.0.1:27707',
+                customHeaders: { 'X-Workspace': 'infinity' },
+              },
+            ],
+          },
+          resources: {
+            res_prompt: {
+              id: 'res_prompt',
+              type: 'text',
+              name: 'Prompt',
+              value: 'make the reference brighter',
+              source: { kind: 'manual_input' },
+              metadata: { createdAt: '2026-05-09T00:00:00.000Z' },
+            },
+            res_reference: {
+              id: 'res_reference',
+              type: 'image',
+              name: 'Reference',
+              value: {
+                assetId: 'asset_reference',
+                url: 'http://127.0.0.1:27707/view?filename=reference.png&subfolder=renders&type=output',
+                filename: 'reference.png',
+                mimeType: 'image/png',
+                sizeBytes: 3,
+                comfy: {
+                  endpointId: 'endpoint_secure',
+                  filename: 'reference.png',
+                  subfolder: 'renders',
+                  type: 'output',
+                },
+              },
+              source: { kind: 'function_output' },
+              metadata: { endpointId: 'endpoint_secure', createdAt: '2026-05-09T00:00:00.000Z' },
+            },
+          },
+        },
+      }))
+      slice.getState().addFunctionNode(OPENAI_IMAGE_FUNCTION_ID)
+      slice.setState((state) => ({
+        project: {
+          ...state.project,
+          canvas: {
+            ...state.project.canvas,
+            nodes: state.project.canvas.nodes.map((node) =>
+              node.id === 'node_openai_image'
+                ? {
+                    ...node,
+                    data: {
+                      ...node.data,
+                      inputValues: {
+                        prompt: { resourceId: 'res_prompt', type: 'text' },
+                        image_1: { resourceId: 'res_reference', type: 'image' },
+                      },
+                      openaiImageConfig: {
+                        baseUrl: 'https://api.openai.com/v1',
+                        apiKey: 'demo',
+                        model: 'gpt-image-2',
+                        size: 'auto',
+                        quality: 'auto',
+                        background: 'auto',
+                        outputFormat: 'png',
+                        outputCompression: 100,
+                        user: '',
+                      },
+                    },
+                  }
+                : node,
+            ),
+          },
+        },
+      }))
+
+      await slice.getState().runFunctionNodeWithComfy('node_openai_image', 1)
+
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        1,
+        'http://127.0.0.1:27707/view?filename=reference.png&subfolder=renders&type=output',
+        {
+          method: 'GET',
+          headers: { 'X-Workspace': 'infinity' },
+        },
+      )
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        2,
+        'https://api.openai.com/v1/images/edits',
+        expect.objectContaining({ method: 'POST' }),
+      )
+      const body = fetchMock.mock.calls[1]?.[1]?.body as FormData
+      const image = body.getAll('image')[0] as File
+      await expect(image.text()).resolves.toBe('secure-ref')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   it('sends connected Gemini image inputs as inline data parts', async () => {
     const ids = ['node_gemini_image', 'task_1', 'node_result_1', 'asset_1', 'res_image_1']
     const createComfyClient = vi.fn()
@@ -1910,12 +2037,24 @@ describe('project store actions', () => {
     expect(state.project.resources.res_img_1.value).toMatchObject({
       assetId: 'asset_1',
       url: 'http://127.0.0.1:8188/view?filename=render.png&subfolder=renders&type=output',
+      comfy: {
+        endpointId: 'endpoint_local',
+        filename: 'render.png',
+        subfolder: 'renders',
+        type: 'output',
+      },
     })
     expect(state.project.resources.res_video_1).toMatchObject({
       type: 'video',
       value: {
         assetId: 'asset_2',
         url: 'http://127.0.0.1:8188/view?filename=clip.mp4&subfolder=renders&type=output',
+        comfy: {
+          endpointId: 'endpoint_local',
+          filename: 'clip.mp4',
+          subfolder: 'renders',
+          type: 'output',
+        },
       },
     })
     expect(state.project.resources.res_audio_1).toMatchObject({
@@ -1923,6 +2062,12 @@ describe('project store actions', () => {
       value: {
         assetId: 'asset_3',
         url: 'http://127.0.0.1:8188/view?filename=voice.wav&subfolder=&type=output',
+        comfy: {
+          endpointId: 'endpoint_local',
+          filename: 'voice.wav',
+          subfolder: '',
+          type: 'output',
+        },
       },
     })
     expect(state.project.resources.res_text_1).toMatchObject({

@@ -4,6 +4,7 @@ export type NodeRunHistoryItem = {
   taskId: string
   status: ExecutionTask['status']
   runLabel: string
+  endpointId?: string
   endpointName?: string
   comfyPromptId?: string
   resultNodeId?: string
@@ -23,6 +24,7 @@ const toHistoryItem = (project: ProjectState, task: ExecutionTask): NodeRunHisto
     taskId: task.id,
     status: task.status,
     runLabel: `Run ${task.runIndex}/${task.runTotal}`,
+    endpointId: task.endpointId,
     endpointName: endpoint?.name ?? task.endpointId,
     comfyPromptId: task.comfyPromptId,
     resultNodeId: resultNodeIdForTask(project, task.id),

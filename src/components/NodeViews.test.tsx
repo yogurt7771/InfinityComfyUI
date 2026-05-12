@@ -3,10 +3,12 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import type { ComponentProps, ReactElement } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EmptyNodeView, FunctionNodeView, GroupNodeView, ResourceNodeView, ResultGroupNodeView } from './NodeViews'
+import { projectStore } from '../store/projectStore'
 import type {
   GeminiImageConfig,
   GeminiLlmConfig,
   GenerationFunction,
+  MediaResourceValue,
   OpenAIImageConfig,
   OpenAILlmConfig,
   Resource,
@@ -92,6 +94,7 @@ describe('NodeViews', () => {
   afterEach(() => {
     cleanup()
     vi.unstubAllGlobals()
+    projectStore.setState(projectStore.getInitialState(), true)
   })
 
   it('renders text resources as editable multiline canvas text', () => {
@@ -1253,6 +1256,41 @@ describe('NodeViews', () => {
   })
 
   it('copies media resource bytes instead of the media URL', async () => {
+    const secureResource: Resource = {
+      ...outputResource,
+      value: {
+        ...(outputResource.value as MediaResourceValue),
+        comfy: {
+          endpointId: 'endpoint_secure',
+          filename: 'render.png',
+          subfolder: '',
+          type: 'output',
+        },
+      },
+      metadata: { endpointId: 'endpoint_secure', createdAt: '2026-05-12T00:00:00.000Z' },
+    }
+    projectStore.setState((state) => ({
+      ...state,
+      project: {
+        ...state.project,
+        resources: { [secureResource.id]: secureResource },
+        comfy: {
+          ...state.project.comfy,
+          endpoints: [
+            {
+              id: 'endpoint_secure',
+              name: 'Secure ComfyUI',
+              baseUrl: 'http://127.0.0.1:27707',
+              enabled: true,
+              maxConcurrentJobs: 1,
+              priority: 1,
+              timeoutMs: 10000,
+              customHeaders: { 'X-Workspace': 'infinity' },
+            },
+          ],
+        },
+      },
+    }))
     const clipboardBlob = new Blob(['image-bytes'], { type: 'image/png' })
     const write = vi.fn().mockResolvedValue(undefined)
     const writeText = vi.fn().mockResolvedValue(undefined)
@@ -1278,7 +1316,7 @@ describe('NodeViews', () => {
       selected: false,
       data: {
         ...baseNodeData,
-        resourcesById: { res_image: outputResource },
+        resourcesById: { res_image: secureResource },
         resourceId: 'res_image',
         title: 'Reference Image',
       },
@@ -1292,7 +1330,12 @@ describe('NodeViews', () => {
 
     fireEvent.click(within(container).getByRole('button', { name: 'Copy asset' }))
 
-    await waitFor(() => expect(fetch).toHaveBeenCalledWith('http://127.0.0.1:27707/view?filename=render.png&type=output'))
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith('http://127.0.0.1:27707/view?filename=render.png&subfolder=&type=output', {
+        method: 'GET',
+        headers: { 'X-Workspace': 'infinity' },
+      }),
+    )
     expect(write).toHaveBeenCalledTimes(1)
     expect(write.mock.calls[0]?.[0][0]).toMatchObject({
       items: {

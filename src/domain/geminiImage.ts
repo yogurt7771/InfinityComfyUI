@@ -12,6 +12,7 @@ import type {
 export const GEMINI_IMAGE_FUNCTION_ID = 'fn_gemini_image'
 
 type RuntimeInputValues = Record<string, PrimitiveInputValue | ResourceRef>
+type ResourceBlobLoader = (resource: Resource) => Promise<Blob>
 
 export type GeminiImageGenerationRequest = {
   contents: Array<{
@@ -187,7 +188,10 @@ const parseImageDataUrl = (url: string) => {
   }
 }
 
-const imageResourceAsInlineData = async (resource: Resource): Promise<GeminiImageInlineDataPart> => {
+const imageResourceAsInlineData = async (
+  resource: Resource,
+  loadResourceBlob?: ResourceBlobLoader,
+): Promise<GeminiImageInlineDataPart> => {
   const media = mediaValue(resource)
   if (!media?.url) throw new Error(`Image resource is missing a URL: ${resource.id}`)
 
@@ -201,11 +205,13 @@ const imageResourceAsInlineData = async (resource: Resource): Promise<GeminiImag
     }
   }
 
-  const response = await fetch(media.url)
-  if (!response.ok) throw new Error(`Image download failed before Gemini image request: ${response.status}`)
-
-  const blob = await response.blob()
-  const mimeType = blob.type || media.mimeType || response.headers.get('Content-Type')?.split(';')[0] || 'image/png'
+  const blob = loadResourceBlob
+    ? await loadResourceBlob(resource)
+    : await fetch(media.url).then((response) => {
+        if (!response.ok) throw new Error(`Image download failed before Gemini image request: ${response.status}`)
+        return response.blob()
+      })
+  const mimeType = blob.type || media.mimeType || 'image/png'
   const bytes = new Uint8Array(await blob.arrayBuffer())
   return {
     inline_data: {
@@ -220,6 +226,7 @@ export async function createGeminiImageGenerationRequest(
   inputValues: RuntimeInputValues,
   resources: Record<string, Resource>,
   defaultPrompt?: string | number | null,
+  loadResourceBlob?: ResourceBlobLoader,
 ): Promise<GeminiImageGenerationRequest> {
   const normalized = mergedGeminiImageConfig(undefined, config)
   const imageOptions: {
@@ -230,7 +237,7 @@ export async function createGeminiImageGenerationRequest(
   if (normalized.imageSize !== 'auto') imageOptions.imageSize = normalized.imageSize
 
   const imageParts = await Promise.all(
-    imageResourceRefsFromInput(inputValues, resources).map((resource) => imageResourceAsInlineData(resource)),
+    imageResourceRefsFromInput(inputValues, resources).map((resource) => imageResourceAsInlineData(resource, loadResourceBlob)),
   )
 
   return {

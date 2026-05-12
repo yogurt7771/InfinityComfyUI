@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import JSZip from 'jszip'
 import {
   Download,
@@ -28,7 +28,7 @@ import type {
   Resource,
   ResourceType,
 } from '../domain/types'
-import { useProjectStore } from '../store/projectStore'
+import { projectStore, useProjectStore } from '../store/projectStore'
 
 const resourceTypes: ResourceType[] = ['text', 'number', 'image', 'video', 'audio']
 const outputSources: FunctionOutputDef['extract']['source'][] = [
@@ -51,6 +51,53 @@ const resourceSummary = (resource: Resource) => {
   const media = mediaValue(resource)
   if (media?.filename) return media.filename
   return String(resource.value)
+}
+
+const shouldProxyMedia = (resource: Resource) => {
+  const media = mediaValue(resource)
+  return Boolean(media?.url && (media.comfy || resource.metadata?.endpointId))
+}
+
+function useResourceMediaSource(resource: Resource) {
+  const media = mediaValue(resource)
+  const key =
+    media?.url && shouldProxyMedia(resource)
+      ? [
+          resource.id,
+          media.url,
+          media.comfy?.endpointId ?? resource.metadata?.endpointId ?? '',
+          media.comfy?.filename ?? '',
+          media.comfy?.subfolder ?? '',
+          media.comfy?.type ?? '',
+        ].join('|')
+      : undefined
+  const [objectUrl, setObjectUrl] = useState<{ key: string; url: string }>()
+
+  useEffect(() => {
+    if (!key) return undefined
+
+    let canceled = false
+    let nextObjectUrl: string | undefined
+    projectStore
+      .getState()
+      .fetchResourceBlob(resource.id)
+      .then((blob) => {
+        if (canceled) return
+        nextObjectUrl = URL.createObjectURL(blob)
+        setObjectUrl({ key, url: nextObjectUrl })
+      })
+      .catch(() => {
+        if (!canceled) setObjectUrl((current) => (current?.key === key ? undefined : current))
+      })
+
+    return () => {
+      canceled = true
+      if (nextObjectUrl) URL.revokeObjectURL(nextObjectUrl)
+    }
+  }, [key, resource])
+
+  if (!media?.url) return undefined
+  return key ? (objectUrl?.key === key ? objectUrl.url : undefined) : media.url
 }
 
 const endpointQueueCounts = (tasks: Record<string, ExecutionTask>) =>
@@ -166,15 +213,15 @@ async function readPackageFile(file: File) {
 }
 
 function ResourceListPreview({ resource }: { resource: Resource }) {
-  const media = mediaValue(resource)
   const label = resourceLabel(resource)
+  const mediaSource = useResourceMediaSource(resource)
 
-  if (resource.type === 'image' && media?.url) {
-    return <img className="asset-thumb-image" src={media.url} alt={label} />
+  if (resource.type === 'image' && mediaSource) {
+    return <img className="asset-thumb-image" src={mediaSource} alt={label} />
   }
 
-  if (resource.type === 'video' && media?.url) {
-    return <video aria-label={`${label} video preview`} className="asset-thumb-image" src={media.url} muted />
+  if (resource.type === 'video' && mediaSource) {
+    return <video aria-label={`${label} video preview`} className="asset-thumb-image" src={mediaSource} muted />
   }
 
   if (resource.type === 'audio') {
@@ -1693,7 +1740,13 @@ export function RightPanel() {
   const project = useProjectStore((state) => state.project)
   const selectedNodeId = useProjectStore((state) => state.selectedNodeId)
   const selectNode = useProjectStore((state) => state.selectNode)
+  const fetchComfyHistory = useProjectStore((state) => state.fetchComfyHistory)
   const [expandedTaskId, setExpandedTaskId] = useState<string | undefined>()
+  const [historyDialog, setHistoryDialog] = useState<{
+    title: string
+    status: 'loading' | 'loaded' | 'failed'
+    content: string
+  }>()
   const selectedNode = project.canvas.nodes.find((node) => node.id === selectedNodeId)
   const selectedRunTask =
     selectedNode?.type === 'result_group' && typeof selectedNode.data.taskId === 'string'
@@ -1706,9 +1759,38 @@ export function RightPanel() {
     selectNode(nodeId)
     window.dispatchEvent(new CustomEvent('infinity-focus-node', { detail: { nodeId } }))
   }
+  const openHistory = (runLabel: string, endpointId: string | undefined, promptId: string | undefined) => {
+    if (!endpointId || !promptId) return
+    setHistoryDialog({ title: `${runLabel} ComfyUI history`, status: 'loading', content: 'Loading history...' })
+    void fetchComfyHistory(endpointId, promptId)
+      .then((history) => {
+        setHistoryDialog({
+          title: `${runLabel} ComfyUI history`,
+          status: 'loaded',
+          content: JSON.stringify(history, null, 2),
+        })
+      })
+      .catch((err) => {
+        setHistoryDialog({
+          title: `${runLabel} ComfyUI history`,
+          status: 'failed',
+          content: err instanceof Error ? err.message : 'Failed to load ComfyUI history',
+        })
+      })
+  }
 
   return (
     <aside className="side-panel right-panel">
+      {historyDialog ? (
+        <ModalShell label="ComfyUI history" onClose={() => setHistoryDialog(undefined)}>
+          <div className="history-modal-body">
+            <h3>{historyDialog.title}</h3>
+            <pre className={`json-code run-workflow-json history-modal-json history-modal-${historyDialog.status}`}>
+              {historyDialog.status === 'loaded' ? highlightedJson(historyDialog.content) : historyDialog.content}
+            </pre>
+          </div>
+        </ModalShell>
+      ) : null}
       <section>
         <div className="panel-title">
           <Route size={16} />
@@ -1758,15 +1840,14 @@ export function RightPanel() {
                         Locate node
                       </button>
                     ) : null}
-                    {item.historyPath && item.historyUrl ? (
-                      <a
-                        href={item.historyUrl}
-                        target="_blank"
-                        rel="noreferrer"
+                    {item.historyPath && item.endpointId && item.comfyPromptId ? (
+                      <button
+                        type="button"
+                        onClick={() => openHistory(item.runLabel, item.endpointId, item.comfyPromptId)}
                         aria-label={`Open ComfyUI history for ${item.runLabel}`}
                       >
                         Open history
-                      </a>
+                      </button>
                     ) : item.historyPath ? (
                       <code>{item.historyPath}</code>
                     ) : (
