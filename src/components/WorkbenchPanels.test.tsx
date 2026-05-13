@@ -305,6 +305,7 @@ describe('LeftPanel', () => {
     expect(within(managerDialog).getByLabelText('Request URL')).toHaveValue('https://api.example.com/run')
     expect(within(managerDialog).getByLabelText('Request method')).toHaveValue('GET')
     expect(within(managerDialog).getByLabelText('Response parse mode')).toHaveValue('json')
+    expect(within(managerDialog).getByLabelText('Response encoding')).toHaveValue('utf-8')
 
     fireEvent.click(within(managerDialog).getByRole('button', { name: 'Input' }))
     fireEvent.change(within(managerDialog).getByLabelText('Input request target input_1'), {
@@ -332,12 +333,36 @@ describe('LeftPanel', () => {
         url: 'https://api.example.com/run',
         method: 'GET',
         responseParse: 'json',
+        responseEncoding: 'utf-8',
       },
       inputs: [expect.objectContaining({ bind: expect.objectContaining({ requestTarget: 'header', path: 'Authorization' }) })],
       outputs: expect.arrayContaining([
         expect.objectContaining({ extract: expect.objectContaining({ source: 'response_json_path', path: '$.data.text' }) }),
       ]),
     })
+  })
+
+  it('limits request function media outputs to binary response parsing', () => {
+    render(<SettingsPage onClose={() => undefined} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Function Management' }))
+    const managerDialog = screen.getByRole('dialog', { name: 'Function Management' })
+
+    fireEvent.click(within(managerDialog).getByRole('button', { name: 'Function' }))
+    const createDialog = screen.getByRole('dialog', { name: 'New Function' })
+    fireEvent.change(within(createDialog).getByLabelText('Function type'), { target: { value: 'request' } })
+    fireEvent.change(within(createDialog).getByLabelText('Function name'), { target: { value: 'Binary Image Request' } })
+    fireEvent.change(within(createDialog).getByLabelText('Response parse mode'), { target: { value: 'binary' } })
+    fireEvent.click(within(createDialog).getByRole('button', { name: 'Save function' }))
+
+    expect(within(managerDialog).getByLabelText('Response parse mode')).toHaveValue('binary')
+    expect(within(managerDialog).queryByLabelText('Response encoding')).not.toBeInTheDocument()
+    const outputType = within(managerDialog).getByLabelText('Output type result')
+    expect(within(outputType).getByRole('option', { name: 'image' })).toBeVisible()
+    expect(within(outputType).getByRole('option', { name: 'video' })).toBeVisible()
+    expect(within(outputType).getByRole('option', { name: 'audio' })).toBeVisible()
+    expect(within(outputType).queryByRole('option', { name: 'text' })).not.toBeInTheDocument()
+    expect(within(managerDialog).getByLabelText('Output extractor result')).toHaveValue('response_binary')
   })
 
   it('keeps built-in nodes out of function management', () => {

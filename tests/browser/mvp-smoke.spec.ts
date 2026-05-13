@@ -403,17 +403,24 @@ test('creates a one-off request node and extracts media output from the canvas',
   await page.route('https://api.example.com/one-off-media', async (route) => {
     await route.fulfill({
       status: 200,
-      contentType: 'application/json',
-      headers: { 'Access-Control-Allow-Origin': '*' },
-      body: JSON.stringify({ image: 'https://cdn.example.com/result.png' }),
+      contentType: 'image/png',
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Expose-Headers': 'Content-Disposition',
+        'Content-Disposition': 'attachment; filename="result.png"',
+      },
+      body: Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/akF7k0AAAAASUVORK5CYII=',
+        'base64',
+      ),
     })
   })
   await page.goto('/')
 
   await addFunctionNodeFromCanvasMenu(page, /^Request$/)
   await page.getByLabel('Request URL').fill('https://api.example.com/one-off-media')
+  await page.getByLabel('Response parse mode').selectOption('binary')
   await page.getByLabel('Request output type result').selectOption('image')
-  await page.getByLabel('Request output expression result').fill('$.image')
   await page.getByRole('button', { name: 'Run function' }).click()
 
   await expect(page.getByLabel('Run status succeeded')).toBeVisible()
@@ -1125,16 +1132,27 @@ test('supports ctrl box selection, shift add, alt remove, batch drag, and batch 
 
   const resourceBox = await resourceNode.boundingBox()
   const functionBox = await functionNode.boundingBox()
-  if (!resourceBox || !functionBox) throw new Error('nodes not found')
+  const canvasBox = await canvas.boundingBox()
+  if (!resourceBox || !functionBox || !canvasBox) throw new Error('nodes not found')
+
+  await canvas.click({ position: { x: canvasBox.width - 40, y: 40 } })
+  await expect(page.locator('.react-flow__node.selected')).toHaveCount(0)
+
+  const selectionStartX = Math.max(canvasBox.x + 16, Math.min(resourceBox.x, functionBox.x) - 32)
+  const selectionStartY = Math.max(canvasBox.y + 16, Math.min(resourceBox.y, functionBox.y) - 32)
+  const selectionEndX = Math.min(
+    canvasBox.x + canvasBox.width - 16,
+    Math.max(resourceBox.x + resourceBox.width, functionBox.x + functionBox.width) + 32,
+  )
+  const selectionEndY = Math.min(
+    canvasBox.y + canvasBox.height - 16,
+    Math.max(resourceBox.y + resourceBox.height, functionBox.y + functionBox.height) + 32,
+  )
 
   await page.keyboard.down('Control')
-  await page.mouse.move(Math.min(resourceBox.x, functionBox.x) - 24, Math.min(resourceBox.y, functionBox.y) - 24)
+  await page.mouse.move(selectionStartX, selectionStartY)
   await page.mouse.down()
-  await page.mouse.move(
-    Math.max(resourceBox.x + resourceBox.width, functionBox.x + functionBox.width) + 24,
-    Math.max(resourceBox.y + resourceBox.height, functionBox.y + functionBox.height) + 24,
-    { steps: 10 },
-  )
+  await page.mouse.move(selectionEndX, selectionEndY, { steps: 12 })
   await page.mouse.up()
   await page.keyboard.up('Control')
   await expect(page.locator('.react-flow__node.selected')).toHaveCount(2)

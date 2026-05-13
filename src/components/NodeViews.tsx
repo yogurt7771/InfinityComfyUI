@@ -24,7 +24,17 @@ import { defaultOpenAILlmConfig, isOpenAILlmFunction, mergedOpenAILlmConfig } fr
 import { defaultGeminiLlmConfig, isGeminiLlmFunction, mergedGeminiLlmConfig } from '../domain/geminiLlm'
 import { defaultOpenAIImageConfig, isOpenAIImageFunction, mergedOpenAIImageConfig } from '../domain/openaiImage'
 import { defaultGeminiImageConfig, isGeminiImageFunction, mergedGeminiImageConfig } from '../domain/geminiImage'
-import { isRequestFunction, mergedRequestConfig, requestMethods } from '../domain/requestFunction'
+import {
+  isRequestFunction,
+  mergedRequestConfig,
+  normalizeRequestOutputForParse,
+  normalizeRequestOutputsForParse,
+  requestDefaultEncoding,
+  requestMethods,
+  requestOutputSourcesForParse,
+  requestOutputTypesForParse,
+  requestParseModes,
+} from '../domain/requestFunction'
 import { readFileAsMediaResource, type MediaResourceKind, type MediaResourcePayload } from '../domain/resourceFiles'
 import { projectStore } from '../store/projectStore'
 import type {
@@ -113,8 +123,6 @@ const outputHandleId = (outputKey: string) => `output:${outputKey}`
 const resourceHandleId = (resourceId: string) => `resource:${resourceId}`
 const resultHandleId = (resourceId: string) => `result:${resourceId}`
 const activeResultStatuses = new Set(['queued', 'running', 'fetching_outputs'])
-const requestOutputSources: FunctionOutputDef['extract']['source'][] = ['response_json_path', 'response_text_regex']
-const resourceTypes: ResourceType[] = ['text', 'number', 'image', 'video', 'audio']
 
 const commitActiveTextControl = () => {
   const activeElement = document.activeElement
@@ -1160,6 +1168,7 @@ function RequestEditor({
   }
 
   const updateOutputExpression = (index: number, output: FunctionOutputDef, value: string) => {
+    if (output.extract.source === 'response_binary') return
     updateOutput(
       index,
       output.extract.source === 'response_text_regex'
@@ -1219,25 +1228,51 @@ function RequestEditor({
         <select
           aria-label="Response parse mode"
           value={config.responseParse}
-          onChange={(event) =>
-            onUpdateConfig(nodeId, { responseParse: event.target.value as RequestFunctionConfig['responseParse'] })
-          }
+          onChange={(event) => {
+            const responseParse = event.target.value as RequestFunctionConfig['responseParse']
+            onUpdateConfig(nodeId, {
+              responseParse,
+              ...(responseParse === 'binary' ? {} : { responseEncoding: config.responseEncoding || requestDefaultEncoding }),
+            })
+            onUpdateOutputs(nodeId, normalizeRequestOutputsForParse(outputs, responseParse))
+          }}
         >
-          <option value="json">json</option>
-          <option value="text">text</option>
+          {requestParseModes.map((mode) => (
+            <option key={mode} value={mode}>
+              {mode}
+            </option>
+          ))}
         </select>
       </label>
+      {config.responseParse !== 'binary' ? (
+        <label className="openai-api-key">
+          <span>Response encoding</span>
+          <input
+            aria-label="Response encoding"
+            value={config.responseEncoding || requestDefaultEncoding}
+            onChange={(event) =>
+              onUpdateConfig(nodeId, { responseEncoding: event.target.value.trim() || requestDefaultEncoding })
+            }
+            placeholder={requestDefaultEncoding}
+          />
+        </label>
+      ) : null}
       <div className="request-output-editor" aria-label="Request output definitions">
         {outputs.map((output, index) => {
+          const requestOutput = normalizeRequestOutputForParse(output, config.responseParse)
+          const outputSources = requestOutputSourcesForParse(config.responseParse)
+          const outputTypes = requestOutputTypesForParse(config.responseParse)
           const expression =
-            output.extract.source === 'response_text_regex'
-              ? output.extract.pattern || output.bind.path || '(.+)'
-              : output.extract.path || output.bind.path || '$'
+            requestOutput.extract.source === 'response_text_regex'
+              ? requestOutput.extract.pattern || requestOutput.bind.path || '(.+)'
+              : requestOutput.extract.source === 'response_json_path'
+                ? requestOutput.extract.path || requestOutput.bind.path || '$'
+                : 'binary response'
           return (
             <div className="request-output-row" key={`${output.key}_${index}`}>
               <select
                 aria-label={`Request output extractor ${output.key}`}
-                value={output.extract.source}
+                value={requestOutput.extract.source}
                 onChange={(event) =>
                   updateOutput(index, {
                     extract: {
@@ -1248,7 +1283,7 @@ function RequestEditor({
                   })
                 }
               >
-                {requestOutputSources.map((source) => (
+                {outputSources.map((source) => (
                   <option key={source} value={source}>
                     {source}
                   </option>
@@ -1256,15 +1291,16 @@ function RequestEditor({
               </select>
               <input
                 aria-label={`Request output expression ${output.key}`}
+                disabled={requestOutput.extract.source === 'response_binary'}
                 value={expression}
-                onChange={(event) => updateOutputExpression(index, output, event.target.value)}
+                onChange={(event) => updateOutputExpression(index, requestOutput, event.target.value)}
               />
               <select
                 aria-label={`Request output type ${output.key}`}
-                value={output.type}
+                value={requestOutput.type}
                 onChange={(event) => updateOutput(index, { type: event.target.value as ResourceType })}
               >
-                {resourceTypes.map((type) => (
+                {outputTypes.map((type) => (
                   <option key={type} value={type}>
                     {type}
                   </option>

@@ -39,7 +39,10 @@ import {
   extractRequestFunctionOutputs,
   isRequestFunction,
   mergedRequestConfig,
+  normalizeRequestOutputsForParse,
   REQUEST_FUNCTION_ID,
+  requestDefaultEncoding,
+  type RequestBinaryOutputValue,
 } from '../domain/requestFunction'
 import { createConfigPackage, createProjectPackage, type ConfigPackage, type FullProjectPackage } from '../domain/projectPackage'
 import { randomizeWorkflowSeeds } from '../domain/seed'
@@ -801,6 +804,63 @@ const outputMimeType = (type: ResourceType, filename: string) => {
   }
 
   return 'text/plain'
+}
+
+const extensionForMimeType = (type: ResourceType, mimeType: string) => {
+  const normalized = mimeType.split(';')[0]?.trim().toLowerCase() ?? ''
+  if (type === 'image') {
+    if (normalized === 'image/jpeg') return 'jpg'
+    if (normalized === 'image/webp') return 'webp'
+    if (normalized === 'image/gif') return 'gif'
+    return 'png'
+  }
+  if (type === 'video') {
+    if (normalized === 'video/webm') return 'webm'
+    if (normalized === 'video/quicktime') return 'mov'
+    return 'mp4'
+  }
+  if (type === 'audio') {
+    if (normalized === 'audio/ogg') return 'ogg'
+    if (normalized === 'audio/wav') return 'wav'
+    return 'mp3'
+  }
+  return 'bin'
+}
+
+const filenameFromContentDisposition = (header: string | null) => {
+  if (!header) return undefined
+  const encodedMatch = /filename\*=UTF-8''([^;]+)/i.exec(header)
+  if (encodedMatch?.[1]) {
+    try {
+      return decodeURIComponent(encodedMatch[1].replace(/^"|"$/g, ''))
+    } catch {
+      return encodedMatch[1].replace(/^"|"$/g, '')
+    }
+  }
+  const match = /filename="?([^";]+)"?/i.exec(header)
+  return match?.[1]?.trim()
+}
+
+const filenameFromRequestUrl = (url: string) => {
+  try {
+    const pathname = new URL(url).pathname
+    return pathname.split('/').filter(Boolean).at(-1)
+  } catch {
+    return url.split(/[/?#]/).filter(Boolean).at(-1)
+  }
+}
+
+const responseMimeType = (response: Response, outputType: ResourceType, filename: string) => {
+  const contentType = response.headers.get('content-type')?.split(';')[0]?.trim()
+  return contentType || outputMimeType(outputType, filename)
+}
+
+const decodeResponseBuffer = (buffer: ArrayBuffer, encoding: string) => {
+  try {
+    return new TextDecoder((encoding || requestDefaultEncoding).trim() || requestDefaultEncoding).decode(buffer)
+  } catch {
+    throw new Error(`Unsupported response encoding: ${encoding || requestDefaultEncoding}`)
+  }
 }
 
 const uploadedImageValue = (result: ComfyUploadImageResult) =>
@@ -2171,13 +2231,13 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
     const resourceForRequestOutput = (
       output: { key: string; label: string; type: ResourceType },
-      value: string,
+      value: string | RequestBinaryOutputValue,
       item: QueuedRequestRun,
       now: string,
     ): { resource: Resource; asset?: ProjectState['assets'][string]; ref: ResourceRef } => {
       const resourceId = runtime.idFactory()
       if (output.type === 'number') {
-        const numericValue = Number(value)
+        const numericValue = Number(typeof value === 'string' ? value : value.sizeBytes)
         return {
           resource: {
             id: resourceId,
@@ -2202,14 +2262,16 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
       if (output.type === 'image' || output.type === 'video' || output.type === 'audio') {
         const assetId = runtime.idFactory()
-        const filename = value.split(/[/?#]/).filter(Boolean).at(-1) || output.label
-        const mimeType = outputMimeType(output.type, filename)
+        const filename = typeof value === 'string' ? value.split(/[/?#]/).filter(Boolean).at(-1) || output.label : value.filename
+        const mimeType = typeof value === 'string' ? outputMimeType(output.type, filename) : value.mimeType
+        const url = typeof value === 'string' ? value : value.url
+        const sizeBytes = typeof value === 'string' ? 0 : value.sizeBytes
         const asset = {
           id: assetId,
           name: filename,
           mimeType,
-          sizeBytes: 0,
-          blobUrl: value,
+          sizeBytes,
+          blobUrl: url,
           createdAt: now,
         }
         return {
@@ -2220,10 +2282,10 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             name: filename,
             value: {
               assetId,
-              url: value,
+              url,
               filename,
               mimeType,
-              sizeBytes: 0,
+              sizeBytes,
             },
             source: {
               kind: 'function_output',
@@ -2246,7 +2308,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           id: resourceId,
           type: 'text',
           name: output.label,
-          value,
+          value: typeof value === 'string' ? value : value.url,
           source: {
             kind: 'function_output',
             functionNodeId: item.functionNodeId,
@@ -2306,10 +2368,34 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         }))
 
         const response = await fetch(request.url, request.init)
-        const responseText = await response.text()
-        if (!response.ok) throw new Error(`Request failed: ${response.status} ${responseText}`)
+        const responseBuffer = await response.arrayBuffer()
+        const errorText = response.ok ? '' : decodeResponseBuffer(responseBuffer, request.responseEncoding)
+        if (!response.ok) throw new Error(`Request failed: ${response.status} ${errorText}`)
+        let responseText = ''
+        let responseBinary: RequestBinaryOutputValue | undefined
+        if (request.responseParse === 'binary') {
+          const firstBinaryOutput = item.functionDef.outputs.find(
+            (output) => output.type === 'image' || output.type === 'video' || output.type === 'audio',
+          )
+          const outputType = firstBinaryOutput?.type ?? 'image'
+          const fallbackMimeType = outputMimeType(outputType, '')
+          const mimeType = response.headers.get('content-type')?.split(';')[0]?.trim() || fallbackMimeType
+          const filename =
+            filenameFromContentDisposition(response.headers.get('content-disposition')) ||
+            filenameFromRequestUrl(request.url) ||
+            `${firstBinaryOutput?.label ?? 'response'}.${extensionForMimeType(outputType, mimeType)}`
+          const blob = new Blob([responseBuffer], { type: mimeType })
+          responseBinary = {
+            url: URL.createObjectURL(blob),
+            filename,
+            mimeType: responseMimeType(response, outputType, filename),
+            sizeBytes: responseBuffer.byteLength,
+          }
+        } else {
+          responseText = decodeResponseBuffer(responseBuffer, request.responseEncoding)
+        }
         const responseJson = request.responseParse === 'json' ? JSON.parse(responseText || 'null') : undefined
-        const outputs = extractRequestFunctionOutputs(responseText, responseJson, item.functionDef.outputs)
+        const outputs = extractRequestFunctionOutputs(responseText, responseJson, item.functionDef.outputs, responseBinary)
         const outputRefsByKey: Record<string, ResourceRef[]> = {}
         const resourceRefs: ResourceRef[] = []
         const newResources: Record<string, Resource> = {}
@@ -2410,7 +2496,10 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       const runtimeFunctionDef: GenerationFunction = {
         ...functionDef,
         request: requestConfig,
-        outputs: requestOutputs?.length ? requestOutputs : functionDef.outputs,
+        outputs: normalizeRequestOutputsForParse(
+          requestOutputs?.length ? requestOutputs : functionDef.outputs,
+          requestConfig.responseParse,
+        ),
       }
 
       const runCount = normalizedRunCount(
@@ -3414,9 +3503,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
     addRequestFunction: (name, config) => {
       const id = runtime.idFactory()
       const now = runtime.now()
+      const baseFunction = createRequestFunction(id, name, now)
+      const request = mergedRequestConfig(undefined, config)
       const generationFunction: GenerationFunction = {
-        ...createRequestFunction(id, name, now),
-        request: mergedRequestConfig(undefined, config),
+        ...baseFunction,
+        request,
+        outputs: normalizeRequestOutputsForParse(baseFunction.outputs, request.responseParse),
       }
 
       set((state) => ({
@@ -3819,6 +3911,13 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
                 data: {
                   ...node.data,
                   requestConfig: mergedRequestConfig(currentConfig, patch),
+                  requestOutputs:
+                    patch.responseParse && Array.isArray(node.data.requestOutputs)
+                      ? normalizeRequestOutputsForParse(
+                          node.data.requestOutputs as FunctionOutputDef[],
+                          patch.responseParse,
+                        )
+                      : node.data.requestOutputs,
                 },
               }
             }),

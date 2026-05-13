@@ -668,14 +668,15 @@ describe('NodeViews', () => {
     expect(container.querySelector('.openai-node-editor')).not.toBeNull()
   })
 
-  it('renders an editable one-off request node with media output type choices', () => {
+  it('renders an editable one-off binary request node with media output type choices', () => {
     const requestFunction = createRequestFunction(REQUEST_FUNCTION_ID, 'Request', '2026-05-13T00:00:00.000Z')
     const requestConfig: RequestFunctionConfig = {
       url: 'https://api.example.com/render',
       method: 'POST',
       headers: { Authorization: 'Bearer test' },
       body: '{"prompt":"hello"}',
-      responseParse: 'json',
+      responseParse: 'binary',
+      responseEncoding: 'utf-8',
     }
     const requestOutputs: FunctionOutputDef[] = [
       {
@@ -683,7 +684,7 @@ describe('NodeViews', () => {
         label: 'Image',
         type: 'image',
         bind: {},
-        extract: { source: 'response_json_path', path: '$.image' },
+        extract: { source: 'response_binary' },
       },
     ]
     const onUpdateRequestConfig = vi.fn()
@@ -719,11 +720,62 @@ describe('NodeViews', () => {
     expect(within(outputType).getByRole('option', { name: 'image' })).toBeVisible()
     expect(within(outputType).getByRole('option', { name: 'video' })).toBeVisible()
     expect(within(outputType).getByRole('option', { name: 'audio' })).toBeVisible()
+    expect(screen.queryByLabelText('Response encoding')).not.toBeInTheDocument()
 
     fireEvent.change(outputType, { target: { value: 'video' } })
     expect(onUpdateRequestOutputs).toHaveBeenCalledWith('node_request', [
       expect.objectContaining({ key: 'image', type: 'video' }),
     ])
+  })
+
+  it('renders json request parsing with encoding and primitive-only output types', () => {
+    const requestFunction = createRequestFunction(REQUEST_FUNCTION_ID, 'Request', '2026-05-13T00:00:00.000Z')
+    const requestConfig: RequestFunctionConfig = {
+      url: 'https://api.example.com/render',
+      method: 'POST',
+      headers: {},
+      body: '',
+      responseParse: 'json',
+      responseEncoding: 'utf-8',
+    }
+    const requestOutputs: FunctionOutputDef[] = [
+      {
+        key: 'result',
+        label: 'Result',
+        type: 'text',
+        bind: {},
+        extract: { source: 'response_json_path', path: '$.result' },
+      },
+    ]
+
+    render(
+      <ReactFlowProvider>
+        <FunctionNodeView
+          {...({
+            id: 'node_request',
+            selected: false,
+            data: {
+              ...baseNodeData,
+              functionsById: { [REQUEST_FUNCTION_ID]: requestFunction },
+              functionId: REQUEST_FUNCTION_ID,
+              title: 'Request',
+              requestConfig,
+              requestOutputs,
+              onUpdateRequestConfig: vi.fn(),
+              onUpdateRequestOutputs: vi.fn(),
+            },
+          } as unknown as ComponentProps<typeof FunctionNodeView>)}
+        />
+      </ReactFlowProvider>,
+    )
+
+    expect(screen.getByLabelText('Response encoding')).toHaveValue('utf-8')
+    const outputType = screen.getByLabelText('Request output type result')
+    expect(within(outputType).getByRole('option', { name: 'text' })).toBeVisible()
+    expect(within(outputType).getByRole('option', { name: 'number' })).toBeVisible()
+    expect(within(outputType).queryByRole('option', { name: 'image' })).not.toBeInTheDocument()
+    expect(within(outputType).queryByRole('option', { name: 'video' })).not.toBeInTheDocument()
+    expect(within(outputType).queryByRole('option', { name: 'audio' })).not.toBeInTheDocument()
   })
 
   it('renders editable Gemini LLM settings with Gemini message roles', () => {

@@ -140,6 +140,7 @@ export type FunctionOutputDef = {
       | 'file_output'
       | 'response_text_regex'
       | 'response_json_path'
+      | 'response_binary'
     index?: number
     multiple?: boolean
     pattern?: string
@@ -223,7 +224,8 @@ export type RequestFunctionConfig = {
   method: string
   headers: Record<string, string>
   body: string
-  responseParse: 'text' | 'json'
+  responseParse: 'text' | 'json' | 'binary'
+  responseEncoding: string
 }
 
 export type GenerationFunction = {

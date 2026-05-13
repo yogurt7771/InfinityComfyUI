@@ -3162,6 +3162,7 @@ describe('project store actions', () => {
         headers: { 'X-App': 'Infinity' },
         body: '{"prompt":""}',
         responseParse: 'json',
+        responseEncoding: 'utf-8',
       },
       inputs: [
         {
@@ -3269,7 +3270,7 @@ describe('project store actions', () => {
     expect(slice.getState().project.functions[OPENAI_LLM_FUNCTION_ID]).toEqual(builtInOpenAi)
   })
 
-  it('runs one-off request nodes with node-level config and media output definitions', async () => {
+  it('runs one-off request nodes with node-level config and JSON text output definitions', async () => {
     const originalFetch = globalThis.fetch
     const fetchCalls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = []
     vi.stubGlobal(
@@ -3278,9 +3279,7 @@ describe('project store actions', () => {
         fetchCalls.push({ input, init })
         return new Response(
           JSON.stringify({
-            image: 'https://cdn.example.com/result.png',
-            video: 'https://cdn.example.com/result.mp4',
-            audio: 'https://cdn.example.com/result.mp3',
+            result: { text: 'json request result' },
           }),
           {
             status: 200,
@@ -3293,12 +3292,7 @@ describe('project store actions', () => {
       'node_request_builtin',
       'task_request_builtin',
       'result_request_builtin',
-      'resource_image',
-      'asset_image',
-      'resource_video',
-      'asset_video',
-      'resource_audio',
-      'asset_audio',
+      'resource_text',
     ]
     const slice = createProjectSlice({
       idFactory: () => ids.shift() ?? 'fallback_id',
@@ -3315,28 +3309,15 @@ describe('project store actions', () => {
       headers: { 'X-Request': 'canvas' },
       body: '{"mode":"once"}',
       responseParse: 'json',
+      responseEncoding: 'utf-8',
     })
     slice.getState().updateFunctionNodeRequestOutputs(nodeId!, [
       {
-        key: 'image',
-        label: 'Image',
-        type: 'image',
+        key: 'text',
+        label: 'Text',
+        type: 'text',
         bind: {},
-        extract: { source: 'response_json_path', path: '$.image' },
-      },
-      {
-        key: 'video',
-        label: 'Video',
-        type: 'video',
-        bind: {},
-        extract: { source: 'response_json_path', path: '$.video' },
-      },
-      {
-        key: 'audio',
-        label: 'Audio',
-        type: 'audio',
-        bind: {},
-        extract: { source: 'response_json_path', path: '$.audio' },
+        extract: { source: 'response_json_path', path: '$.result.text' },
       },
     ])
 
@@ -3351,25 +3332,78 @@ describe('project store actions', () => {
     })
     const state = slice.getState().project
     expect(state.tasks.task_request_builtin.outputRefs).toEqual({
-      image: [{ resourceId: 'resource_image', type: 'image' }],
-      video: [{ resourceId: 'resource_video', type: 'video' }],
-      audio: [{ resourceId: 'resource_audio', type: 'audio' }],
+      text: [{ resourceId: 'resource_text', type: 'text' }],
+    })
+    expect(state.resources.resource_text).toMatchObject({
+      type: 'text',
+      name: 'Text',
+      value: 'json request result',
+    })
+    globalThis.fetch = originalFetch
+  })
+
+  it('runs binary request outputs without decoding the response as JSON text', async () => {
+    const originalFetch = globalThis.fetch
+    const originalCreateObjectUrl = URL.createObjectURL
+    const originalRevokeObjectUrl = URL.revokeObjectURL
+    URL.createObjectURL = vi.fn(() => 'blob:request-image') as unknown as typeof URL.createObjectURL
+    URL.revokeObjectURL = vi.fn() as unknown as typeof URL.revokeObjectURL
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        const bytes = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10])
+        return new Response(bytes, {
+          status: 200,
+          headers: { 'content-type': 'image/jpeg' },
+        })
+      }),
+    )
+    const ids = ['node_request_binary', 'task_request_binary', 'result_request_binary', 'resource_image', 'asset_image']
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback_id',
+      now: () => '2026-05-13T00:00:00.000Z',
+    })
+
+    const nodeId = slice
+      .getState()
+      .addFunctionNodeAtPosition(REQUEST_FUNCTION_ID, { x: 100, y: 100 }, { autoBindRequiredInputs: false })
+    slice.getState().updateFunctionNodeRequestConfig(nodeId!, {
+      url: 'https://cdn.example.com/render.jpg',
+      method: 'GET',
+      headers: {},
+      body: '',
+      responseParse: 'binary',
+    })
+    slice.getState().updateFunctionNodeRequestOutputs(nodeId!, [
+      {
+        key: 'image',
+        label: 'Image',
+        type: 'image',
+        bind: {},
+        extract: { source: 'response_binary' },
+      },
+    ])
+
+    await slice.getState().runFunctionNodeWithComfy(nodeId!, 1)
+
+    const state = slice.getState().project
+    expect(state.tasks.task_request_binary).toMatchObject({
+      status: 'succeeded',
+      outputRefs: { image: [{ resourceId: 'resource_image', type: 'image' }] },
     })
     expect(state.resources.resource_image).toMatchObject({
       type: 'image',
-      name: 'result.png',
-      value: { url: 'https://cdn.example.com/result.png', mimeType: 'image/png' },
+      name: 'render.jpg',
+      value: { url: 'blob:request-image', filename: 'render.jpg', mimeType: 'image/jpeg', sizeBytes: 6 },
     })
-    expect(state.resources.resource_video).toMatchObject({
-      type: 'video',
-      name: 'result.mp4',
-      value: { url: 'https://cdn.example.com/result.mp4', mimeType: 'video/mp4' },
+    expect(state.assets.asset_image).toMatchObject({
+      blobUrl: 'blob:request-image',
+      mimeType: 'image/jpeg',
+      sizeBytes: 6,
     })
-    expect(state.resources.resource_audio).toMatchObject({
-      type: 'audio',
-      name: 'result.mp3',
-      value: { url: 'https://cdn.example.com/result.mp3', mimeType: 'audio/mpeg' },
-    })
+
     globalThis.fetch = originalFetch
+    URL.createObjectURL = originalCreateObjectUrl
+    URL.revokeObjectURL = originalRevokeObjectUrl
   })
 })

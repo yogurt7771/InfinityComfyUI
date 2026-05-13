@@ -14,19 +14,80 @@ export type CompiledRequestFunctionRequest = {
   url: string
   init: RequestInit
   responseParse: RequestFunctionConfig['responseParse']
+  responseEncoding: string
+}
+
+export type RequestBinaryOutputValue = {
+  url: string
+  filename: string
+  mimeType: string
+  sizeBytes: number
 }
 
 export type ExtractedRequestOutput = {
   key: string
   label: string
   type: ResourceType
-  values: string[]
+  values: Array<string | RequestBinaryOutputValue>
 }
 
 export const requestMethods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'] as const
 export const REQUEST_FUNCTION_ID = 'fn_request'
+export const requestParseModes: RequestFunctionConfig['responseParse'][] = ['json', 'text', 'binary']
+export const requestDefaultEncoding = 'utf-8'
 
 export const isRequestFunction = (fn: GenerationFunction) => fn.workflow.format === 'http_request'
+
+const requestPrimitiveOutputTypes: ResourceType[] = ['text', 'number']
+const requestBinaryOutputTypes: ResourceType[] = ['image', 'video', 'audio']
+
+export const requestOutputTypesForParse = (responseParse: RequestFunctionConfig['responseParse']): ResourceType[] =>
+  responseParse === 'binary' ? requestBinaryOutputTypes : requestPrimitiveOutputTypes
+
+export const requestOutputSourcesForParse = (
+  responseParse: RequestFunctionConfig['responseParse'],
+): FunctionOutputDef['extract']['source'][] => {
+  if (responseParse === 'binary') return ['response_binary']
+  if (responseParse === 'text') return ['response_text_regex']
+  return ['response_json_path', 'response_text_regex']
+}
+
+export const normalizeRequestOutputForParse = (
+  output: FunctionOutputDef,
+  responseParse: RequestFunctionConfig['responseParse'],
+): FunctionOutputDef => {
+  const outputTypes = requestOutputTypesForParse(responseParse)
+  const outputSources = requestOutputSourcesForParse(responseParse)
+  const type = outputTypes.includes(output.type) ? output.type : outputTypes[0]!
+  const source = outputSources.includes(output.extract.source) ? output.extract.source : outputSources[0]!
+
+  if (source === 'response_binary') {
+    return {
+      ...output,
+      type,
+      extract: { source: 'response_binary' },
+    }
+  }
+
+  if (source === 'response_text_regex') {
+    return {
+      ...output,
+      type,
+      extract: { source, pattern: output.extract.pattern || output.bind.path || '(.+)', path: undefined },
+    }
+  }
+
+  return {
+    ...output,
+    type,
+    extract: { source, path: output.extract.path || output.bind.path || '$', pattern: undefined },
+  }
+}
+
+export const normalizeRequestOutputsForParse = (
+  outputs: FunctionOutputDef[],
+  responseParse: RequestFunctionConfig['responseParse'],
+): FunctionOutputDef[] => outputs.map((output) => normalizeRequestOutputForParse(output, responseParse))
 
 export function createRequestFunction(id: string, name: string, now: string): GenerationFunction {
   return {
@@ -44,6 +105,7 @@ export function createRequestFunction(id: string, name: string, now: string): Ge
       headers: {},
       body: '',
       responseParse: 'json',
+      responseEncoding: requestDefaultEncoding,
     },
     inputs: [],
     outputs: [
@@ -73,6 +135,7 @@ export const mergedRequestConfig = (
   headers: { ...(base?.headers ?? {}), ...(patch?.headers ?? {}) },
   body: patch?.body ?? base?.body ?? '',
   responseParse: patch?.responseParse ?? base?.responseParse ?? 'json',
+  responseEncoding: patch?.responseEncoding ?? base?.responseEncoding ?? requestDefaultEncoding,
 })
 
 const isResourceRef = (value: PrimitiveInputValue | ResourceRef | undefined): value is ResourceRef =>
@@ -179,6 +242,7 @@ export function compileRequestFunctionRequest(
     url: url.toString(),
     init,
     responseParse: config.responseParse,
+    responseEncoding: config.responseEncoding || requestDefaultEncoding,
   }
 }
 
@@ -236,15 +300,18 @@ export function extractRequestFunctionOutputs(
   responseText: string,
   responseJson: unknown,
   outputs: FunctionOutputDef[],
+  responseBinary?: RequestBinaryOutputValue,
 ): ExtractedRequestOutput[] {
   return outputs.map((output) => {
-    let values: string[] = []
+    let values: Array<string | RequestBinaryOutputValue> = []
     if (output.extract.source === 'response_text_regex') {
       values = regexValues(responseText, output)
     } else if (output.extract.source === 'response_json_path') {
       const extracted = valueAtJsonPath(responseJson, output.extract.path || output.bind.path || '$')
       const extractedValues = Array.isArray(extracted) && output.extract.multiple ? extracted : [extracted]
       values = extractedValues.map(stringifyExtractedValue).filter((value): value is string => value !== undefined)
+    } else if (output.extract.source === 'response_binary' && responseBinary) {
+      values = [responseBinary]
     }
 
     return {

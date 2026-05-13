@@ -15,7 +15,17 @@ import {
   Zap,
 } from 'lucide-react'
 import { isBuiltInFunction } from '../domain/builtInFunctions'
-import { isRequestFunction, mergedRequestConfig, requestMethods } from '../domain/requestFunction'
+import {
+  isRequestFunction,
+  mergedRequestConfig,
+  normalizeRequestOutputForParse,
+  normalizeRequestOutputsForParse,
+  requestDefaultEncoding,
+  requestMethods,
+  requestOutputSourcesForParse,
+  requestOutputTypesForParse,
+  requestParseModes,
+} from '../domain/requestFunction'
 import { defaultOpenAILlmConfig, isOpenAILlmFunction, mergedOpenAILlmConfig } from '../domain/openaiLlm'
 import { defaultGeminiLlmConfig, isGeminiLlmFunction, mergedGeminiLlmConfig } from '../domain/geminiLlm'
 import { getNodeRunHistory } from '../domain/runHistory'
@@ -45,7 +55,6 @@ const outputSources: FunctionOutputDef['extract']['source'][] = [
   'final_audios',
   'file_output',
 ]
-const requestOutputSources: FunctionOutputDef['extract']['source'][] = ['response_text_regex', 'response_json_path']
 const requestInputTargets: NonNullable<FunctionInputDef['bind']['requestTarget']>[] = ['url_param', 'header', 'body']
 
 const activeTaskStatuses = new Set<ExecutionTask['status']>(['queued', 'running', 'fetching_outputs'])
@@ -585,12 +594,14 @@ function useCommittedTextDraft(value: string | number | null | undefined, onComm
 function CommittedTextInput({
   ariaLabel,
   className,
+  disabled,
   type,
   value,
   onCommit,
 }: {
   ariaLabel: string
   className?: string
+  disabled?: boolean
   type?: string
   value: string | number | null | undefined
   onCommit: (value: string) => void
@@ -601,6 +612,7 @@ function CommittedTextInput({
     <input
       aria-label={ariaLabel}
       className={className}
+      disabled={disabled}
       type={type}
       value={draft.value}
       onBlur={(event) => draft.commit(event.currentTarget.value)}
@@ -951,6 +963,7 @@ function NewFunctionDialog({
   const [requestHeaders, setRequestHeaders] = useState('{\n}')
   const [requestBody, setRequestBody] = useState('')
   const [responseParse, setResponseParse] = useState<RequestFunctionConfig['responseParse']>('json')
+  const [responseEncoding, setResponseEncoding] = useState(requestDefaultEncoding)
   const defaultOpenAIConfig = useMemo(() => defaultOpenAILlmConfig(), [])
   const defaultGeminiConfig = useMemo(() => defaultGeminiLlmConfig(), [])
   const [openAiBaseUrl, setOpenAiBaseUrl] = useState(defaultOpenAIConfig.baseUrl)
@@ -1014,6 +1027,7 @@ function NewFunctionDialog({
           headers: parseHeaderJson(requestHeaders),
           body: requestBody,
           responseParse,
+          responseEncoding: responseEncoding.trim() || requestDefaultEncoding,
         })
       } else if (functionType === 'openai') {
         functionId = onSaveOpenAI(name, {
@@ -1133,10 +1147,24 @@ function NewFunctionDialog({
                 value={responseParse}
                 onChange={(event) => setResponseParse(event.target.value as RequestFunctionConfig['responseParse'])}
               >
-                <option value="json">json</option>
-                <option value="text">text</option>
+                {requestParseModes.map((mode) => (
+                  <option key={mode} value={mode}>
+                    {mode}
+                  </option>
+                ))}
               </select>
             </label>
+            {responseParse !== 'binary' ? (
+              <label className="field">
+                <span>Response encoding</span>
+                <input
+                  aria-label="Response encoding"
+                  value={responseEncoding}
+                  onChange={(event) => setResponseEncoding(event.target.value)}
+                  placeholder={requestDefaultEncoding}
+                />
+              </label>
+            ) : null}
           </>
         ) : functionType === 'openai' ? (
           <>
@@ -1316,16 +1344,23 @@ function FunctionManager({
   const addOutput = () => {
     if (!selectedFunction) return
     const index = selectedFunction.outputs.length + 1
+    const requestParse = selectedIsRequest ? selectedRequestConfig.responseParse : undefined
+    const requestOutputType = requestParse ? requestOutputTypesForParse(requestParse)[0] ?? 'text' : 'text'
+    const requestOutputSource = requestParse ? requestOutputSourcesForParse(requestParse)[0] ?? 'response_text_regex' : undefined
     onUpdateFunction(selectedFunction.id, {
       outputs: [
         ...selectedFunction.outputs,
         {
           key: `output_${index}`,
           label: `Output ${index}`,
-          type: selectedIsRequest ? 'text' : 'image',
+          type: selectedIsRequest ? requestOutputType : 'image',
           bind: selectedIsRequest ? {} : { nodeId: '' },
           extract: selectedIsRequest
-            ? { source: 'response_text_regex', pattern: '(.+)' }
+            ? requestOutputSource === 'response_binary'
+              ? { source: 'response_binary' }
+              : requestOutputSource === 'response_json_path'
+                ? { source: 'response_json_path', path: '$' }
+                : { source: 'response_text_regex', pattern: '(.+)' }
             : { source: 'history', multiple: true },
         },
       ],
@@ -1391,7 +1426,13 @@ function FunctionManager({
 
   const updateRequestConfig = (patch: Partial<RequestFunctionConfig>) => {
     if (!selectedFunction) return
-    onUpdateFunction(selectedFunction.id, { request: mergedRequestConfig(selectedFunction.request, patch) })
+    const request = mergedRequestConfig(selectedFunction.request, patch)
+    onUpdateFunction(selectedFunction.id, {
+      request,
+      ...(patch.responseParse
+        ? { outputs: normalizeRequestOutputsForParse(selectedFunction.outputs, patch.responseParse) }
+        : {}),
+    })
   }
 
   const updateRequestHeaders = (value: string) => {
@@ -1432,6 +1473,7 @@ function FunctionManager({
   }
 
   const updateRequestOutputExpression = (output: FunctionOutputDef, index: number, value: string) => {
+    if (output.extract.source === 'response_binary') return
     updateOutput(
       selectedFunction!,
       index,
@@ -1579,10 +1621,25 @@ function FunctionManager({
                         updateRequestConfig({ responseParse: event.target.value as RequestFunctionConfig['responseParse'] })
                       }
                     >
-                      <option value="json">json</option>
-                      <option value="text">text</option>
+                      {requestParseModes.map((mode) => (
+                        <option key={mode} value={mode}>
+                          {mode}
+                        </option>
+                      ))}
                     </select>
                   </label>
+                  {selectedRequestConfig.responseParse !== 'binary' ? (
+                    <label className="field">
+                      <span>Response encoding</span>
+                      <CommittedTextInput
+                        ariaLabel="Response encoding"
+                        value={selectedRequestConfig.responseEncoding || requestDefaultEncoding}
+                        onCommit={(responseEncoding) =>
+                          updateRequestConfig({ responseEncoding: responseEncoding.trim() || requestDefaultEncoding })
+                        }
+                      />
+                    </label>
+                  ) : null}
                 </div>
               ) : selectedIsOpenAI && selectedOpenAIConfig ? (
                 <div className="workflow-editor-section">
@@ -1854,14 +1911,30 @@ function FunctionManager({
                       </>
                     )}
                   </div>
-                  {selectedFunction.outputs.map((output, index) => (
+                  {selectedFunction.outputs.map((output, index) => {
+                    const requestOutput = selectedIsRequest
+                      ? normalizeRequestOutputForParse(output, selectedRequestConfig.responseParse)
+                      : output
+                    const requestOutputSources = selectedIsRequest
+                      ? requestOutputSourcesForParse(selectedRequestConfig.responseParse)
+                      : []
+                    const requestOutputTypes = selectedIsRequest
+                      ? requestOutputTypesForParse(selectedRequestConfig.responseParse)
+                      : resourceTypes
+                    const requestExpression =
+                      requestOutput.extract.source === 'response_json_path'
+                        ? requestOutput.extract.path || requestOutput.bind.path || '$'
+                        : requestOutput.extract.source === 'response_text_regex'
+                          ? requestOutput.extract.pattern || requestOutput.bind.path || '(.+)'
+                          : 'binary response'
+                    return (
                     <div className="binding-row-wrapper" key={`${output.key}_${index}`}>
                       <div className={`binding-row output-binding-row${selectedIsRequest ? ' request-output-binding-row' : ''}`}>
                         {selectedIsRequest ? (
                           <>
                             <select
                               aria-label={`Output extractor ${output.key}`}
-                              value={output.extract.source}
+                              value={requestOutput.extract.source}
                               onChange={(event) =>
                                 updateOutput(
                                   selectedFunction,
@@ -1871,11 +1944,11 @@ function FunctionManager({
                                       source: event.target.value as FunctionOutputDef['extract']['source'],
                                       path:
                                         event.target.value === 'response_json_path'
-                                          ? output.extract.path || output.bind.path || '$'
+                                          ? requestOutput.extract.path || requestOutput.bind.path || '$'
                                           : undefined,
                                       pattern:
                                         event.target.value === 'response_text_regex'
-                                          ? output.extract.pattern || output.bind.path || '(.+)'
+                                          ? requestOutput.extract.pattern || requestOutput.bind.path || '(.+)'
                                           : undefined,
                                     },
                                   },
@@ -1891,12 +1964,9 @@ function FunctionManager({
                             </select>
                             <CommittedTextInput
                               ariaLabel={`Output expression ${output.key}`}
-                              value={
-                                output.extract.source === 'response_json_path'
-                                  ? output.extract.path || output.bind.path || '$'
-                                  : output.extract.pattern || output.bind.path || '(.+)'
-                              }
-                              onCommit={(value) => updateRequestOutputExpression(output, index, value)}
+                              value={requestExpression}
+                              disabled={requestOutput.extract.source === 'response_binary'}
+                              onCommit={(value) => updateRequestOutputExpression(requestOutput, index, value)}
                             />
                           </>
                         ) : (
@@ -1916,7 +1986,7 @@ function FunctionManager({
                         />
                         <select
                           aria-label={`Output type ${output.key}`}
-                          value={output.type}
+                          value={selectedIsRequest ? requestOutput.type : output.type}
                           onChange={(event) =>
                             updateOutput(
                               selectedFunction,
@@ -1926,30 +1996,32 @@ function FunctionManager({
                             )
                           }
                         >
-                          {resourceTypes.map((type) => (
+                          {(selectedIsRequest ? requestOutputTypes : resourceTypes).map((type) => (
                             <option key={type} value={type}>
                               {type}
                             </option>
                           ))}
                         </select>
-                        <select
-                          aria-label={`Output source ${output.key}`}
-                          value={output.extract.source}
-                          onChange={(event) =>
-                            updateOutput(
-                              selectedFunction,
-                              index,
-                              { extract: { source: event.target.value as FunctionOutputDef['extract']['source'] } },
-                              onUpdateFunction,
-                            )
-                          }
-                        >
-                          {outputSources.map((source) => (
-                            <option key={source} value={source}>
-                              {source}
-                            </option>
-                          ))}
-                        </select>
+                        {!selectedIsRequest ? (
+                          <select
+                            aria-label={`Output source ${output.key}`}
+                            value={output.extract.source}
+                            onChange={(event) =>
+                              updateOutput(
+                                selectedFunction,
+                                index,
+                                { extract: { source: event.target.value as FunctionOutputDef['extract']['source'] } },
+                                onUpdateFunction,
+                              )
+                            }
+                          >
+                            {outputSources.map((source) => (
+                              <option key={source} value={source}>
+                                {source}
+                              </option>
+                            ))}
+                          </select>
+                        ) : null}
                         <button
                           type="button"
                           className="icon-button"
@@ -1969,7 +2041,7 @@ function FunctionManager({
                           <span className="field-error">Workflow node not found</span>
                         ) : null}
                     </div>
-                  ))}
+                  )})}
                 </div>
               </div>
                 </>

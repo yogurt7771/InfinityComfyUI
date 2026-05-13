@@ -4,6 +4,8 @@ import {
   compileRequestFunctionRequest,
   createRequestFunction,
   extractRequestFunctionOutputs,
+  requestOutputSourcesForParse,
+  requestOutputTypesForParse,
 } from './requestFunction'
 
 describe('request function helpers', () => {
@@ -17,6 +19,7 @@ describe('request function helpers', () => {
       headers: {},
       body: '',
       responseParse: 'json',
+      responseEncoding: 'utf-8',
     })
     expect(fn.outputs).toEqual([
       expect.objectContaining({
@@ -36,6 +39,7 @@ describe('request function helpers', () => {
       headers: { 'X-Static': 'ok' },
       body: '{"prompt":"old","nested":{"count":1}}',
       responseParse: 'json',
+      responseEncoding: 'gbk',
     }
     fn.inputs = [
       {
@@ -74,6 +78,17 @@ describe('request function helpers', () => {
     expect(request.init.method).toBe('POST')
     expect(request.init.headers).toMatchObject({ 'X-Static': 'ok', Authorization: 'Bearer token' })
     expect(request.init.body).toBe('{"prompt":"old","nested":{"count":3}}')
+    expect(request.responseEncoding).toBe('gbk')
+  })
+
+  it('limits request output sources and types by response parser', () => {
+    expect(requestOutputSourcesForParse('json')).toEqual(['response_json_path', 'response_text_regex'])
+    expect(requestOutputSourcesForParse('text')).toEqual(['response_text_regex'])
+    expect(requestOutputSourcesForParse('binary')).toEqual(['response_binary'])
+
+    expect(requestOutputTypesForParse('json')).toEqual(['text', 'number'])
+    expect(requestOutputTypesForParse('text')).toEqual(['text', 'number'])
+    expect(requestOutputTypesForParse('binary')).toEqual(['image', 'video', 'audio'])
   })
 
   it('extracts text outputs with regex and JSON path selectors', () => {
@@ -111,6 +126,7 @@ describe('request function helpers', () => {
       headers: {},
       body: '',
       responseParse: 'text',
+      responseEncoding: 'utf-8',
     }
     fn.inputs = [
       {
