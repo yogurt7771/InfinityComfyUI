@@ -111,6 +111,7 @@ export type FunctionInputDef = {
     nodeTitle?: string
     field?: string
     path: string
+    requestTarget?: 'url_param' | 'header' | 'body'
   }
   upload?: {
     strategy: 'comfy_upload' | 'comfy_input_path' | 'custom_endpoint' | 'manual_path' | 'none'
@@ -130,9 +131,19 @@ export type FunctionOutputDef = {
     path?: string
   }
   extract: {
-    source: 'history' | 'node_output' | 'final_images' | 'final_videos' | 'final_audios' | 'file_output'
+    source:
+      | 'history'
+      | 'node_output'
+      | 'final_images'
+      | 'final_videos'
+      | 'final_audios'
+      | 'file_output'
+      | 'response_text_regex'
+      | 'response_json_path'
     index?: number
     multiple?: boolean
+    pattern?: string
+    path?: string
   }
 }
 
@@ -207,6 +218,14 @@ export type GeminiImageConfig = {
   imageSize: GeminiImageSize
 }
 
+export type RequestFunctionConfig = {
+  url: string
+  method: string
+  headers: Record<string, string>
+  body: string
+  responseParse: 'text' | 'json'
+}
+
 export type GenerationFunction = {
   id: string
   name: string
@@ -220,6 +239,7 @@ export type GenerationFunction = {
       | 'gemini_generate_content'
       | 'openai_image_generation'
       | 'gemini_image_generation'
+      | 'http_request'
     version?: string
     rawJson: ComfyWorkflow
   }
@@ -227,6 +247,7 @@ export type GenerationFunction = {
   gemini?: GeminiLlmConfig
   openaiImage?: OpenAIImageConfig
   geminiImage?: GeminiImageConfig
+  request?: RequestFunctionConfig
   inputs: FunctionInputDef[]
   outputs: FunctionOutputDef[]
   runtimeDefaults?: {

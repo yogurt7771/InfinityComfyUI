@@ -5,6 +5,7 @@ import { OPENAI_LLM_FUNCTION_ID } from '../domain/openaiLlm'
 import { GEMINI_LLM_FUNCTION_ID } from '../domain/geminiLlm'
 import { OPENAI_IMAGE_FUNCTION_ID } from '../domain/openaiImage'
 import { GEMINI_IMAGE_FUNCTION_ID } from '../domain/geminiImage'
+import type { GenerationFunction } from '../domain/types'
 
 describe('project store actions', () => {
   const flushPromises = async () => {
@@ -3128,5 +3129,92 @@ describe('project store actions', () => {
     slice.getState().cancelResultRun('node_result_queued')
     expect(interrupt).toHaveBeenCalledTimes(1)
     expect(slice.getState().project.tasks.task_queued).toMatchObject({ status: 'canceled' })
+  })
+
+  it('runs request functions by compiling URL, headers, body, and response extractors', async () => {
+    const fetchCalls: { input: RequestInfo | URL; init?: RequestInit }[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        fetchCalls.push({ input, init })
+        return new Response(JSON.stringify({ result: { text: 'ok from request' } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }),
+    )
+    const ids = ['node_request', 'task_request', 'result_request', 'resource_request']
+    const now = () => '2026-05-13T00:00:00.000Z'
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now,
+    })
+    const requestFunction: GenerationFunction = {
+      id: 'fn_request',
+      name: 'Request Lookup',
+      category: 'Request',
+      description: 'Generic request function',
+      workflow: { format: 'http_request', rawJson: {} },
+      request: {
+        url: 'https://api.example.com/render',
+        method: 'POST',
+        headers: { 'X-App': 'Infinity' },
+        body: '{"prompt":""}',
+        responseParse: 'json',
+      },
+      inputs: [
+        {
+          key: 'prompt',
+          label: 'Prompt',
+          type: 'text',
+          required: true,
+          bind: { path: '$.prompt', requestTarget: 'body' },
+          upload: { strategy: 'none' },
+        },
+      ],
+      outputs: [
+        {
+          key: 'text',
+          label: 'Text',
+          type: 'text',
+          bind: {},
+          extract: { source: 'response_json_path', path: '$.result.text' },
+        },
+      ],
+      runtimeDefaults: { runCount: 1, seedPolicy: { mode: 'randomize_all_before_submit' } },
+      createdAt: now(),
+      updatedAt: now(),
+    }
+
+    slice.setState((state) => ({
+      project: {
+        ...state.project,
+        functions: { [requestFunction.id]: requestFunction },
+      },
+    }))
+    slice.getState().addFunctionNodeAtPosition('fn_request', { x: 100, y: 100 }, { autoBindRequiredInputs: false })
+    slice.getState().updateFunctionNodeInputValue('node_request', 'prompt', 'sunny kitchen')
+
+    await slice.getState().runFunctionNodeWithComfy('node_request', 1)
+
+    expect(fetchCalls).toHaveLength(1)
+    expect(String(fetchCalls[0]?.input)).toBe('https://api.example.com/render')
+    expect(fetchCalls[0]?.init).toMatchObject({
+      method: 'POST',
+      headers: { 'X-App': 'Infinity' },
+      body: '{"prompt":"sunny kitchen"}',
+    })
+    const state = slice.getState().project
+    expect(state.tasks.task_request).toMatchObject({
+      status: 'succeeded',
+      requestSnapshot: expect.objectContaining({
+        url: 'https://api.example.com/render',
+      }),
+      outputRefs: { text: [{ resourceId: 'resource_request', type: 'text' }] },
+    })
+    expect(state.resources.resource_request).toMatchObject({
+      type: 'text',
+      value: 'ok from request',
+    })
   })
 })

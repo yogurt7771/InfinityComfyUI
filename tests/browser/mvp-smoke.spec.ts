@@ -55,11 +55,11 @@ async function createWorkflowFromFunctionManager(
   name: string,
   workflow: unknown,
 ) {
-  await dialog.getByRole('button', { name: 'Workflow' }).click()
-  const createDialog = page.getByRole('dialog', { name: 'New Workflow' })
-  await createDialog.getByLabel('Workflow name').fill(name)
+  await dialog.getByRole('button', { name: 'Function', exact: true }).click()
+  const createDialog = page.getByRole('dialog', { name: 'New Function' })
+  await createDialog.getByLabel('Function name').fill(name)
   await createDialog.getByRole('textbox', { name: 'Workflow JSON' }).fill(JSON.stringify(workflow))
-  await createDialog.getByRole('button', { name: 'Save workflow' }).click()
+  await createDialog.getByRole('button', { name: 'Save function' }).click()
   await expect(createDialog).toHaveCount(0)
   await expect(dialog.getByLabel('Function name')).toHaveValue(name)
 }
@@ -368,6 +368,35 @@ test('edits selected function workflow JSON in the function manager', async ({ p
   await expect(dialog.getByText(/Invalid workflow JSON/)).toBeVisible()
   await dialog.getByRole('button', { name: 'Close Function Management' }).click()
   await closeSettings(page)
+})
+
+test('creates and runs a request function from function management', async ({ page }) => {
+  await page.route('https://api.example.com/request-smoke', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      headers: { 'Access-Control-Allow-Origin': '*' },
+      body: JSON.stringify({ message: 'hello from request function' }),
+    })
+  })
+  await page.goto('/')
+
+  const dialog = await openFunctionManagement(page)
+  await dialog.getByRole('button', { name: 'Function', exact: true }).click()
+  const createDialog = page.getByRole('dialog', { name: 'New Function' })
+  await createDialog.getByLabel('Function type').selectOption('request')
+  await createDialog.getByLabel('Function name').fill('Request Smoke')
+  await createDialog.getByLabel('Request URL').fill('https://api.example.com/request-smoke')
+  await createDialog.getByRole('button', { name: 'Save function' }).click()
+  await expect(createDialog).toHaveCount(0)
+  await dialog.getByRole('button', { name: 'Close Function Management' }).click()
+  await closeSettings(page)
+
+  await addFunctionNodeFromCanvasMenu(page, /Request Smoke/)
+  await page.getByRole('button', { name: 'Run function' }).click()
+
+  await expect(page.getByLabel('Run status succeeded')).toBeVisible()
+  await expect(page.getByText(/hello from request function/).first()).toBeVisible()
 })
 
 test('creates and runs the built-in OpenAI LLM node with editable messages', async ({ page }) => {

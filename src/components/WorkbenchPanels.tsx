@@ -15,6 +15,7 @@ import {
   Zap,
 } from 'lucide-react'
 import { isBuiltInFunction } from '../domain/builtInFunctions'
+import { isRequestFunction, mergedRequestConfig, requestMethods } from '../domain/requestFunction'
 import { getNodeRunHistory } from '../domain/runHistory'
 import type {
   ComfyEndpointConfig,
@@ -25,6 +26,7 @@ import type {
   FunctionOutputDef,
   GenerationFunction,
   ProjectState,
+  RequestFunctionConfig,
   Resource,
   ResourceType,
 } from '../domain/types'
@@ -39,6 +41,8 @@ const outputSources: FunctionOutputDef['extract']['source'][] = [
   'final_audios',
   'file_output',
 ]
+const requestOutputSources: FunctionOutputDef['extract']['source'][] = ['response_text_regex', 'response_json_path']
+const requestInputTargets: NonNullable<FunctionInputDef['bind']['requestTarget']>[] = ['url_param', 'header', 'body']
 
 const activeTaskStatuses = new Set<ExecutionTask['status']>(['queued', 'running', 'fetching_outputs'])
 
@@ -510,6 +514,7 @@ type FunctionManagerProps = {
   selectedFunctionId?: string
   onSelectFunction: (functionId: string | undefined) => void
   onAddWorkflow: (name: string, workflow: ComfyWorkflow) => string | undefined
+  onAddRequestFunction: (name: string, config: Partial<RequestFunctionConfig>) => string | undefined
   onUpdateFunction: (functionId: string, patch: Partial<Omit<GenerationFunction, 'id' | 'createdAt'>>) => void
   onDeleteFunction: (functionId: string) => void
   onClose: () => void
@@ -907,76 +912,188 @@ function updateOutputBindingSelection(
   updateFunction(fn.id, { outputs })
 }
 
-function NewWorkflowDialog({
-  onSave,
+type NewFunctionType = 'comfyui' | 'request'
+
+const parseHeaderJson = (value: string) => {
+  if (!value.trim()) return {}
+  const parsed = JSON.parse(value) as unknown
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Headers must be a JSON object')
+  return Object.fromEntries(Object.entries(parsed).map(([key, headerValue]) => [key, String(headerValue)]))
+}
+
+function NewFunctionDialog({
+  onSaveComfy,
+  onSaveRequest,
   onClose,
 }: {
-  onSave: (name: string, workflow: ComfyWorkflow) => string | undefined
+  onSaveComfy: (name: string, workflow: ComfyWorkflow) => string | undefined
+  onSaveRequest: (name: string, config: Partial<RequestFunctionConfig>) => string | undefined
   onClose: () => void
 }) {
-  const [workflowName, setWorkflowName] = useState('')
+  const [functionType, setFunctionType] = useState<NewFunctionType>('comfyui')
+  const [functionName, setFunctionName] = useState('')
   const [workflowJson, setWorkflowJson] = useState('')
-  const [workflowJsonError, setWorkflowJsonError] = useState<string>()
+  const [requestUrl, setRequestUrl] = useState('https://example.com/api')
+  const [requestMethod, setRequestMethod] = useState('GET')
+  const [requestHeaders, setRequestHeaders] = useState('{\n}')
+  const [requestBody, setRequestBody] = useState('')
+  const [responseParse, setResponseParse] = useState<RequestFunctionConfig['responseParse']>('json')
+  const [error, setError] = useState<string>()
 
   const formatWorkflowJson = () => {
+    if (functionType === 'request') {
+      try {
+        setRequestHeaders(JSON.stringify(parseHeaderJson(requestHeaders), null, 2))
+        setError(undefined)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Invalid headers JSON')
+      }
+      return
+    }
+
     try {
       setWorkflowJson(JSON.stringify(JSON.parse(workflowJson), null, 2))
-      setWorkflowJsonError(undefined)
+      setError(undefined)
     } catch (err) {
-      setWorkflowJsonError(err instanceof Error ? err.message : 'Invalid JSON')
+      setError(err instanceof Error ? err.message : 'Invalid JSON')
     }
   }
 
-  const saveWorkflow = () => {
+  const saveFunction = () => {
     try {
-      const functionId = onSave(workflowName.trim() || 'ComfyUI Workflow', JSON.parse(workflowJson) as ComfyWorkflow)
+      const name = functionName.trim() || (functionType === 'request' ? 'Request Function' : 'ComfyUI Function')
+      const functionId =
+        functionType === 'request'
+          ? onSaveRequest(name, {
+              url: requestUrl.trim() || 'https://example.com/api',
+              method: requestMethod,
+              headers: parseHeaderJson(requestHeaders),
+              body: requestBody,
+              responseParse,
+            })
+          : onSaveComfy(name, JSON.parse(workflowJson) as ComfyWorkflow)
       if (functionId) onClose()
-      setWorkflowJsonError(undefined)
+      setError(undefined)
     } catch (err) {
-      setWorkflowJsonError(err instanceof Error ? err.message : 'Invalid workflow JSON')
+      setError(err instanceof Error ? err.message : 'Invalid function config')
     }
   }
 
   return (
-    <ModalShell label="New Workflow" modalClassName="new-workflow-modal" onClose={onClose}>
+    <ModalShell label="New Function" modalClassName="new-workflow-modal" onClose={onClose}>
       <div className="new-workflow-dialog">
         <label className="field">
-          <span>Workflow name</span>
-          <input
-            aria-label="Workflow name"
+          <span>Function type</span>
+          <select
+            aria-label="Function type"
             autoFocus
-            value={workflowName}
-            onChange={(event) => setWorkflowName(event.target.value)}
-          />
+            value={functionType}
+            onChange={(event) => setFunctionType(event.target.value as NewFunctionType)}
+          >
+            <option value="comfyui">comfyui</option>
+            <option value="request">request</option>
+          </select>
         </label>
         <label className="field">
-          <span>Workflow JSON</span>
-          <textarea
-            aria-invalid={workflowJsonError ? true : undefined}
-            aria-label="Workflow JSON"
-            value={workflowJson}
-            onChange={(event) => {
-              setWorkflowJson(event.target.value)
-              setWorkflowJsonError(undefined)
-            }}
-            rows={12}
+          <span>Function name</span>
+          <input
+            aria-label="Function name"
+            value={functionName}
+            onChange={(event) => setFunctionName(event.target.value)}
           />
         </label>
+        {functionType === 'comfyui' ? (
+          <label className="field">
+            <span>Workflow JSON</span>
+            <textarea
+              aria-invalid={error ? true : undefined}
+              aria-label="Workflow JSON"
+              value={workflowJson}
+              onChange={(event) => {
+                setWorkflowJson(event.target.value)
+                setError(undefined)
+              }}
+              rows={12}
+            />
+          </label>
+        ) : (
+          <>
+            <div className="manager-grid">
+              <label className="field">
+                <span>Request URL</span>
+                <input
+                  aria-label="Request URL"
+                  value={requestUrl}
+                  onChange={(event) => setRequestUrl(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Request method</span>
+                <select
+                  aria-label="Request method"
+                  value={requestMethod}
+                  onChange={(event) => setRequestMethod(event.target.value)}
+                >
+                  {requestMethods.map((method) => (
+                    <option key={method} value={method}>
+                      {method}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <label className="field">
+              <span>Request headers</span>
+              <textarea
+                aria-invalid={error ? true : undefined}
+                aria-label="Request headers"
+                value={requestHeaders}
+                onChange={(event) => {
+                  setRequestHeaders(event.target.value)
+                  setError(undefined)
+                }}
+                rows={5}
+              />
+            </label>
+            <label className="field">
+              <span>Request body</span>
+              <textarea
+                aria-label="Request body"
+                value={requestBody}
+                onChange={(event) => setRequestBody(event.target.value)}
+                rows={6}
+              />
+            </label>
+            <label className="field">
+              <span>Response parse mode</span>
+              <select
+                aria-label="Response parse mode"
+                value={responseParse}
+                onChange={(event) => setResponseParse(event.target.value as RequestFunctionConfig['responseParse'])}
+              >
+                <option value="json">json</option>
+                <option value="text">text</option>
+              </select>
+            </label>
+          </>
+        )}
         <div className="json-toolbar">
           <button type="button" onClick={formatWorkflowJson}>
             Format JSON
           </button>
-          {workflowJsonError ? <span className="field-error">{workflowJsonError}</span> : null}
+          {error ? <span className="field-error">{error}</span> : null}
         </div>
-        <pre className="json-preview new-workflow-preview" aria-label="New workflow JSON preview">
-          <code>{highlightedJson(workflowJson)}</code>
-        </pre>
+        {functionType === 'comfyui' ? (
+          <pre className="json-preview new-workflow-preview" aria-label="New workflow JSON preview">
+            <code>{highlightedJson(workflowJson)}</code>
+          </pre>
+        ) : null}
         <div className="new-workflow-actions">
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button type="button" className="primary-action" onClick={saveWorkflow}>
-            Save workflow
+          <button type="button" className="primary-action" onClick={saveFunction}>
+            Save function
           </button>
         </div>
       </div>
@@ -989,18 +1106,22 @@ function FunctionManager({
   selectedFunctionId,
   onSelectFunction,
   onAddWorkflow,
+  onAddRequestFunction,
   onUpdateFunction,
   onDeleteFunction,
   onClose,
 }: FunctionManagerProps) {
   const selectedFunction = functions.find((fn) => fn.id === selectedFunctionId) ?? functions[0]
-  const [createWorkflowOpen, setCreateWorkflowOpen] = useState(false)
+  const [createFunctionOpen, setCreateFunctionOpen] = useState(false)
   const [selectedWorkflowDraft, setSelectedWorkflowDraft] = useState<WorkflowJsonDraft>({ value: '' })
+  const [requestHeaderError, setRequestHeaderError] = useState<string>()
   const selectedWorkflowSource = selectedFunction ? JSON.stringify(selectedFunction.workflow.rawJson, null, 2) : ''
   const selectedWorkflowJson =
     selectedWorkflowDraft.functionId === selectedFunction?.id ? selectedWorkflowDraft.value : selectedWorkflowSource
   const selectedWorkflowJsonError =
     selectedWorkflowDraft.functionId === selectedFunction?.id ? selectedWorkflowDraft.error : undefined
+  const selectedIsRequest = selectedFunction ? isRequestFunction(selectedFunction) : false
+  const selectedRequestConfig = mergedRequestConfig(selectedFunction?.request)
 
   const deleteSelectedFunction = () => {
     if (!selectedFunction) return
@@ -1020,7 +1141,9 @@ function FunctionManager({
           label: `Input ${index}`,
           type: 'text',
           required: false,
-          bind: { nodeId: '', path: 'inputs.text' },
+          bind: selectedIsRequest
+            ? { path: `param_${index}`, requestTarget: 'url_param' }
+            : { nodeId: '', path: 'inputs.text' },
           upload: { strategy: 'none' },
         },
       ],
@@ -1036,9 +1159,11 @@ function FunctionManager({
         {
           key: `output_${index}`,
           label: `Output ${index}`,
-          type: 'image',
-          bind: { nodeId: '' },
-          extract: { source: 'history', multiple: true },
+          type: selectedIsRequest ? 'text' : 'image',
+          bind: selectedIsRequest ? {} : { nodeId: '' },
+          extract: selectedIsRequest
+            ? { source: 'response_text_regex', pattern: '(.+)' }
+            : { source: 'history', multiple: true },
         },
       ],
     })
@@ -1101,14 +1226,39 @@ function FunctionManager({
     }
   }
 
+  const updateRequestConfig = (patch: Partial<RequestFunctionConfig>) => {
+    if (!selectedFunction) return
+    onUpdateFunction(selectedFunction.id, { request: mergedRequestConfig(selectedFunction.request, patch) })
+  }
+
+  const updateRequestHeaders = (value: string) => {
+    try {
+      updateRequestConfig({ headers: parseHeaderJson(value) })
+      setRequestHeaderError(undefined)
+    } catch (err) {
+      setRequestHeaderError(err instanceof Error ? err.message : 'Invalid headers JSON')
+    }
+  }
+
+  const updateRequestOutputExpression = (output: FunctionOutputDef, index: number, value: string) => {
+    updateOutput(
+      selectedFunction!,
+      index,
+      output.extract.source === 'response_json_path'
+        ? { extract: { path: value, pattern: undefined } }
+        : { extract: { pattern: value, path: undefined } },
+      onUpdateFunction,
+    )
+  }
+
   return (
     <ModalShell label="Function Management" onClose={onClose}>
       <div className="manager-layout">
         <div className="manager-sidebar" aria-label="Managed function list">
           <div className="manager-create-actions">
-            <button type="button" onClick={() => setCreateWorkflowOpen(true)}>
+            <button type="button" onClick={() => setCreateFunctionOpen(true)}>
               <Plus size={14} />
-              Workflow
+              Function
             </button>
           </div>
           <div className="manager-list">
@@ -1179,33 +1329,99 @@ function FunctionManager({
                 />
               </label>
 
-              <div className="workflow-editor-section">
-                <div className="binding-header">
-                  <h4>Workflow JSON</h4>
-                  <div className="json-toolbar compact-json-toolbar">
-                    {selectedWorkflowJsonError ? <span className="field-error">{selectedWorkflowJsonError}</span> : null}
-                    <button type="button" onClick={formatSelectedWorkflowJson}>
-                      Format selected JSON
-                    </button>
+              {selectedIsRequest ? (
+                <div className="workflow-editor-section">
+                  <div className="binding-header">
+                    <h4>Request</h4>
+                    {requestHeaderError ? <span className="field-error">{requestHeaderError}</span> : null}
+                  </div>
+                  <div className="manager-grid">
+                    <label className="field">
+                      <span>Request URL</span>
+                      <CommittedTextInput
+                        ariaLabel="Request URL"
+                        value={selectedRequestConfig.url}
+                        onCommit={(url) => updateRequestConfig({ url })}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Request method</span>
+                      <select
+                        aria-label="Request method"
+                        value={selectedRequestConfig.method}
+                        onChange={(event) => updateRequestConfig({ method: event.target.value })}
+                      >
+                        {requestMethods.map((method) => (
+                          <option key={method} value={method}>
+                            {method}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="manager-grid request-config-grid">
+                    <label className="field">
+                      <span>Request headers</span>
+                      <CommittedTextarea
+                        ariaLabel="Request headers"
+                        value={JSON.stringify(selectedRequestConfig.headers, null, 2)}
+                        onCommit={updateRequestHeaders}
+                        rows={6}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Request body</span>
+                      <CommittedTextarea
+                        ariaLabel="Request body"
+                        value={selectedRequestConfig.body}
+                        onCommit={(body) => updateRequestConfig({ body })}
+                        rows={6}
+                      />
+                    </label>
+                  </div>
+                  <label className="field">
+                    <span>Response parse mode</span>
+                    <select
+                      aria-label="Response parse mode"
+                      value={selectedRequestConfig.responseParse}
+                      onChange={(event) =>
+                        updateRequestConfig({ responseParse: event.target.value as RequestFunctionConfig['responseParse'] })
+                      }
+                    >
+                      <option value="json">json</option>
+                      <option value="text">text</option>
+                    </select>
+                  </label>
+                </div>
+              ) : (
+                <div className="workflow-editor-section">
+                  <div className="binding-header">
+                    <h4>Workflow JSON</h4>
+                    <div className="json-toolbar compact-json-toolbar">
+                      {selectedWorkflowJsonError ? <span className="field-error">{selectedWorkflowJsonError}</span> : null}
+                      <button type="button" onClick={formatSelectedWorkflowJson}>
+                        Format selected JSON
+                      </button>
+                    </div>
+                  </div>
+                  <div className="workflow-editor-grid">
+                    <label className="field workflow-json-field">
+                      <span>Selected workflow JSON</span>
+                      <textarea
+                        aria-invalid={selectedWorkflowJsonError ? true : undefined}
+                        aria-label="Selected workflow JSON"
+                        value={selectedWorkflowJson}
+                        onBlur={(event) => commitSelectedWorkflowJson(event.currentTarget.value)}
+                        onChange={(event) => editSelectedWorkflowJson(event.target.value)}
+                        rows={11}
+                      />
+                    </label>
+                    <pre className="json-preview selected-workflow-preview" aria-label="Selected workflow preview">
+                      <code>{highlightedJson(selectedWorkflowJson)}</code>
+                    </pre>
                   </div>
                 </div>
-                <div className="workflow-editor-grid">
-                  <label className="field workflow-json-field">
-                    <span>Selected workflow JSON</span>
-                    <textarea
-                      aria-invalid={selectedWorkflowJsonError ? true : undefined}
-                      aria-label="Selected workflow JSON"
-                      value={selectedWorkflowJson}
-                      onBlur={(event) => commitSelectedWorkflowJson(event.currentTarget.value)}
-                      onChange={(event) => editSelectedWorkflowJson(event.target.value)}
-                      rows={11}
-                    />
-                  </label>
-                  <pre className="json-preview selected-workflow-preview" aria-label="Selected workflow preview">
-                    <code>{highlightedJson(selectedWorkflowJson)}</code>
-                  </pre>
-                </div>
-              </div>
+              )}
 
               <div className="binding-section">
                 <div className="binding-header">
@@ -1216,23 +1432,64 @@ function FunctionManager({
                   </button>
                 </div>
                 <div className="binding-list">
-                  <div className="binding-column-header">
-                    <span>Workflow Input</span>
-                    <span>Label</span>
-                    <span>Type</span>
-                    <span>Required</span>
-                    <span />
+                  <div className={`binding-column-header${selectedIsRequest ? ' request-input-binding-row' : ''}`}>
+                    {selectedIsRequest ? (
+                      <>
+                        <span>Request target</span>
+                        <span>Request key</span>
+                        <span>Label</span>
+                        <span>Type</span>
+                        <span>Required</span>
+                        <span />
+                      </>
+                    ) : (
+                      <>
+                        <span>Workflow Input</span>
+                        <span>Label</span>
+                        <span>Type</span>
+                        <span>Required</span>
+                        <span />
+                      </>
+                    )}
                   </div>
                   {selectedFunction.inputs.map((input, index) => (
                     <div className="binding-row-wrapper" key={`${input.key}_${index}`}>
-                      <div className="binding-row">
-                        <SearchableSelect
-                          invalid={bindingStatus(selectedFunction.workflow.rawJson, input.bind).idInvalid}
-                          label={`Input workflow field ${input.key}`}
-                          options={workflowInputBindingOptions(selectedFunction.workflow.rawJson)}
-                          value={workflowBindingDisplay(selectedFunction.workflow.rawJson, input.bind)}
-                          onCommit={(value) => updateInputBindingSelection(selectedFunction, index, value, onUpdateFunction)}
-                        />
+                      <div className={`binding-row${selectedIsRequest ? ' request-input-binding-row' : ''}`}>
+                        {selectedIsRequest ? (
+                          <>
+                            <select
+                              aria-label={`Input request target ${input.key}`}
+                              value={input.bind.requestTarget ?? 'url_param'}
+                              onChange={(event) =>
+                                updateInput(
+                                  selectedFunction,
+                                  index,
+                                  { bind: { requestTarget: event.target.value as FunctionInputDef['bind']['requestTarget'] } },
+                                  onUpdateFunction,
+                                )
+                              }
+                            >
+                              {requestInputTargets.map((target) => (
+                                <option key={target} value={target}>
+                                  {target}
+                                </option>
+                              ))}
+                            </select>
+                            <CommittedTextInput
+                              ariaLabel={`Input request key ${input.key}`}
+                              value={input.bind.path}
+                              onCommit={(path) => updateInput(selectedFunction, index, { bind: { path } }, onUpdateFunction)}
+                            />
+                          </>
+                        ) : (
+                          <SearchableSelect
+                            invalid={bindingStatus(selectedFunction.workflow.rawJson, input.bind).idInvalid}
+                            label={`Input workflow field ${input.key}`}
+                            options={workflowInputBindingOptions(selectedFunction.workflow.rawJson)}
+                            value={workflowBindingDisplay(selectedFunction.workflow.rawJson, input.bind)}
+                            onCommit={(value) => updateInputBindingSelection(selectedFunction, index, value, onUpdateFunction)}
+                          />
+                        )}
                         <CommittedTextInput
                           ariaLabel={`Input label ${input.key}`}
                           value={input.label}
@@ -1280,10 +1537,11 @@ function FunctionManager({
                           <Trash2 size={14} />
                         </button>
                       </div>
-                      {bindingStatus(selectedFunction.workflow.rawJson, input.bind).idInvalid ||
-                      bindingStatus(selectedFunction.workflow.rawJson, input.bind).titleInvalid ? (
-                        <span className="field-error">Workflow node not found</span>
-                      ) : null}
+                      {!selectedIsRequest &&
+                      (bindingStatus(selectedFunction.workflow.rawJson, input.bind).idInvalid ||
+                        bindingStatus(selectedFunction.workflow.rawJson, input.bind).titleInvalid) ? (
+                          <span className="field-error">Workflow node not found</span>
+                        ) : null}
                     </div>
                   ))}
                 </div>
@@ -1298,24 +1556,80 @@ function FunctionManager({
                   </button>
                 </div>
                 <div className="binding-list">
-                  <div className="binding-column-header output-binding-row">
-                    <span>Workflow Output Node</span>
-                    <span>Label</span>
-                    <span>Type</span>
-                    <span>Source</span>
-                    <span />
+                  <div className={`binding-column-header output-binding-row${selectedIsRequest ? ' request-output-binding-row' : ''}`}>
+                    {selectedIsRequest ? (
+                      <>
+                        <span>Extractor</span>
+                        <span>Expression</span>
+                        <span>Label</span>
+                        <span>Type</span>
+                        <span />
+                      </>
+                    ) : (
+                      <>
+                        <span>Workflow Output Node</span>
+                        <span>Label</span>
+                        <span>Type</span>
+                        <span>Source</span>
+                        <span />
+                      </>
+                    )}
                   </div>
                   {selectedFunction.outputs.map((output, index) => (
                     <div className="binding-row-wrapper" key={`${output.key}_${index}`}>
-                      <div className="binding-row output-binding-row">
-                        <SearchableSelect
-                          invalid={bindingStatus(selectedFunction.workflow.rawJson, output.bind).idInvalid}
-                          label={`Output workflow node ${output.key}`}
-                          options={workflowNodeSearchOptions(selectedFunction.workflow.rawJson)}
-                          placeholder="output node"
-                          value={nodeDisplayValue(selectedFunction.workflow.rawJson, output.bind)}
-                          onCommit={(value) => updateOutputBindingSelection(selectedFunction, index, value, onUpdateFunction)}
-                        />
+                      <div className={`binding-row output-binding-row${selectedIsRequest ? ' request-output-binding-row' : ''}`}>
+                        {selectedIsRequest ? (
+                          <>
+                            <select
+                              aria-label={`Output extractor ${output.key}`}
+                              value={output.extract.source}
+                              onChange={(event) =>
+                                updateOutput(
+                                  selectedFunction,
+                                  index,
+                                  {
+                                    extract: {
+                                      source: event.target.value as FunctionOutputDef['extract']['source'],
+                                      path:
+                                        event.target.value === 'response_json_path'
+                                          ? output.extract.path || output.bind.path || '$'
+                                          : undefined,
+                                      pattern:
+                                        event.target.value === 'response_text_regex'
+                                          ? output.extract.pattern || output.bind.path || '(.+)'
+                                          : undefined,
+                                    },
+                                  },
+                                  onUpdateFunction,
+                                )
+                              }
+                            >
+                              {requestOutputSources.map((source) => (
+                                <option key={source} value={source}>
+                                  {source}
+                                </option>
+                              ))}
+                            </select>
+                            <CommittedTextInput
+                              ariaLabel={`Output expression ${output.key}`}
+                              value={
+                                output.extract.source === 'response_json_path'
+                                  ? output.extract.path || output.bind.path || '$'
+                                  : output.extract.pattern || output.bind.path || '(.+)'
+                              }
+                              onCommit={(value) => updateRequestOutputExpression(output, index, value)}
+                            />
+                          </>
+                        ) : (
+                          <SearchableSelect
+                            invalid={bindingStatus(selectedFunction.workflow.rawJson, output.bind).idInvalid}
+                            label={`Output workflow node ${output.key}`}
+                            options={workflowNodeSearchOptions(selectedFunction.workflow.rawJson)}
+                            placeholder="output node"
+                            value={nodeDisplayValue(selectedFunction.workflow.rawJson, output.bind)}
+                            onCommit={(value) => updateOutputBindingSelection(selectedFunction, index, value, onUpdateFunction)}
+                          />
+                        )}
                         <CommittedTextInput
                           ariaLabel={`Output label ${output.key}`}
                           value={output.label}
@@ -1370,10 +1684,11 @@ function FunctionManager({
                           <Trash2 size={14} />
                         </button>
                       </div>
-                      {bindingStatus(selectedFunction.workflow.rawJson, output.bind).idInvalid ||
-                      bindingStatus(selectedFunction.workflow.rawJson, output.bind).titleInvalid ? (
-                        <span className="field-error">Workflow node not found</span>
-                      ) : null}
+                      {!selectedIsRequest &&
+                      (bindingStatus(selectedFunction.workflow.rawJson, output.bind).idInvalid ||
+                        bindingStatus(selectedFunction.workflow.rawJson, output.bind).titleInvalid) ? (
+                          <span className="field-error">Workflow node not found</span>
+                        ) : null}
                     </div>
                   ))}
                 </div>
@@ -1384,11 +1699,16 @@ function FunctionManager({
           )}
         </div>
       </div>
-      {createWorkflowOpen ? (
-        <NewWorkflowDialog
-          onClose={() => setCreateWorkflowOpen(false)}
-          onSave={(name, workflow) => {
+      {createFunctionOpen ? (
+        <NewFunctionDialog
+          onClose={() => setCreateFunctionOpen(false)}
+          onSaveComfy={(name, workflow) => {
             const functionId = onAddWorkflow(name, workflow)
+            if (functionId) onSelectFunction(functionId)
+            return functionId
+          }}
+          onSaveRequest={(name, config) => {
+            const functionId = onAddRequestFunction(name, config)
             if (functionId) onSelectFunction(functionId)
             return functionId
           }}
@@ -1599,6 +1919,7 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
   const updateProjectMetadata = useProjectStore((state) => state.updateProjectMetadata)
   const deleteProject = useProjectStore((state) => state.deleteProject)
   const addFunctionFromWorkflow = useProjectStore((state) => state.addFunctionFromWorkflow)
+  const addRequestFunction = useProjectStore((state) => state.addRequestFunction)
   const updateFunction = useProjectStore((state) => state.updateFunction)
   const deleteFunction = useProjectStore((state) => state.deleteFunction)
   const addEndpoint = useProjectStore((state) => state.addEndpoint)
@@ -1641,6 +1962,17 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
       return functionId
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Invalid workflow JSON')
+      return undefined
+    }
+  }
+
+  const handleRequestFunctionAdd = (name: string, config: Partial<RequestFunctionConfig>) => {
+    try {
+      const functionId = addRequestFunction(name.trim() || 'Request Function', config)
+      setError(undefined)
+      return functionId
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Invalid request function')
       return undefined
     }
   }
@@ -1803,6 +2135,7 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
           selectedFunctionId={selectedFunctionId}
           onSelectFunction={setSelectedFunctionId}
           onAddWorkflow={handleWorkflowAdd}
+          onAddRequestFunction={handleRequestFunctionAdd}
           onUpdateFunction={updateFunction}
           onDeleteFunction={deleteFunction}
           onClose={() => setFunctionManagerOpen(false)}

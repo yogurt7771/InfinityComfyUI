@@ -262,19 +262,19 @@ describe('LeftPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Function Management' }))
     const managerDialog = screen.getByRole('dialog', { name: 'Function Management' })
 
-    fireEvent.click(within(managerDialog).getByRole('button', { name: 'Workflow' }))
-    const createDialog = screen.getByRole('dialog', { name: 'New Workflow' })
+    fireEvent.click(within(managerDialog).getByRole('button', { name: 'Function' }))
+    const createDialog = screen.getByRole('dialog', { name: 'New Function' })
 
-    fireEvent.change(within(createDialog).getByLabelText('Workflow name'), { target: { value: 'Kitchen Batch Render' } })
+    fireEvent.change(within(createDialog).getByLabelText('Function name'), { target: { value: 'Kitchen Batch Render' } })
     fireEvent.change(within(createDialog).getByLabelText('Workflow JSON'), {
       target: {
         value:
           '{"6":{"class_type":"CLIPTextEncode","_meta":{"title":"Positive Prompt"},"inputs":{"text":"warm"}},"20":{"class_type":"SaveImage","_meta":{"title":"Result_Image"},"inputs":{"filename_prefix":"render"}}}',
       },
     })
-    fireEvent.click(within(createDialog).getByRole('button', { name: 'Save workflow' }))
+    fireEvent.click(within(createDialog).getByRole('button', { name: 'Save function' }))
 
-    expect(screen.queryByRole('dialog', { name: 'New Workflow' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'New Function' })).not.toBeInTheDocument()
     expect(within(managerDialog).getByLabelText('Function name')).toHaveValue('Kitchen Batch Render')
     const listItem = within(within(managerDialog).getByLabelText('Managed function list')).getByRole('button', {
       name: /Kitchen Batch Render/,
@@ -283,6 +283,61 @@ describe('LeftPanel', () => {
     expect(Object.values(projectStore.getState().project.functions).some((fn) => fn.name === 'Kitchen Batch Render')).toBe(
       true,
     )
+  })
+
+  it('creates a request function in the new function dialog and edits request bindings', () => {
+    render(<SettingsPage onClose={() => undefined} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Function Management' }))
+    const managerDialog = screen.getByRole('dialog', { name: 'Function Management' })
+
+    fireEvent.click(within(managerDialog).getByRole('button', { name: 'Function' }))
+    const createDialog = screen.getByRole('dialog', { name: 'New Function' })
+
+    fireEvent.change(within(createDialog).getByLabelText('Function type'), { target: { value: 'request' } })
+    fireEvent.change(within(createDialog).getByLabelText('Function name'), { target: { value: 'JSON Request' } })
+    fireEvent.change(within(createDialog).getByLabelText('Request URL'), { target: { value: 'https://api.example.com/run' } })
+    fireEvent.change(within(createDialog).getByLabelText('Response parse mode'), { target: { value: 'json' } })
+    fireEvent.click(within(createDialog).getByRole('button', { name: 'Save function' }))
+
+    expect(screen.queryByRole('dialog', { name: 'New Function' })).not.toBeInTheDocument()
+    expect(within(managerDialog).getByLabelText('Function name')).toHaveValue('JSON Request')
+    expect(within(managerDialog).getByLabelText('Request URL')).toHaveValue('https://api.example.com/run')
+    expect(within(managerDialog).getByLabelText('Request method')).toHaveValue('GET')
+    expect(within(managerDialog).getByLabelText('Response parse mode')).toHaveValue('json')
+
+    fireEvent.click(within(managerDialog).getByRole('button', { name: 'Input' }))
+    fireEvent.change(within(managerDialog).getByLabelText('Input request target input_1'), {
+      target: { value: 'header' },
+    })
+    const requestKeyInput = within(managerDialog).getByLabelText('Input request key input_1')
+    fireEvent.change(requestKeyInput, {
+      target: { value: 'Authorization' },
+    })
+    fireEvent.blur(requestKeyInput)
+    fireEvent.click(within(managerDialog).getByRole('button', { name: 'Output' }))
+    fireEvent.change(within(managerDialog).getByLabelText('Output extractor output_2'), {
+      target: { value: 'response_json_path' },
+    })
+    const outputExpressionInput = within(managerDialog).getByLabelText('Output expression output_2')
+    fireEvent.change(outputExpressionInput, {
+      target: { value: '$.data.text' },
+    })
+    fireEvent.blur(outputExpressionInput)
+
+    const requestFunction = Object.values(projectStore.getState().project.functions).find((fn) => fn.name === 'JSON Request')
+    expect(requestFunction).toMatchObject({
+      workflow: { format: 'http_request' },
+      request: {
+        url: 'https://api.example.com/run',
+        method: 'GET',
+        responseParse: 'json',
+      },
+      inputs: [expect.objectContaining({ bind: expect.objectContaining({ requestTarget: 'header', path: 'Authorization' }) })],
+      outputs: expect.arrayContaining([
+        expect.objectContaining({ extract: expect.objectContaining({ source: 'response_json_path', path: '$.data.text' }) }),
+      ]),
+    })
   })
 
   it('keeps built-in nodes out of function management', () => {
@@ -415,8 +470,8 @@ describe('LeftPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Function Management' }))
     const dialog = screen.getByRole('dialog', { name: 'Function Management' })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Workflow' }))
-    const createDialog = screen.getByRole('dialog', { name: 'New Workflow' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Function' }))
+    const createDialog = screen.getByRole('dialog', { name: 'New Function' })
     const workflowJson = within(createDialog).getByLabelText('Workflow JSON')
 
     fireEvent.change(workflowJson, {

@@ -980,6 +980,32 @@ div.server-list-item {
     auto;
 }
 
+.request-input-binding-row {
+  grid-template-columns:
+    minmax(112px, 0.9fr)
+    minmax(170px, 1.4fr)
+    minmax(118px, 1fr)
+    96px
+    auto
+    auto;
+}
+
+.request-output-binding-row {
+  grid-template-columns:
+    minmax(190px, 1.35fr)
+    minmax(220px, 1.7fr)
+    minmax(118px, 1fr)
+    96px
+    auto;
+}
+
+.request-config-grid textarea {
+  min-height: 132px;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .searchable-select {
   position: relative;
   min-width: 0;

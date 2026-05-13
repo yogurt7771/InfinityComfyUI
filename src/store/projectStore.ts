@@ -33,6 +33,13 @@ import {
   isGeminiImageFunction,
   mergedGeminiImageConfig,
 } from '../domain/geminiImage'
+import {
+  compileRequestFunctionRequest,
+  createRequestFunction,
+  extractRequestFunctionOutputs,
+  isRequestFunction,
+  mergedRequestConfig,
+} from '../domain/requestFunction'
 import { createConfigPackage, createProjectPackage, type ConfigPackage, type FullProjectPackage } from '../domain/projectPackage'
 import { randomizeWorkflowSeeds } from '../domain/seed'
 import { selectEndpoint } from '../domain/scheduler'
@@ -55,6 +62,7 @@ import type {
   OpenAILlmConfig,
   PrimitiveInputValue,
   ProjectState,
+  RequestFunctionConfig,
   Resource,
   ResourceRef,
   ResourceType,
@@ -141,6 +149,17 @@ type QueuedGeminiImageRun = {
   runTotal: number
 }
 
+type QueuedRequestRun = {
+  taskId: string
+  resultNodeId: string
+  functionNodeId: string
+  functionId: string
+  functionDef: GenerationFunction
+  inputValues: RuntimeInputValues
+  runIndex: number
+  runTotal: number
+}
+
 type ProjectStoreDeps = {
   idFactory: () => string
   now: () => string
@@ -209,6 +228,7 @@ export type ProjectStoreState = {
   updateNumberResourceValue: (resourceId: string, value: number) => void
   replaceResourceMedia: (resourceId: string, type: MediaResourceKind, media: MediaResourcePayload) => void
   addFunctionFromWorkflow: (name: string, workflow: ComfyWorkflow) => string
+  addRequestFunction: (name: string, config?: Partial<RequestFunctionConfig>) => string
   updateFunction: (functionId: string, patch: Partial<Omit<GenerationFunction, 'id' | 'createdAt'>>) => void
   deleteFunction: (functionId: string) => void
   addFunctionNode: (functionId: string) => void
@@ -2139,6 +2159,324 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       }
     }
 
+    const resourceForRequestOutput = (
+      output: { key: string; label: string; type: ResourceType },
+      value: string,
+      item: QueuedRequestRun,
+      now: string,
+    ): { resource: Resource; asset?: ProjectState['assets'][string]; ref: ResourceRef } => {
+      const resourceId = runtime.idFactory()
+      if (output.type === 'number') {
+        const numericValue = Number(value)
+        return {
+          resource: {
+            id: resourceId,
+            type: 'number',
+            name: output.label,
+            value: Number.isFinite(numericValue) ? numericValue : 0,
+            source: {
+              kind: 'function_output',
+              functionNodeId: item.functionNodeId,
+              resultGroupNodeId: item.resultNodeId,
+              taskId: item.taskId,
+              outputKey: output.key,
+            },
+            metadata: {
+              workflowFunctionId: item.functionId,
+              createdAt: now,
+            },
+          },
+          ref: { resourceId, type: 'number' },
+        }
+      }
+
+      if (output.type === 'image' || output.type === 'video' || output.type === 'audio') {
+        const assetId = runtime.idFactory()
+        const filename = value.split(/[/?#]/).filter(Boolean).at(-1) || output.label
+        const mimeType = outputMimeType(output.type, filename)
+        const asset = {
+          id: assetId,
+          name: filename,
+          mimeType,
+          sizeBytes: 0,
+          blobUrl: value,
+          createdAt: now,
+        }
+        return {
+          asset,
+          resource: {
+            id: resourceId,
+            type: output.type,
+            name: filename,
+            value: {
+              assetId,
+              url: value,
+              filename,
+              mimeType,
+              sizeBytes: 0,
+            },
+            source: {
+              kind: 'function_output',
+              functionNodeId: item.functionNodeId,
+              resultGroupNodeId: item.resultNodeId,
+              taskId: item.taskId,
+              outputKey: output.key,
+            },
+            metadata: {
+              workflowFunctionId: item.functionId,
+              createdAt: now,
+            },
+          },
+          ref: { resourceId, type: output.type },
+        }
+      }
+
+      return {
+        resource: {
+          id: resourceId,
+          type: 'text',
+          name: output.label,
+          value,
+          source: {
+            kind: 'function_output',
+            functionNodeId: item.functionNodeId,
+            resultGroupNodeId: item.resultNodeId,
+            taskId: item.taskId,
+            outputKey: output.key,
+          },
+          metadata: {
+            workflowFunctionId: item.functionId,
+            createdAt: now,
+          },
+        },
+        ref: { resourceId, type: 'text' },
+      }
+    }
+
+    const executeRequestQueueItem = async (item: QueuedRequestRun) => {
+      const startedAt = runtime.now()
+      set((current) => ({
+        project: {
+          ...current.project,
+          tasks: {
+            ...current.project.tasks,
+            [item.taskId]: {
+              ...current.project.tasks[item.taskId]!,
+              status: 'running',
+              endpointId: 'request',
+              startedAt,
+              updatedAt: startedAt,
+            },
+          },
+          canvas: {
+            ...current.project.canvas,
+            nodes: current.project.canvas.nodes.map((node) =>
+              node.id === item.resultNodeId
+                ? { ...node, data: { ...node.data, endpointId: 'request', status: 'running', startedAt } }
+                : node,
+            ),
+          },
+        },
+      }))
+
+      try {
+        const request = compileRequestFunctionRequest(item.functionDef, item.inputValues, get().project.resources)
+        set((current) => ({
+          project: {
+            ...current.project,
+            tasks: {
+              ...current.project.tasks,
+              [item.taskId]: {
+                ...current.project.tasks[item.taskId]!,
+                requestSnapshot: request,
+                updatedAt: runtime.now(),
+              },
+            },
+          },
+        }))
+
+        const response = await fetch(request.url, request.init)
+        const responseText = await response.text()
+        if (!response.ok) throw new Error(`Request failed: ${response.status} ${responseText}`)
+        const responseJson = request.responseParse === 'json' ? JSON.parse(responseText || 'null') : undefined
+        const outputs = extractRequestFunctionOutputs(responseText, responseJson, item.functionDef.outputs)
+        const outputRefsByKey: Record<string, ResourceRef[]> = {}
+        const resourceRefs: ResourceRef[] = []
+        const newResources: Record<string, Resource> = {}
+        const newAssets: ProjectState['assets'] = {}
+        const completedAt = runtime.now()
+
+        for (const output of outputs) {
+          const refs: ResourceRef[] = []
+          for (const value of output.values) {
+            const created = resourceForRequestOutput(output, value, item, completedAt)
+            newResources[created.resource.id] = created.resource
+            if (created.asset) newAssets[created.asset.id] = created.asset
+            refs.push(created.ref)
+            resourceRefs.push(created.ref)
+          }
+          outputRefsByKey[output.key] = refs
+        }
+
+        set((current) => ({
+          project: {
+            ...current.project,
+            project: { ...current.project.project, updatedAt: completedAt },
+            resources: { ...current.project.resources, ...newResources },
+            assets: { ...current.project.assets, ...newAssets },
+            tasks: {
+              ...current.project.tasks,
+              [item.taskId]: {
+                ...current.project.tasks[item.taskId]!,
+                status: 'succeeded',
+                outputRefs: outputRefsByKey,
+                updatedAt: completedAt,
+                completedAt,
+              },
+            },
+            canvas: {
+              ...current.project.canvas,
+              nodes: current.project.canvas.nodes.map((node) =>
+                node.id === item.resultNodeId
+                  ? { ...node, data: { ...node.data, resources: resourceRefs, status: 'succeeded', completedAt } }
+                  : node,
+              ),
+            },
+          },
+        }))
+      } catch (err) {
+        const failedAt = runtime.now()
+        const errorMessage = err instanceof Error ? err.message : 'Request execution failed'
+        const taskError = { code: 'request_execution_failed', message: errorMessage, raw: err }
+        set((current) => ({
+          project: {
+            ...current.project,
+            project: { ...current.project.project, updatedAt: failedAt },
+            tasks: {
+              ...current.project.tasks,
+              [item.taskId]: {
+                ...current.project.tasks[item.taskId]!,
+                status: 'failed',
+                error: taskError,
+                updatedAt: failedAt,
+                completedAt: failedAt,
+              },
+            },
+            canvas: {
+              ...current.project.canvas,
+              nodes: current.project.canvas.nodes.map((node) =>
+                node.id === item.resultNodeId
+                  ? {
+                      ...node,
+                      data: {
+                        ...node.data,
+                        status: 'failed',
+                        error: { code: taskError.code, message: errorMessage },
+                        completedAt: failedAt,
+                      },
+                    }
+                  : node,
+              ),
+            },
+          },
+        }))
+      }
+    }
+
+    const runRequestFunctionNode = async (nodeId: string, requestedRunCount?: number) => {
+      const state = get()
+      const node = state.project.canvas.nodes.find((item) => item.id === nodeId && item.type === 'function')
+      if (!node) return
+      const functionId = String(node.data.functionId ?? '')
+      const functionDef = state.project.functions[functionId]
+      if (!functionDef || !isRequestFunction(functionDef)) return
+
+      const runCount = normalizedRunCount(
+        requestedRunCount ?? Number((node.data.runtime as { runCount?: number } | undefined)?.runCount ?? 1),
+      )
+      const now = runtime.now()
+      const inputValues = (node.data.inputValues ?? {}) as RuntimeInputValues
+      if (validateRequiredInputs(nodeId, functionDef, inputValues, state.project.resources).length > 0) return
+      const queuedNodes: CanvasNode[] = []
+      const queuedTasks: Record<string, ExecutionTask> = {}
+      const queuedRuns: QueuedRequestRun[] = []
+      const runRange = functionRunRange(state.project, nodeId, runCount)
+
+      for (let index = 1; index <= runCount; index += 1) {
+        const runIndex = runRange.start + index - 1
+        const taskId = runtime.idFactory()
+        const resultNodeId = runtime.idFactory()
+        const task: ExecutionTask = {
+          id: taskId,
+          functionNodeId: nodeId,
+          functionId,
+          runIndex,
+          runTotal: runRange.total,
+          status: 'queued',
+          inputRefs: resourceInputRefs(inputValues),
+          inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
+          inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
+          paramsSnapshot: {
+            runCount,
+            mode: 'http_request',
+            method: functionDef.request?.method,
+            responseParse: functionDef.request?.responseParse,
+          },
+          workflowTemplateSnapshot: {},
+          compiledWorkflowSnapshot: {},
+          seedPatchLog: [],
+          outputRefs: {},
+          createdAt: now,
+          updatedAt: now,
+        }
+        const resultNode: CanvasNode = {
+          id: resultNodeId,
+          type: 'result_group',
+          position: nextResultNodePosition([...state.project.canvas.nodes, ...queuedNodes], node, functionDef),
+          data: {
+            sourceFunctionNodeId: nodeId,
+            functionId,
+            taskId,
+            runIndex,
+            runTotal: runRange.total,
+            title: `Run ${runIndex}`,
+            endpointId: 'request',
+            resources: [],
+            status: 'queued',
+            seedPatchLog: [],
+            createdAt: now,
+          },
+        }
+
+        queuedTasks[taskId] = task
+        queuedNodes.push(resultNode)
+        queuedRuns.push({
+          taskId,
+          resultNodeId,
+          functionNodeId: nodeId,
+          functionId,
+          functionDef,
+          inputValues,
+          runIndex,
+          runTotal: runRange.total,
+        })
+      }
+
+      set((current) => ({
+        project: {
+          ...current.project,
+          project: { ...current.project.project, updatedAt: now },
+          tasks: { ...tasksWithRunTotal(current.project.tasks, nodeId, runRange.total), ...queuedTasks },
+          canvas: {
+            ...current.project.canvas,
+            nodes: [...nodesWithRunTotal(current.project.canvas.nodes, nodeId, runRange.total), ...queuedNodes],
+          },
+        },
+      }))
+
+      await Promise.all(queuedRuns.map((item) => executeRequestQueueItem(item)))
+    }
+
     const runOpenAiFunctionNode = async (nodeId: string, requestedRunCount?: number) => {
       const state = get()
       const node = state.project.canvas.nodes.find((item) => item.id === nodeId && item.type === 'function')
@@ -3051,6 +3389,24 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       return id
     },
 
+    addRequestFunction: (name, config) => {
+      const id = runtime.idFactory()
+      const now = runtime.now()
+      const generationFunction: GenerationFunction = {
+        ...createRequestFunction(id, name, now),
+        request: mergedRequestConfig(undefined, config),
+      }
+
+      set((state) => ({
+        project: {
+          ...state.project,
+          project: { ...state.project.project, updatedAt: now },
+          functions: { ...state.project.functions, [id]: generationFunction },
+        },
+      }))
+      return id
+    },
+
     updateFunction: (functionId, patch) => {
       const now = runtime.now()
       set((state) => {
@@ -3404,6 +3760,10 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         void runGeminiImageFunctionNode(nodeId, requestedRunCount)
         return
       }
+      if (isRequestFunction(functionDef)) {
+        void runRequestFunctionNode(nodeId, requestedRunCount)
+        return
+      }
 
       const runCount = normalizedRunCount(
         requestedRunCount ?? Number((node.data.runtime as { runCount?: number } | undefined)?.runCount ?? 1),
@@ -3536,6 +3896,10 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       }
       if (isGeminiImageFunction(functionDef)) {
         await runGeminiImageFunctionNode(nodeId, requestedRunCount)
+        return
+      }
+      if (isRequestFunction(functionDef)) {
+        await runRequestFunctionNode(nodeId, requestedRunCount)
         return
       }
 
@@ -3721,6 +4085,20 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           functionDef,
           inputValues,
           config: mergedGeminiImageConfig(functionDef.geminiImage, nodeConfig),
+          runIndex: task.runIndex,
+          runTotal: task.runTotal,
+        })
+        return
+      }
+
+      if (isRequestFunction(functionDef)) {
+        await executeRequestQueueItem({
+          taskId,
+          resultNodeId,
+          functionNodeId: task.functionNodeId,
+          functionId: task.functionId,
+          functionDef,
+          inputValues,
           runIndex: task.runIndex,
           runTotal: task.runTotal,
         })
