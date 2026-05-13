@@ -17,7 +17,13 @@ const safeSegment = (value, fallback) => {
   return cleaned || fallback
 }
 
-const appDirectory = () => (app.isPackaged ? path.dirname(app.getPath('exe')) : path.join(__dirname, '..'))
+const portableExecutableDirectory = () => {
+  const directory = process.env.PORTABLE_EXECUTABLE_DIR
+  return typeof directory === 'string' && directory.trim() ? directory : undefined
+}
+
+const appDirectory = () =>
+  app.isPackaged ? portableExecutableDirectory() ?? path.dirname(app.getPath('exe')) : path.join(__dirname, '..')
 
 const writableDirectory = async (directory) => {
   await fs.mkdir(directory, { recursive: true })

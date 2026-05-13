@@ -5040,28 +5040,47 @@ const startIndexedDbProjectPersistence = () => {
 }
 
 const startDesktopProjectPersistence = (storage: DesktopProjectStorage) => {
-  void storage
-    .loadProjectLibrary()
-    .then((savedLibrary) => {
-      const now = new Date().toISOString()
-      loadProjectLibrary(savedLibrary, now)
-    })
-    .catch(() => undefined)
-
   let saveTimer: number | undefined
+  let loadSettled = false
+  let pendingSaveState: ProjectStoreState | undefined
 
   const saveProjectLibrary = (state: ProjectStoreState) =>
     storage.saveProjectLibrary(serializeProjectLibrary(state)).catch(() => undefined)
 
-  projectStore.subscribe((state) => {
+  const scheduleSaveProjectLibrary = (state: ProjectStoreState) => {
+    if (!loadSettled) {
+      pendingSaveState = state
+      return
+    }
+
     if (saveTimer !== undefined) window.clearTimeout(saveTimer)
     saveTimer = window.setTimeout(() => {
       saveTimer = undefined
       void saveProjectLibrary(state)
     }, 250)
-  })
+  }
+
+  void storage
+    .loadProjectLibrary()
+    .then((savedLibrary) => {
+      const now = new Date().toISOString()
+      loadProjectLibrary(savedLibrary, now)
+      loadSettled = true
+      const stateToSave = pendingSaveState
+      pendingSaveState = undefined
+      if (stateToSave) scheduleSaveProjectLibrary(stateToSave)
+    })
+    .catch(() => {
+      loadSettled = true
+      const stateToSave = pendingSaveState
+      pendingSaveState = undefined
+      if (stateToSave) scheduleSaveProjectLibrary(stateToSave)
+    })
+
+  projectStore.subscribe((state) => scheduleSaveProjectLibrary(state))
 
   window.addEventListener('beforeunload', () => {
+    if (!loadSettled) return
     if (saveTimer !== undefined) window.clearTimeout(saveTimer)
     void saveProjectLibrary(projectStore.getState())
   })

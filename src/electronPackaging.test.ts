@@ -49,6 +49,7 @@ describe('Electron packaging configuration', () => {
   it('stores desktop projects beside the executable with per-project config and assets folders', () => {
     const main = readFileSync(resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
 
+    expect(main).toContain('PORTABLE_EXECUTABLE_DIR')
     expect(main).toContain("path.dirname(app.getPath('exe'))")
     expect(main).toContain("'projects'")
     expect(main).toContain("'config'")
