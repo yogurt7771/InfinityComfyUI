@@ -2260,6 +2260,17 @@ textarea[aria-invalid="true"] {
   display: grid;
 }
 
+.request-output-editor {
+  display: grid;
+  gap: 6px;
+}
+
+.request-output-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) 88px;
+  gap: 6px;
+}
+
 .openai-messages-header {
   display: flex;
   align-items: center;

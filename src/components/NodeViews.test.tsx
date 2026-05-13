@@ -4,13 +4,16 @@ import type { ComponentProps, ReactElement } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EmptyNodeView, FunctionNodeView, GroupNodeView, ResourceNodeView, ResultGroupNodeView } from './NodeViews'
 import { projectStore } from '../store/projectStore'
+import { createRequestFunction, REQUEST_FUNCTION_ID } from '../domain/requestFunction'
 import type {
+  FunctionOutputDef,
   GeminiImageConfig,
   GeminiLlmConfig,
   GenerationFunction,
   MediaResourceValue,
   OpenAIImageConfig,
   OpenAILlmConfig,
+  RequestFunctionConfig,
   Resource,
 } from '../domain/types'
 
@@ -82,6 +85,8 @@ const baseNodeData = {
   onUpdateGeminiConfig: vi.fn(),
   onUpdateOpenAiImageConfig: vi.fn(),
   onUpdateGeminiImageConfig: vi.fn(),
+  onUpdateRequestConfig: vi.fn(),
+  onUpdateRequestOutputs: vi.fn(),
   onDeleteNode: vi.fn(),
   onRenameNode: vi.fn(),
   onUpdateTextResourceValue: vi.fn(),
@@ -661,6 +666,64 @@ describe('NodeViews', () => {
       }),
     )
     expect(container.querySelector('.openai-node-editor')).not.toBeNull()
+  })
+
+  it('renders an editable one-off request node with media output type choices', () => {
+    const requestFunction = createRequestFunction(REQUEST_FUNCTION_ID, 'Request', '2026-05-13T00:00:00.000Z')
+    const requestConfig: RequestFunctionConfig = {
+      url: 'https://api.example.com/render',
+      method: 'POST',
+      headers: { Authorization: 'Bearer test' },
+      body: '{"prompt":"hello"}',
+      responseParse: 'json',
+    }
+    const requestOutputs: FunctionOutputDef[] = [
+      {
+        key: 'image',
+        label: 'Image',
+        type: 'image',
+        bind: {},
+        extract: { source: 'response_json_path', path: '$.image' },
+      },
+    ]
+    const onUpdateRequestConfig = vi.fn()
+    const onUpdateRequestOutputs = vi.fn()
+
+    render(
+      <ReactFlowProvider>
+        <FunctionNodeView
+          {...({
+            id: 'node_request',
+            selected: false,
+            data: {
+              ...baseNodeData,
+              functionsById: { [REQUEST_FUNCTION_ID]: requestFunction },
+              functionId: REQUEST_FUNCTION_ID,
+              title: 'Request',
+              requestConfig,
+              requestOutputs,
+              onUpdateRequestConfig,
+              onUpdateRequestOutputs,
+            },
+          } as unknown as ComponentProps<typeof FunctionNodeView>)}
+        />
+      </ReactFlowProvider>,
+    )
+
+    expect(screen.getByLabelText('Request settings')).toBeVisible()
+    fireEvent.change(screen.getByLabelText('Request URL'), { target: { value: 'https://api.example.com/new' } })
+    expect(onUpdateRequestConfig).toHaveBeenCalledWith('node_request', { url: 'https://api.example.com/new' })
+
+    const outputType = screen.getByLabelText('Request output type image')
+    expect(outputType).toHaveValue('image')
+    expect(within(outputType).getByRole('option', { name: 'image' })).toBeVisible()
+    expect(within(outputType).getByRole('option', { name: 'video' })).toBeVisible()
+    expect(within(outputType).getByRole('option', { name: 'audio' })).toBeVisible()
+
+    fireEvent.change(outputType, { target: { value: 'video' } })
+    expect(onUpdateRequestOutputs).toHaveBeenCalledWith('node_request', [
+      expect.objectContaining({ key: 'image', type: 'video' }),
+    ])
   })
 
   it('renders editable Gemini LLM settings with Gemini message roles', () => {

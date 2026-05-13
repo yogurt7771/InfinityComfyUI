@@ -12,6 +12,11 @@ export const GEMINI_LLM_FUNCTION_ID = 'fn_gemini_llm'
 
 type RuntimeInputValues = Record<string, PrimitiveInputValue | ResourceRef>
 type ResourceBlobLoader = (resource: Resource) => Promise<Blob>
+type GeminiLlmFunctionOptions = {
+  id?: string
+  name?: string
+  config?: Partial<GeminiLlmConfig>
+}
 
 type GeminiTextPart = {
   text: string
@@ -70,17 +75,26 @@ export const defaultGeminiLlmConfig = (): GeminiLlmConfig => ({
   ],
 })
 
-export function createGeminiLlmFunction(now: string): GenerationFunction {
+export function createGeminiLlmFunction(now: string, options: GeminiLlmFunctionOptions = {}): GenerationFunction {
+  const fallbackConfig = defaultGeminiLlmConfig()
+  const config = options.config
+    ? {
+        ...fallbackConfig,
+        ...options.config,
+        messages: options.config.messages ?? fallbackConfig.messages,
+      }
+    : fallbackConfig
+
   return {
-    id: GEMINI_LLM_FUNCTION_ID,
-    name: 'Gemini LLM',
+    id: options.id ?? GEMINI_LLM_FUNCTION_ID,
+    name: options.name ?? 'Gemini LLM',
     description: 'Gemini generateContent multimodal text generator',
     category: 'LLM',
     workflow: {
       format: 'gemini_generate_content',
       rawJson: {},
     },
-    gemini: defaultGeminiLlmConfig(),
+    gemini: config,
     inputs: Array.from({ length: 6 }, (_, index) => ({
       key: `image_${index + 1}`,
       label: `Image ${index + 1}`,

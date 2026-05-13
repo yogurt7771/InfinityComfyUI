@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { vi } from 'vitest'
 import { createProjectSlice } from './projectStore'
-import { OPENAI_LLM_FUNCTION_ID } from '../domain/openaiLlm'
+import { createOpenAILlmFunction, OPENAI_LLM_FUNCTION_ID } from '../domain/openaiLlm'
 import { GEMINI_LLM_FUNCTION_ID } from '../domain/geminiLlm'
 import { OPENAI_IMAGE_FUNCTION_ID } from '../domain/openaiImage'
 import { GEMINI_IMAGE_FUNCTION_ID } from '../domain/geminiImage'
+import { REQUEST_FUNCTION_ID } from '../domain/requestFunction'
 import type { GenerationFunction } from '../domain/types'
 
 describe('project store actions', () => {
@@ -3216,5 +3217,159 @@ describe('project store actions', () => {
       type: 'text',
       value: 'ok from request',
     })
+  })
+
+  it('keeps custom OpenAI and Gemini functions editable even when they use provider formats', () => {
+    const ids = ['fn_client_openai', 'fn_client_gemini']
+    const now = () => '2026-05-13T00:00:00.000Z'
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback_id',
+      now,
+    })
+
+    const openAiId = slice.getState().addOpenAILlmFunction('Client OpenAI', {
+      baseUrl: 'https://proxy.example.com/v1',
+      apiKey: 'sk-client',
+      model: 'gpt-client',
+    })
+    const geminiId = slice.getState().addGeminiLlmFunction('Client Gemini', {
+      baseUrl: 'https://proxy.example.com/gemini/v1beta',
+      apiKey: 'gemini-client',
+      model: 'gemini-client',
+    })
+
+    expect(openAiId).toBe('fn_client_openai')
+    expect(geminiId).toBe('fn_client_gemini')
+    expect(slice.getState().project.functions[openAiId]).toMatchObject({
+      id: 'fn_client_openai',
+      name: 'Client OpenAI',
+      workflow: { format: 'openai_chat_completions' },
+      openai: {
+        baseUrl: 'https://proxy.example.com/v1',
+        apiKey: 'sk-client',
+        model: 'gpt-client',
+      },
+    })
+    expect(slice.getState().project.functions[geminiId]).toMatchObject({
+      id: 'fn_client_gemini',
+      name: 'Client Gemini',
+      workflow: { format: 'gemini_generate_content' },
+      gemini: {
+        baseUrl: 'https://proxy.example.com/gemini/v1beta',
+        apiKey: 'gemini-client',
+        model: 'gemini-client',
+      },
+    })
+
+    slice.getState().updateFunction(openAiId, { name: 'Renamed Client OpenAI' })
+    expect(slice.getState().project.functions[openAiId]?.name).toBe('Renamed Client OpenAI')
+
+    const builtInOpenAi = slice.getState().project.functions[OPENAI_LLM_FUNCTION_ID] ?? createOpenAILlmFunction(now())
+    slice.getState().updateFunction(OPENAI_LLM_FUNCTION_ID, { name: 'Blocked Built In Rename' })
+    expect(slice.getState().project.functions[OPENAI_LLM_FUNCTION_ID]).toEqual(builtInOpenAi)
+  })
+
+  it('runs one-off request nodes with node-level config and media output definitions', async () => {
+    const originalFetch = globalThis.fetch
+    const fetchCalls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        fetchCalls.push({ input, init })
+        return new Response(
+          JSON.stringify({
+            image: 'https://cdn.example.com/result.png',
+            video: 'https://cdn.example.com/result.mp4',
+            audio: 'https://cdn.example.com/result.mp3',
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        )
+      }),
+    )
+    const ids = [
+      'node_request_builtin',
+      'task_request_builtin',
+      'result_request_builtin',
+      'resource_image',
+      'asset_image',
+      'resource_video',
+      'asset_video',
+      'resource_audio',
+      'asset_audio',
+    ]
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback_id',
+      now: () => '2026-05-13T00:00:00.000Z',
+    })
+
+    const nodeId = slice
+      .getState()
+      .addFunctionNodeAtPosition(REQUEST_FUNCTION_ID, { x: 100, y: 100 }, { autoBindRequiredInputs: false })
+    expect(nodeId).toBe('node_request_builtin')
+    slice.getState().updateFunctionNodeRequestConfig(nodeId!, {
+      url: 'https://api.example.com/media',
+      method: 'POST',
+      headers: { 'X-Request': 'canvas' },
+      body: '{"mode":"once"}',
+      responseParse: 'json',
+    })
+    slice.getState().updateFunctionNodeRequestOutputs(nodeId!, [
+      {
+        key: 'image',
+        label: 'Image',
+        type: 'image',
+        bind: {},
+        extract: { source: 'response_json_path', path: '$.image' },
+      },
+      {
+        key: 'video',
+        label: 'Video',
+        type: 'video',
+        bind: {},
+        extract: { source: 'response_json_path', path: '$.video' },
+      },
+      {
+        key: 'audio',
+        label: 'Audio',
+        type: 'audio',
+        bind: {},
+        extract: { source: 'response_json_path', path: '$.audio' },
+      },
+    ])
+
+    await slice.getState().runFunctionNodeWithComfy(nodeId!, 1)
+
+    expect(fetchCalls).toHaveLength(1)
+    expect(String(fetchCalls[0]?.input)).toBe('https://api.example.com/media')
+    expect(fetchCalls[0]?.init).toMatchObject({
+      method: 'POST',
+      headers: { 'X-Request': 'canvas' },
+      body: '{"mode":"once"}',
+    })
+    const state = slice.getState().project
+    expect(state.tasks.task_request_builtin.outputRefs).toEqual({
+      image: [{ resourceId: 'resource_image', type: 'image' }],
+      video: [{ resourceId: 'resource_video', type: 'video' }],
+      audio: [{ resourceId: 'resource_audio', type: 'audio' }],
+    })
+    expect(state.resources.resource_image).toMatchObject({
+      type: 'image',
+      name: 'result.png',
+      value: { url: 'https://cdn.example.com/result.png', mimeType: 'image/png' },
+    })
+    expect(state.resources.resource_video).toMatchObject({
+      type: 'video',
+      name: 'result.mp4',
+      value: { url: 'https://cdn.example.com/result.mp4', mimeType: 'video/mp4' },
+    })
+    expect(state.resources.resource_audio).toMatchObject({
+      type: 'audio',
+      name: 'result.mp3',
+      value: { url: 'https://cdn.example.com/result.mp3', mimeType: 'audio/mpeg' },
+    })
+    globalThis.fetch = originalFetch
   })
 })

@@ -856,4 +856,46 @@ describe('LeftPanel', () => {
     })
     expect(screen.getByText(/"prompt_1"/)).toBeVisible()
   })
+
+  it('creates custom OpenAI and Gemini LLM functions with provider settings', () => {
+    render(<SettingsPage onClose={() => undefined} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Function Management' }))
+    const managerDialog = screen.getByRole('dialog', { name: 'Function Management' })
+
+    fireEvent.click(within(managerDialog).getByRole('button', { name: 'Function' }))
+    let createDialog = screen.getByRole('dialog', { name: 'New Function' })
+    fireEvent.change(within(createDialog).getByLabelText('Function type'), { target: { value: 'openai' } })
+    fireEvent.change(within(createDialog).getByLabelText('Function name'), { target: { value: 'Client OpenAI LLM' } })
+    fireEvent.change(within(createDialog).getByLabelText('OpenAI base URL'), {
+      target: { value: 'https://proxy.example.com/openai/v1' },
+    })
+    fireEvent.change(within(createDialog).getByLabelText('OpenAI API key'), { target: { value: 'sk-test' } })
+    fireEvent.change(within(createDialog).getByLabelText('OpenAI model'), { target: { value: 'gpt-custom' } })
+    fireEvent.click(within(createDialog).getByRole('button', { name: 'Save function' }))
+
+    const functionList = within(managerDialog).getByLabelText('Managed function list')
+    expect(within(functionList).getByRole('button', { name: /Client OpenAI LLM/ })).toHaveClass('selected')
+    expect(within(managerDialog).getByLabelText('OpenAI base URL')).toHaveValue('https://proxy.example.com/openai/v1')
+    expect(within(managerDialog).getByLabelText('OpenAI API key')).toHaveValue('sk-test')
+    expect(within(managerDialog).getByLabelText('OpenAI model')).toHaveValue('gpt-custom')
+    expect((within(managerDialog).getByLabelText('OpenAI messages JSON') as HTMLTextAreaElement).value).toContain('"role"')
+
+    fireEvent.click(within(managerDialog).getByRole('button', { name: 'Function' }))
+    createDialog = screen.getByRole('dialog', { name: 'New Function' })
+    fireEvent.change(within(createDialog).getByLabelText('Function type'), { target: { value: 'gemini' } })
+    fireEvent.change(within(createDialog).getByLabelText('Function name'), { target: { value: 'Client Gemini LLM' } })
+    fireEvent.change(within(createDialog).getByLabelText('Gemini base URL'), {
+      target: { value: 'https://proxy.example.com/gemini/v1beta' },
+    })
+    fireEvent.change(within(createDialog).getByLabelText('Gemini API key'), { target: { value: 'gemini-test' } })
+    fireEvent.change(within(createDialog).getByLabelText('Gemini model'), { target: { value: 'gemini-custom' } })
+    fireEvent.click(within(createDialog).getByRole('button', { name: 'Save function' }))
+
+    expect(within(functionList).getByRole('button', { name: /Client Gemini LLM/ })).toHaveClass('selected')
+    expect(within(managerDialog).getByLabelText('Gemini base URL')).toHaveValue('https://proxy.example.com/gemini/v1beta')
+    expect(within(managerDialog).getByLabelText('Gemini API key')).toHaveValue('gemini-test')
+    expect(within(managerDialog).getByLabelText('Gemini model')).toHaveValue('gemini-custom')
+    expect((within(managerDialog).getByLabelText('Gemini messages JSON') as HTMLTextAreaElement).value).toContain('"role"')
+  })
 })

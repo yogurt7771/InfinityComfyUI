@@ -399,6 +399,49 @@ test('creates and runs a request function from function management', async ({ pa
   await expect(page.getByText(/hello from request function/).first()).toBeVisible()
 })
 
+test('creates a one-off request node and extracts media output from the canvas', async ({ page }) => {
+  await page.route('https://api.example.com/one-off-media', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      headers: { 'Access-Control-Allow-Origin': '*' },
+      body: JSON.stringify({ image: 'https://cdn.example.com/result.png' }),
+    })
+  })
+  await page.goto('/')
+
+  await addFunctionNodeFromCanvasMenu(page, /^Request$/)
+  await page.getByLabel('Request URL').fill('https://api.example.com/one-off-media')
+  await page.getByLabel('Request output type result').selectOption('image')
+  await page.getByLabel('Request output expression result').fill('$.image')
+  await page.getByRole('button', { name: 'Run function' }).click()
+
+  await expect(page.getByLabel('Run status succeeded')).toBeVisible()
+  await expect(page.getByText('result.png').first()).toBeVisible()
+})
+
+test('creates a custom OpenAI provider function from settings and adds it to the canvas', async ({ page }) => {
+  await page.goto('/')
+
+  const dialog = await openFunctionManagement(page)
+  await dialog.getByRole('button', { name: 'Function', exact: true }).click()
+  const createDialog = page.getByRole('dialog', { name: 'New Function' })
+  await createDialog.getByLabel('Function type').selectOption('openai')
+  await createDialog.getByLabel('Function name').fill('Browser OpenAI Provider')
+  await createDialog.getByLabel('OpenAI base URL').fill('https://proxy.example.com/v1')
+  await createDialog.getByLabel('OpenAI API key').fill('sk-browser')
+  await createDialog.getByLabel('OpenAI model').fill('gpt-browser')
+  await createDialog.getByRole('button', { name: 'Save function' }).click()
+  await expect(createDialog).toHaveCount(0)
+  await expect(dialog.getByLabel('OpenAI base URL')).toHaveValue('https://proxy.example.com/v1')
+  await dialog.getByRole('button', { name: 'Close Function Management' }).click()
+  await closeSettings(page)
+
+  await addFunctionNodeFromCanvasMenu(page, /Browser OpenAI Provider/)
+  await expect(page.locator('.workspace-canvas').getByText('Browser OpenAI Provider', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('OpenAI base URL')).toHaveValue('https://proxy.example.com/v1')
+})
+
 test('creates and runs the built-in OpenAI LLM node with editable messages', async ({ page }) => {
   await page.route('https://proxy.local/v1/chat/completions', async (route) => {
     const body = JSON.parse(route.request().postData() ?? '{}')

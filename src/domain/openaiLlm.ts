@@ -13,6 +13,11 @@ export const OPENAI_LLM_FUNCTION_ID = 'fn_openai_llm'
 
 type RuntimeInputValues = Record<string, PrimitiveInputValue | ResourceRef>
 type ResourceBlobLoader = (resource: Resource) => Promise<Blob>
+type OpenAILlmFunctionOptions = {
+  id?: string
+  name?: string
+  config?: Partial<OpenAILlmConfig>
+}
 
 type ChatCompletionTextPart = {
   type: 'text'
@@ -72,17 +77,26 @@ export const defaultOpenAILlmConfig = (): OpenAILlmConfig => ({
   ],
 })
 
-export function createOpenAILlmFunction(now: string): GenerationFunction {
+export function createOpenAILlmFunction(now: string, options: OpenAILlmFunctionOptions = {}): GenerationFunction {
+  const fallbackConfig = defaultOpenAILlmConfig()
+  const config = options.config
+    ? {
+        ...fallbackConfig,
+        ...options.config,
+        messages: options.config.messages ?? fallbackConfig.messages,
+      }
+    : fallbackConfig
+
   return {
-    id: OPENAI_LLM_FUNCTION_ID,
-    name: 'OpenAI LLM',
+    id: options.id ?? OPENAI_LLM_FUNCTION_ID,
+    name: options.name ?? 'OpenAI LLM',
     description: 'Chat Completions multimodal text generator',
     category: 'LLM',
     workflow: {
       format: 'openai_chat_completions',
       rawJson: {},
     },
-    openai: defaultOpenAILlmConfig(),
+    openai: config,
     inputs: Array.from({ length: 6 }, (_, index) => ({
       key: `image_${index + 1}`,
       label: `Image ${index + 1}`,

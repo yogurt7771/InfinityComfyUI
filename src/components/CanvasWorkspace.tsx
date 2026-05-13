@@ -280,6 +280,8 @@ function CanvasSurface() {
   const updateFunctionNodeGeminiConfig = useProjectStore((state) => state.updateFunctionNodeGeminiConfig)
   const updateFunctionNodeOpenAiImageConfig = useProjectStore((state) => state.updateFunctionNodeOpenAiImageConfig)
   const updateFunctionNodeGeminiImageConfig = useProjectStore((state) => state.updateFunctionNodeGeminiImageConfig)
+  const updateFunctionNodeRequestConfig = useProjectStore((state) => state.updateFunctionNodeRequestConfig)
+  const updateFunctionNodeRequestOutputs = useProjectStore((state) => state.updateFunctionNodeRequestOutputs)
   const connectNodes = useProjectStore((state) => state.connectNodes)
   const deleteEdges = useProjectStore((state) => state.deleteEdges)
   const updateNodePosition = useProjectStore((state) => state.updateNodePosition)
@@ -368,6 +370,8 @@ function CanvasSurface() {
           onUpdateGeminiConfig: updateFunctionNodeGeminiConfig,
           onUpdateOpenAiImageConfig: updateFunctionNodeOpenAiImageConfig,
           onUpdateGeminiImageConfig: updateFunctionNodeGeminiImageConfig,
+          onUpdateRequestConfig: updateFunctionNodeRequestConfig,
+          onUpdateRequestOutputs: updateFunctionNodeRequestOutputs,
           onDeleteNode: deleteNode,
           onRenameNode: renameNode,
           onUpdateTextResourceValue: updateTextResourceValue,
@@ -396,6 +400,8 @@ function CanvasSurface() {
       updateFunctionNodeGeminiConfig,
       updateFunctionNodeOpenAiImageConfig,
       updateFunctionNodeGeminiImageConfig,
+      updateFunctionNodeRequestConfig,
+      updateFunctionNodeRequestOutputs,
       updateNodeSize,
       updateNumberResourceValue,
       updateTextResourceValue,

@@ -24,6 +24,7 @@ export type ExtractedRequestOutput = {
 }
 
 export const requestMethods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'] as const
+export const REQUEST_FUNCTION_ID = 'fn_request'
 
 export const isRequestFunction = (fn: GenerationFunction) => fn.workflow.format === 'http_request'
 

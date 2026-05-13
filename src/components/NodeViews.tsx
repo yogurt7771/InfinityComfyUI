@@ -24,6 +24,7 @@ import { defaultOpenAILlmConfig, isOpenAILlmFunction, mergedOpenAILlmConfig } fr
 import { defaultGeminiLlmConfig, isGeminiLlmFunction, mergedGeminiLlmConfig } from '../domain/geminiLlm'
 import { defaultOpenAIImageConfig, isOpenAIImageFunction, mergedOpenAIImageConfig } from '../domain/openaiImage'
 import { defaultGeminiImageConfig, isGeminiImageFunction, mergedGeminiImageConfig } from '../domain/geminiImage'
+import { isRequestFunction, mergedRequestConfig, requestMethods } from '../domain/requestFunction'
 import { readFileAsMediaResource, type MediaResourceKind, type MediaResourcePayload } from '../domain/resourceFiles'
 import { projectStore } from '../store/projectStore'
 import type {
@@ -40,8 +41,10 @@ import type {
   OpenAILlmContentPart,
   OpenAILlmMessage,
   PrimitiveInputValue,
+  RequestFunctionConfig,
   Resource,
   ResourceRef,
+  ResourceType,
 } from '../domain/types'
 import { ResourcePreview } from './ResourcePreview'
 
@@ -67,6 +70,8 @@ type WorkbenchNodeData = {
   geminiConfig?: GeminiLlmConfig
   openaiImageConfig?: OpenAIImageConfig
   geminiImageConfig?: GeminiImageConfig
+  requestConfig?: RequestFunctionConfig
+  requestOutputs?: FunctionOutputDef[]
   missingInputKeys?: string[]
   resources?: Array<{ resourceId: string; type: string }>
   sourceFunctionNodeId?: string
@@ -93,6 +98,8 @@ type WorkbenchNodeData = {
   onUpdateGeminiConfig: (nodeId: string, patch: Partial<GeminiLlmConfig>) => void
   onUpdateOpenAiImageConfig: (nodeId: string, patch: Partial<OpenAIImageConfig>) => void
   onUpdateGeminiImageConfig: (nodeId: string, patch: Partial<GeminiImageConfig>) => void
+  onUpdateRequestConfig: (nodeId: string, patch: Partial<RequestFunctionConfig>) => void
+  onUpdateRequestOutputs: (nodeId: string, outputs: FunctionOutputDef[]) => void
   onDeleteNode: (nodeId: string) => void
   onRenameNode: (nodeId: string, title: string) => void
   onUpdateFunctionInputValue: (nodeId: string, inputKey: string, value: PrimitiveInputValue) => void
@@ -106,6 +113,8 @@ const outputHandleId = (outputKey: string) => `output:${outputKey}`
 const resourceHandleId = (resourceId: string) => `resource:${resourceId}`
 const resultHandleId = (resourceId: string) => `result:${resourceId}`
 const activeResultStatuses = new Set(['queued', 'running', 'fetching_outputs'])
+const requestOutputSources: FunctionOutputDef['extract']['source'][] = ['response_json_path', 'response_text_regex']
+const resourceTypes: ResourceType[] = ['text', 'number', 'image', 'video', 'audio']
 
 const commitActiveTextControl = () => {
   const activeElement = document.activeElement
@@ -1111,6 +1120,164 @@ function GeminiLlmEditor({
   )
 }
 
+function RequestEditor({
+  nodeId,
+  config,
+  outputs,
+  onUpdateConfig,
+  onUpdateOutputs,
+}: {
+  nodeId: string
+  config: RequestFunctionConfig
+  outputs: FunctionOutputDef[]
+  onUpdateConfig: (nodeId: string, patch: Partial<RequestFunctionConfig>) => void
+  onUpdateOutputs: (nodeId: string, outputs: FunctionOutputDef[]) => void
+}) {
+  const [headersError, setHeadersError] = useState<string>()
+
+  const commitHeaders = (value: string) => {
+    try {
+      const parsed = value.trim() ? JSON.parse(value) : {}
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Headers must be an object')
+      onUpdateConfig(nodeId, {
+        headers: Object.fromEntries(Object.entries(parsed).map(([key, headerValue]) => [key, String(headerValue)])),
+      })
+      setHeadersError(undefined)
+    } catch (err) {
+      setHeadersError(err instanceof Error ? err.message : 'Invalid headers JSON')
+    }
+  }
+
+  const updateOutput = (index: number, patch: Partial<FunctionOutputDef>) => {
+    onUpdateOutputs(
+      nodeId,
+      outputs.map((output, outputIndex) =>
+        outputIndex === index
+          ? { ...output, ...patch, bind: { ...output.bind, ...patch.bind }, extract: { ...output.extract, ...patch.extract } }
+          : output,
+      ),
+    )
+  }
+
+  const updateOutputExpression = (index: number, output: FunctionOutputDef, value: string) => {
+    updateOutput(
+      index,
+      output.extract.source === 'response_text_regex'
+        ? { extract: { source: output.extract.source, pattern: value, path: undefined } }
+        : { extract: { source: output.extract.source, path: value, pattern: undefined } },
+    )
+  }
+
+  return (
+    <div className="request-node-editor openai-node-editor nodrag nopan" aria-label="Request settings">
+      <div className="openai-config-grid">
+        <label>
+          <span>URL</span>
+          <input
+            aria-label="Request URL"
+            value={config.url}
+            onChange={(event) => onUpdateConfig(nodeId, { url: event.target.value })}
+          />
+        </label>
+        <label>
+          <span>Method</span>
+          <select
+            aria-label="Request method"
+            value={config.method}
+            onChange={(event) => onUpdateConfig(nodeId, { method: event.target.value })}
+          >
+            {requestMethods.map((method) => (
+              <option key={method} value={method}>
+                {method}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <label className="openai-api-key">
+        <span>Headers JSON</span>
+        <CommittedTextarea
+          ariaLabel="Request headers"
+          className={headersError ? 'invalid-field' : undefined}
+          rows={4}
+          value={JSON.stringify(config.headers, null, 2)}
+          onCommit={commitHeaders}
+        />
+      </label>
+      {headersError ? <span className="field-error">{headersError}</span> : null}
+      <label className="openai-api-key">
+        <span>Body</span>
+        <textarea
+          aria-label="Request body"
+          rows={4}
+          value={config.body}
+          onChange={(event) => onUpdateConfig(nodeId, { body: event.target.value })}
+        />
+      </label>
+      <label className="openai-api-key">
+        <span>Response parse</span>
+        <select
+          aria-label="Response parse mode"
+          value={config.responseParse}
+          onChange={(event) =>
+            onUpdateConfig(nodeId, { responseParse: event.target.value as RequestFunctionConfig['responseParse'] })
+          }
+        >
+          <option value="json">json</option>
+          <option value="text">text</option>
+        </select>
+      </label>
+      <div className="request-output-editor" aria-label="Request output definitions">
+        {outputs.map((output, index) => {
+          const expression =
+            output.extract.source === 'response_text_regex'
+              ? output.extract.pattern || output.bind.path || '(.+)'
+              : output.extract.path || output.bind.path || '$'
+          return (
+            <div className="request-output-row" key={`${output.key}_${index}`}>
+              <select
+                aria-label={`Request output extractor ${output.key}`}
+                value={output.extract.source}
+                onChange={(event) =>
+                  updateOutput(index, {
+                    extract: {
+                      source: event.target.value as FunctionOutputDef['extract']['source'],
+                      path: event.target.value === 'response_json_path' ? expression : undefined,
+                      pattern: event.target.value === 'response_text_regex' ? expression : undefined,
+                    },
+                  })
+                }
+              >
+                {requestOutputSources.map((source) => (
+                  <option key={source} value={source}>
+                    {source}
+                  </option>
+                ))}
+              </select>
+              <input
+                aria-label={`Request output expression ${output.key}`}
+                value={expression}
+                onChange={(event) => updateOutputExpression(index, output, event.target.value)}
+              />
+              <select
+                aria-label={`Request output type ${output.key}`}
+                value={output.type}
+                onChange={(event) => updateOutput(index, { type: event.target.value as ResourceType })}
+              >
+                {resourceTypes.map((type) => (
+                  <option key={type} value={type}>
+                    {type}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 const openAiImageSizes: OpenAIImageConfig['size'][] = ['auto', '1024x1024', '1024x1536', '1536x1024']
 const openAiImageQualities: OpenAIImageConfig['quality'][] = ['auto', 'low', 'medium', 'high']
 const openAiImageBackgrounds: OpenAIImageConfig['background'][] = ['auto', 'transparent', 'opaque']
@@ -1593,7 +1760,9 @@ export const FunctionNodeView = memo(({ id, data, selected }: NodeProps) => {
   const functionDef = nodeData.functionId ? nodeData.functionsById[nodeData.functionId] : undefined
   const title = String(nodeData.title ?? functionDef?.name ?? 'Function')
   const inputs = functionDef?.inputs ?? []
-  const outputs = functionDef?.outputs ?? []
+  const requestNodeOutputs = Array.isArray(nodeData.requestOutputs) ? nodeData.requestOutputs : undefined
+  const isRequestNode = functionDef ? isRequestFunction(functionDef) : false
+  const outputs = isRequestNode && requestNodeOutputs?.length ? requestNodeOutputs : (functionDef?.outputs ?? [])
   const inputValues = (nodeData.inputValues ?? {}) as Record<string, PrimitiveInputValue | ResourceRef>
   const missingInputKeys = new Set(
     Array.isArray(nodeData.missingInputKeys) ? nodeData.missingInputKeys.map((key) => String(key)) : [],
@@ -1615,6 +1784,7 @@ export const FunctionNodeView = memo(({ id, data, selected }: NodeProps) => {
   const geminiImageConfig = isGeminiImageNode
     ? mergedGeminiImageConfig(functionDef?.geminiImage ?? defaultGeminiImageConfig(), nodeData.geminiImageConfig)
     : undefined
+  const requestConfig = isRequestNode ? mergedRequestConfig(functionDef?.request, nodeData.requestConfig) : undefined
   const shouldBalanceSlotColumns = inputs.length <= 6 && outputs.length <= 6
   const slotRowCount = shouldBalanceSlotColumns ? Math.max(inputs.length, outputs.length) : 0
   const inputSpacerCount = shouldBalanceSlotColumns ? slotRowCount - inputs.length : 0
@@ -1632,6 +1802,7 @@ export const FunctionNodeView = memo(({ id, data, selected }: NodeProps) => {
         isOpenAiNode ? 'openai-node' : '',
         isGeminiNode ? 'gemini-node' : '',
         isOpenAiImageNode || isGeminiImageNode ? 'image-generation-node' : '',
+        isRequestNode ? 'request-node' : '',
       ]
         .filter(Boolean)
         .join(' ')}
@@ -1701,6 +1872,15 @@ export const FunctionNodeView = memo(({ id, data, selected }: NodeProps) => {
           nodeId={id}
           config={geminiImageConfig}
           onUpdateConfig={nodeData.onUpdateGeminiImageConfig}
+        />
+      ) : null}
+      {requestConfig ? (
+        <RequestEditor
+          nodeId={id}
+          config={requestConfig}
+          outputs={outputs}
+          onUpdateConfig={nodeData.onUpdateRequestConfig}
+          onUpdateOutputs={nodeData.onUpdateRequestOutputs}
         />
       ) : null}
       <div className="node-actions">

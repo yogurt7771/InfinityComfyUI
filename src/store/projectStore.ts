@@ -39,6 +39,7 @@ import {
   extractRequestFunctionOutputs,
   isRequestFunction,
   mergedRequestConfig,
+  REQUEST_FUNCTION_ID,
 } from '../domain/requestFunction'
 import { createConfigPackage, createProjectPackage, type ConfigPackage, type FullProjectPackage } from '../domain/projectPackage'
 import { randomizeWorkflowSeeds } from '../domain/seed'
@@ -54,6 +55,7 @@ import type {
   ExecutionInputSnapshot,
   ExecutionTask,
   FunctionInputDef,
+  FunctionOutputDef,
   GeminiImageConfig,
   GeminiLlmConfig,
   GenerationFunction,
@@ -229,6 +231,8 @@ export type ProjectStoreState = {
   replaceResourceMedia: (resourceId: string, type: MediaResourceKind, media: MediaResourcePayload) => void
   addFunctionFromWorkflow: (name: string, workflow: ComfyWorkflow) => string
   addRequestFunction: (name: string, config?: Partial<RequestFunctionConfig>) => string
+  addOpenAILlmFunction: (name: string, config?: Partial<OpenAILlmConfig>) => string
+  addGeminiLlmFunction: (name: string, config?: Partial<GeminiLlmConfig>) => string
   updateFunction: (functionId: string, patch: Partial<Omit<GenerationFunction, 'id' | 'createdAt'>>) => void
   deleteFunction: (functionId: string) => void
   addFunctionNode: (functionId: string) => void
@@ -243,6 +247,8 @@ export type ProjectStoreState = {
   updateFunctionNodeGeminiConfig: (nodeId: string, patch: Partial<GeminiLlmConfig>) => void
   updateFunctionNodeOpenAiImageConfig: (nodeId: string, patch: Partial<OpenAIImageConfig>) => void
   updateFunctionNodeGeminiImageConfig: (nodeId: string, patch: Partial<GeminiImageConfig>) => void
+  updateFunctionNodeRequestConfig: (nodeId: string, patch: Partial<RequestFunctionConfig>) => void
+  updateFunctionNodeRequestOutputs: (nodeId: string, outputs: FunctionOutputDef[]) => void
   runFunctionNode: (nodeId: string, runCount?: number) => void
   runFunctionNodeWithComfy: (nodeId: string, runCount?: number) => Promise<void>
   rerunResultNode: (nodeId: string) => Promise<void>
@@ -291,6 +297,7 @@ const initialProject = (now: string, options: ProjectCreateOptions & { id?: stri
   const geminiFunction = createGeminiLlmFunction(now)
   const openAiImageFunction = createOpenAIImageFunction(now)
   const geminiImageFunction = createGeminiImageFunction(now)
+  const requestFunction = createRequestFunction(REQUEST_FUNCTION_ID, 'Request', now)
   return {
     schemaVersion: '1.0.0',
     project: {
@@ -312,6 +319,7 @@ const initialProject = (now: string, options: ProjectCreateOptions & { id?: stri
       [geminiFunction.id]: geminiFunction,
       [openAiImageFunction.id]: openAiImageFunction,
       [geminiImageFunction.id]: geminiImageFunction,
+      [requestFunction.id]: requestFunction,
     },
     tasks: {},
     comfy: {
@@ -346,6 +354,7 @@ const syncBuiltInFunction = (current: GenerationFunction | undefined, latest: Ge
     gemini: current.gemini ? { ...latest.gemini, ...current.gemini } : latest.gemini,
     openaiImage: current.openaiImage ? { ...latest.openaiImage, ...current.openaiImage } : latest.openaiImage,
     geminiImage: current.geminiImage ? { ...latest.geminiImage, ...current.geminiImage } : latest.geminiImage,
+    request: current.request ? { ...latest.request, ...current.request } : latest.request,
   }
 }
 
@@ -355,6 +364,7 @@ const withBuiltInFunctions = (project: ProjectState, now: string): ProjectState 
     createGeminiLlmFunction(now),
     createOpenAIImageFunction(now),
     createGeminiImageFunction(now),
+    createRequestFunction(REQUEST_FUNCTION_ID, 'Request', now),
   ]
   const builtIns = Object.fromEntries(
     latestBuiltIns.map((builtInFunction) => [
@@ -2390,13 +2400,25 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       const functionId = String(node.data.functionId ?? '')
       const functionDef = state.project.functions[functionId]
       if (!functionDef || !isRequestFunction(functionDef)) return
+      const requestConfig = mergedRequestConfig(
+        functionDef.request,
+        node.data.requestConfig as Partial<RequestFunctionConfig> | undefined,
+      )
+      const requestOutputs = Array.isArray(node.data.requestOutputs)
+        ? (node.data.requestOutputs as FunctionOutputDef[])
+        : undefined
+      const runtimeFunctionDef: GenerationFunction = {
+        ...functionDef,
+        request: requestConfig,
+        outputs: requestOutputs?.length ? requestOutputs : functionDef.outputs,
+      }
 
       const runCount = normalizedRunCount(
         requestedRunCount ?? Number((node.data.runtime as { runCount?: number } | undefined)?.runCount ?? 1),
       )
       const now = runtime.now()
       const inputValues = (node.data.inputValues ?? {}) as RuntimeInputValues
-      if (validateRequiredInputs(nodeId, functionDef, inputValues, state.project.resources).length > 0) return
+      if (validateRequiredInputs(nodeId, runtimeFunctionDef, inputValues, state.project.resources).length > 0) return
       const queuedNodes: CanvasNode[] = []
       const queuedTasks: Record<string, ExecutionTask> = {}
       const queuedRuns: QueuedRequestRun[] = []
@@ -2415,12 +2437,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           status: 'queued',
           inputRefs: resourceInputRefs(inputValues),
           inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
-          inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
+          inputValuesSnapshot: executionInputSnapshot(runtimeFunctionDef, inputValues, state.project.resources),
           paramsSnapshot: {
             runCount,
             mode: 'http_request',
-            method: functionDef.request?.method,
-            responseParse: functionDef.request?.responseParse,
+            method: runtimeFunctionDef.request?.method,
+            responseParse: runtimeFunctionDef.request?.responseParse,
           },
           workflowTemplateSnapshot: {},
           compiledWorkflowSnapshot: {},
@@ -2432,7 +2454,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         const resultNode: CanvasNode = {
           id: resultNodeId,
           type: 'result_group',
-          position: nextResultNodePosition([...state.project.canvas.nodes, ...queuedNodes], node, functionDef),
+          position: nextResultNodePosition([...state.project.canvas.nodes, ...queuedNodes], node, runtimeFunctionDef),
           data: {
             sourceFunctionNodeId: nodeId,
             functionId,
@@ -2455,7 +2477,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           resultNodeId,
           functionNodeId: nodeId,
           functionId,
-          functionDef,
+          functionDef: runtimeFunctionDef,
           inputValues,
           runIndex,
           runTotal: runRange.total,
@@ -3407,6 +3429,44 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       return id
     },
 
+    addOpenAILlmFunction: (name, config) => {
+      const id = runtime.idFactory()
+      const now = runtime.now()
+      const generationFunction = createOpenAILlmFunction(now, {
+        id,
+        name,
+        config,
+      })
+
+      set((state) => ({
+        project: {
+          ...state.project,
+          project: { ...state.project.project, updatedAt: now },
+          functions: { ...state.project.functions, [id]: generationFunction },
+        },
+      }))
+      return id
+    },
+
+    addGeminiLlmFunction: (name, config) => {
+      const id = runtime.idFactory()
+      const now = runtime.now()
+      const generationFunction = createGeminiLlmFunction(now, {
+        id,
+        name,
+        config,
+      })
+
+      set((state) => ({
+        project: {
+          ...state.project,
+          project: { ...state.project.project, updatedAt: now },
+          functions: { ...state.project.functions, [id]: generationFunction },
+        },
+      }))
+      return id
+    },
+
     updateFunction: (functionId, patch) => {
       const now = runtime.now()
       set((state) => {
@@ -3729,6 +3789,62 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
                 data: {
                   ...node.data,
                   geminiImageConfig: mergedGeminiImageConfig(currentConfig, patch),
+                },
+              }
+            }),
+          },
+        },
+      }))
+    },
+
+    updateFunctionNodeRequestConfig: (nodeId, patch) => {
+      const now = runtime.now()
+      set((state) => ({
+        project: {
+          ...state.project,
+          project: { ...state.project.project, updatedAt: now },
+          canvas: {
+            ...state.project.canvas,
+            nodes: state.project.canvas.nodes.map((node) => {
+              if (node.id !== nodeId || node.type !== 'function') return node
+              const functionId = typeof node.data.functionId === 'string' ? node.data.functionId : undefined
+              const functionDef = functionId ? state.project.functions[functionId] : undefined
+              if (!functionDef || !isRequestFunction(functionDef)) return node
+              const currentConfig = mergedRequestConfig(
+                functionDef.request,
+                node.data.requestConfig as Partial<RequestFunctionConfig> | undefined,
+              )
+              return {
+                ...node,
+                data: {
+                  ...node.data,
+                  requestConfig: mergedRequestConfig(currentConfig, patch),
+                },
+              }
+            }),
+          },
+        },
+      }))
+    },
+
+    updateFunctionNodeRequestOutputs: (nodeId, outputs) => {
+      const now = runtime.now()
+      set((state) => ({
+        project: {
+          ...state.project,
+          project: { ...state.project.project, updatedAt: now },
+          canvas: {
+            ...state.project.canvas,
+            nodes: state.project.canvas.nodes.map((node) => {
+              if (node.id !== nodeId || node.type !== 'function') return node
+              const functionId = typeof node.data.functionId === 'string' ? node.data.functionId : undefined
+              const functionDef = functionId ? state.project.functions[functionId] : undefined
+              if (!functionDef || !isRequestFunction(functionDef)) return node
+              return {
+                ...node,
+                data: {
+                  ...node.data,
+                  requestOutputs: outputs,
                 },
               }
             }),
