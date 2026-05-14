@@ -1243,20 +1243,29 @@ textarea[aria-invalid="true"] {
 
 .workspace-canvas .react-flow__handle {
   z-index: 6;
-  width: 12px;
-  height: 12px;
-  border: 2px solid var(--panel);
+  width: 18px;
+  height: 18px;
+  border: 3px solid var(--panel);
   background: #24343a;
   box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.08);
+  cursor: crosshair;
   pointer-events: all;
 }
 
 .workspace-canvas .react-flow__handle-right {
-  right: -7px;
+  right: -11px;
 }
 
 .workspace-canvas .react-flow__handle-left {
-  left: -7px;
+  left: -11px;
+}
+
+.workspace-canvas .react-flow__handle:hover,
+.workspace-canvas .react-flow__handle:focus-visible {
+  background: var(--teal);
+  box-shadow:
+    0 0 0 3px rgba(17, 130, 138, 0.16),
+    0 0 0 1px rgba(15, 23, 42, 0.1);
 }
 
 .workspace-canvas .react-flow__edge.input-edge .react-flow__edge-path {

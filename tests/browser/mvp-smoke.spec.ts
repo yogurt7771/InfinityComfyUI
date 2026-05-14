@@ -813,6 +813,39 @@ test('opens the add-node menu from canvas double-click and unfinished connection
   await expect(page.getByRole('menuitem', { name: 'Function Node' })).toHaveCount(0)
 })
 
+test('opens the add-node menu from handle clicks and places connected nodes beside the clicked node', async ({ page }) => {
+  await page.goto('/')
+
+  await addTestWorkflow(page)
+  const canvas = page.locator('.workspace-canvas')
+  await canvas.dblclick({ position: { x: 220, y: 360 } })
+  await page.getByRole('menuitem', { name: 'Text Asset' }).click()
+  const resourceNode = page.locator('.react-flow__node-resource').first()
+  const resourceBox = await resourceNode.boundingBox()
+  if (!resourceBox) throw new Error('resource node not found')
+
+  await resourceNode.locator('.react-flow__handle-right').click()
+  await expect(page.getByRole('menu', { name: 'Add node' })).toBeVisible()
+  await page.getByRole('menuitem', { name: testWorkflowName }).click()
+  const functionNode = page.locator('.react-flow__node-function').filter({ hasText: testWorkflowName }).first()
+  const functionBox = await functionNode.boundingBox()
+  if (!functionBox) throw new Error('function node not created from output handle click')
+  expect(Math.abs(functionBox.y - resourceBox.y)).toBeLessThanOrEqual(8)
+  expect(functionBox.x).toBeGreaterThan(resourceBox.x + resourceBox.width + 70)
+  await expect(page.locator('.react-flow__edge.input-edge')).toHaveCount(1)
+
+  await functionNode.locator('[data-slot-handle="input:prompt"]').click()
+  await expect(page.getByRole('menu', { name: 'Add node' })).toBeVisible()
+  await page.getByRole('menuitem', { name: 'Text Asset' }).click()
+  const resourceNodes = page.locator('.react-flow__node-resource')
+  const createdResourceNode = resourceNodes.nth(1)
+  const createdResourceBox = await createdResourceNode.boundingBox()
+  if (!createdResourceBox) throw new Error('resource node not created from input handle click')
+  expect(Math.abs(createdResourceBox.y - functionBox.y)).toBeLessThanOrEqual(8)
+  expect(createdResourceBox.x + createdResourceBox.width).toBeLessThan(functionBox.x - 70)
+  await expect(page.locator('.react-flow__edge.input-edge')).toHaveCount(1)
+})
+
 test('keeps the add-node menu inside the viewport near canvas edges', async ({ page }) => {
   await page.goto('/')
 

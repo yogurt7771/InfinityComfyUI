@@ -43,6 +43,10 @@ import type {
 type AddNodeMenuState = {
   screen: { x: number; y: number }
   flow: { x: number; y: number }
+  placement?: {
+    anchorNodeId: string
+    side: 'left' | 'right'
+  }
   connection?:
     | {
         kind: 'source'
@@ -137,6 +141,9 @@ const defaultFunctionHeight = (functionDef: GenerationFunction | undefined) => {
   const format = functionDef?.workflow.format
   return format && format !== 'comfyui_api_json' ? 620 : undefined
 }
+
+const MENU_NODE_GAP = 96
+const DEFAULT_ASSET_NODE_WIDTH = 230
 
 const defaultNodeSize = (node: CanvasNode, functionsById: Record<string, GenerationFunction>) => {
   if (node.type === 'function') {
@@ -619,6 +626,14 @@ function CanvasSurface() {
     return functionDef?.inputs.find((input) => input.key === inputKey)?.type
   }
 
+  const outputTypeForFunctionOutput = (nodeId: string | undefined, outputKey: string | undefined) => {
+    if (!nodeId || !outputKey) return undefined
+    const node = project.canvas.nodes.find((item) => item.id === nodeId && item.type === 'function')
+    const functionId = typeof node?.data.functionId === 'string' ? node.data.functionId : undefined
+    const functionDef = functionId ? project.functions[functionId] : undefined
+    return functionDef?.outputs.find((output) => output.key === outputKey)?.type
+  }
+
   const connectByNodeRoles = (
     firstNodeId: string | undefined,
     secondNodeId: string | undefined,
@@ -657,13 +672,28 @@ function CanvasSurface() {
     clientX: number,
     clientY: number,
     connection?: AddNodeMenuState['connection'],
+    placement?: AddNodeMenuState['placement'],
   ) => {
     setAddMenuQuery('')
     setAddMenu({
       screen: { x: clientX, y: clientY },
       flow: screenToFlowPosition({ x: clientX, y: clientY }),
+      placement,
       connection,
     })
+  }
+
+  const placedNodePosition = (newNodeWidth: number) => {
+    if (!addMenu?.placement) return addMenu?.flow
+    const anchorNode = project.canvas.nodes.find((node) => node.id === addMenu.placement?.anchorNodeId)
+    if (!anchorNode) return addMenu.flow
+
+    const anchorSize = flowNodeStyle(anchorNode, project.functions)
+    const anchorWidth = Number(anchorSize.width)
+    const resolvedAnchorWidth = Number.isFinite(anchorWidth) ? anchorWidth : DEFAULT_ASSET_NODE_WIDTH
+    return addMenu.placement.side === 'right'
+      ? { x: anchorNode.position.x + resolvedAnchorWidth + MENU_NODE_GAP, y: anchorNode.position.y }
+      : { x: anchorNode.position.x - newNodeWidth - MENU_NODE_GAP, y: anchorNode.position.y }
   }
 
   const addMenuFunctions = Object.values(project.functions).filter((fn) =>
@@ -701,7 +731,7 @@ function CanvasSurface() {
 
   const createFunctionFromMenu = (functionId: string) => {
     if (!addMenu) return
-    const nodeId = addFunctionNodeAtPosition(functionId, addMenu.flow, {
+    const nodeId = addFunctionNodeAtPosition(functionId, placedNodePosition(defaultFunctionWidth(project.functions[functionId])) ?? addMenu.flow, {
       autoBindRequiredInputs: false,
     })
     if (nodeId && addMenu.connection?.kind === 'source') {
@@ -718,7 +748,7 @@ function CanvasSurface() {
       addMenu.connection?.kind === 'target'
         ? targetInputInitialResourceValue(project, addMenu.connection.targetNodeId, addMenu.connection.targetInputKey)
         : undefined
-    const nodeId = addEmptyResourceAtPosition(type, addMenu.flow, initialValue)
+    const nodeId = addEmptyResourceAtPosition(type, placedNodePosition(DEFAULT_ASSET_NODE_WIDTH) ?? addMenu.flow, initialValue)
     if (nodeId && addMenu.connection?.kind === 'target') {
       connectNodes(nodeId, addMenu.connection.targetNodeId, {
         targetInputKey: addMenu.connection.targetInputKey,
@@ -789,11 +819,76 @@ function CanvasSurface() {
     return undefined
   }
 
+  const handleClickAddMenuConnection = (nodeId: string | undefined, handleId: string | undefined) => {
+    if (!nodeId || !handleId) return undefined
+    const node = project.canvas.nodes.find((item) => item.id === nodeId)
+    if (!node) return undefined
+
+    const inputKey = inputKeyFromHandle(handleId)
+    const outputKey = handleId.startsWith('output:') ? handleId.slice('output:'.length) : undefined
+    if (node.type === 'function' && inputKey) {
+      const resourceType = inputTypeForFunctionInput(node.id, inputKey)
+      return resourceType
+        ? {
+            connection: {
+              kind: 'target' as const,
+              targetNodeId: node.id,
+              targetInputKey: inputKey,
+              resourceType,
+            },
+            placement: { anchorNodeId: node.id, side: 'left' as const },
+          }
+        : undefined
+    }
+
+    if (node.type === 'resource' || node.type === 'result_group') {
+      return {
+        connection: {
+          kind: 'source' as const,
+          sourceNodeId: node.id,
+          sourceHandleId: handleId,
+          resourceType: connectionResourceType(node.id, handleId),
+        },
+        placement: { anchorNodeId: node.id, side: 'right' as const },
+      }
+    }
+
+    if (node.type === 'function' && outputKey) {
+      return {
+        connection: {
+          kind: 'source' as const,
+          sourceNodeId: node.id,
+          sourceHandleId: handleId,
+          resourceType: outputTypeForFunctionOutput(node.id, outputKey),
+        },
+        placement: { anchorNodeId: node.id, side: 'right' as const },
+      }
+    }
+
+    return undefined
+  }
+
+  const handleHandleClick = (event: ReactMouseEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement
+    const handle = target.closest('.react-flow__handle') as HTMLElement | null
+    if (!handle || !canvasRef.current?.contains(handle)) return
+
+    const info = handleInfoFromElement(handle)
+    const menuState = handleClickAddMenuConnection(info?.nodeId, info?.handleId)
+    if (!menuState) return
+
+    const rect = handle.getBoundingClientRect()
+    event.preventDefault()
+    event.stopPropagation()
+    openAddMenu(rect.left + rect.width / 2, rect.top + rect.height / 2, menuState.connection, menuState.placement)
+  }
+
   return (
     <section
       ref={canvasRef}
       className="workspace-canvas"
       aria-label="Canvas"
+      onClickCapture={handleHandleClick}
       onDoubleClick={(event) => {
         const target = event.target as HTMLElement
         if (target.closest('.react-flow__node, button, input, textarea, .react-flow__controls, .react-flow__minimap, .add-node-menu')) {
