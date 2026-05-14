@@ -228,6 +228,20 @@ export type RequestFunctionConfig = {
   responseEncoding: string
 }
 
+export type LocalTransformKind =
+  | 'image_resize'
+  | 'image_blur'
+  | 'image_grid_split'
+  | 'image_info'
+  | 'text_trim'
+  | 'text_case'
+  | 'video_info'
+  | 'audio_info'
+
+export type LocalTransformConfig = {
+  kind: LocalTransformKind
+}
+
 export type GenerationFunction = {
   id: string
   name: string
@@ -242,6 +256,7 @@ export type GenerationFunction = {
       | 'openai_image_generation'
       | 'gemini_image_generation'
       | 'http_request'
+      | 'local_transform'
     version?: string
     rawJson: ComfyWorkflow
   }
@@ -250,6 +265,7 @@ export type GenerationFunction = {
   openaiImage?: OpenAIImageConfig
   geminiImage?: GeminiImageConfig
   request?: RequestFunctionConfig
+  localTransform?: LocalTransformConfig
   inputs: FunctionInputDef[]
   outputs: FunctionOutputDef[]
   runtimeDefaults?: {

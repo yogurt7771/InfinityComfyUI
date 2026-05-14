@@ -80,6 +80,22 @@ const functionOutputHandleForResult = (project: ProjectState, node: CanvasNode) 
   return outputKey ? outputHandleId(outputKey) : undefined
 }
 
+const sourceHandleForResult = (project: ProjectState, node: CanvasNode) => {
+  const sourceNodeId = typeof node.data.sourceFunctionNodeId === 'string' ? node.data.sourceFunctionNodeId : undefined
+  const sourceNode = sourceNodeId ? project.canvas.nodes.find((item) => item.id === sourceNodeId) : undefined
+  if (sourceNode?.type === 'resource' || sourceNode?.type === 'result_group') {
+    const taskId = typeof node.data.taskId === 'string' ? node.data.taskId : undefined
+    const firstInputRef = taskId ? Object.values(project.tasks[taskId]?.inputRefs ?? {})[0] : undefined
+    if (firstInputRef) {
+      return sourceNode.type === 'result_group'
+        ? resultHandleId(firstInputRef.resourceId)
+        : resourceHandleId(firstInputRef.resourceId)
+    }
+  }
+
+  return functionOutputHandleForResult(project, node)
+}
+
 export function buildCanvasFlowEdges(project: ProjectState): Edge[] {
   const resourceNodes = resourceNodeByResourceId(project.canvas.nodes)
   const explicitInputKeys = new Set(project.canvas.edges.map((edge) => `${edge.target.nodeId}:${edge.target.inputKey}`))
@@ -132,7 +148,7 @@ export function buildCanvasFlowEdges(project: ProjectState): Edge[] {
     .map((node) => ({
       id: `${String(node.data.sourceFunctionNodeId)}-${node.id}`,
       source: String(node.data.sourceFunctionNodeId),
-      sourceHandle: functionOutputHandleForResult(project, node),
+      sourceHandle: sourceHandleForResult(project, node),
       target: node.id,
       targetHandle: 'result-input',
       animated: false,

@@ -89,6 +89,21 @@ async function addTextAssetFromCanvas(
   await page.getByLabel('Prompt text').fill(text)
 }
 
+async function addImageAssetByDrop(page: Page) {
+  const canvas = page.locator('.workspace-canvas')
+  const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFElEQVR42mNk+M+ABzAxMiABkDIAUj4CB1G9J4kAAAAASUVORK5CYII='
+  const dataTransfer = await page.evaluateHandle((base64) => {
+    const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))
+    const transfer = new DataTransfer()
+    transfer.items.add(new File([bytes], 'tiny-local.png', { type: 'image/png' }))
+    return transfer
+  }, pngBase64)
+
+  await canvas.dispatchEvent('dragover', { dataTransfer, clientX: 540, clientY: 240 })
+  await canvas.dispatchEvent('drop', { dataTransfer, clientX: 540, clientY: 240 })
+  await expect(canvas.getByText('tiny-local.png')).toBeVisible()
+}
+
 async function addTestWorkflowNode(page: Page) {
   await addFunctionNodeFromCanvasMenu(page, testWorkflowName)
   await expect(page.locator('.workspace-canvas').getByText(testWorkflowName, { exact: true })).toBeVisible()
@@ -425,6 +440,34 @@ test('creates a one-off request node and extracts media output from the canvas',
 
   await expect(page.getByLabel('Run status succeeded')).toBeVisible()
   await expect(page.getByText('result.png').first()).toBeVisible()
+})
+
+test('runs local image tools from the selected resource quick actions', async ({ page }) => {
+  await page.goto('/')
+
+  await addImageAssetByDrop(page)
+  const canvas = page.locator('.workspace-canvas')
+  const imageNode = canvas.locator('.react-flow__node-resource').filter({ hasText: 'tiny-local.png' })
+  await imageNode.click()
+
+  const quickActions = page.getByLabel('Resource quick actions')
+  await expect(quickActions.getByRole('button', { name: 'Resize Image' })).toBeVisible()
+  await expect(quickActions.getByRole('button', { name: 'Blur Image' })).toBeVisible()
+  await expect(quickActions.getByRole('button', { name: 'Split Image Grid' })).toBeVisible()
+
+  await quickActions.getByRole('button', { name: 'Resize Image' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Run Resize Image' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByLabel('Scale').fill('0.5')
+  await dialog.getByRole('button', { name: 'Run local function' }).click()
+  await expect(dialog).toHaveCount(0)
+
+  const resultNode = canvas.locator('.react-flow__node-result_group').first()
+  await expect(resultNode).toContainText('Resize Image')
+  await expect(resultNode.getByLabel('Run status succeeded')).toBeVisible()
+  await expect(resultNode.getByText(/tiny-local-resize/).first()).toBeVisible()
+  await expect(canvas.locator('[data-testid="result-resource-grid"] img')).toHaveCount(1)
+  await expect(page.locator('.react-flow__edge.result-edge')).toHaveCount(1)
 })
 
 test('creates a custom OpenAI provider function from settings and adds it to the canvas', async ({ page }) => {

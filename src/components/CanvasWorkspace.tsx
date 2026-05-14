@@ -72,6 +72,11 @@ type CompareImagePair = {
   right: Resource
 }
 
+type LocalActionDialogState = {
+  sourceNodeId: string
+  functionId: string
+}
+
 const nodeTypes: NodeTypes = {
   resource: ResourceNodeView,
   function: FunctionNodeView,
@@ -265,6 +270,95 @@ function CompareRunResultsModal({ pair, onClose }: { pair: CompareImagePair; onC
   )
 }
 
+function LocalActionDialog({
+  functionDef,
+  onClose,
+  onRun,
+}: {
+  functionDef: GenerationFunction
+  onClose: () => void
+  onRun: (values: Record<string, string | number | null>) => void
+}) {
+  const optionalInputs = useMemo(
+    () => functionDef.inputs.filter((input) => !input.required && (input.type === 'text' || input.type === 'number')),
+    [functionDef],
+  )
+  const [values, setValues] = useState<Record<string, string | number | null>>(() =>
+    Object.fromEntries(optionalInputs.map((input) => [input.key, input.defaultValue ?? (input.type === 'number' ? 0 : '')])),
+  )
+
+  return (
+    <div
+      className="local-action-backdrop nodrag nopan"
+      onMouseDown={(event) => {
+        event.stopPropagation()
+        if (event.target === event.currentTarget) onClose()
+      }}
+    >
+      <section
+        aria-label={`Run ${functionDef.name}`}
+        aria-modal="true"
+        className="local-action-dialog"
+        role="dialog"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header>
+          <div>
+            <h2>{functionDef.name}</h2>
+            <span>{functionDef.category ?? 'Local'}</span>
+          </div>
+          <button type="button" aria-label="Close local action" onClick={onClose}>
+            <X size={16} />
+          </button>
+        </header>
+        {optionalInputs.length ? (
+          <div className="local-action-fields">
+            {optionalInputs.map((input) => (
+              <label key={input.key}>
+                <span>{input.label || input.key}</span>
+                {input.type === 'number' ? (
+                  <input
+                    aria-label={input.label || input.key}
+                    inputMode="decimal"
+                    type="number"
+                    value={Number(values[input.key] ?? 0)}
+                    onChange={(event) => setValues((current) => ({ ...current, [input.key]: Number(event.target.value) }))}
+                  />
+                ) : (
+                  <textarea
+                    aria-label={input.label || input.key}
+                    rows={4}
+                    value={String(values[input.key] ?? '')}
+                    onChange={(event) => setValues((current) => ({ ...current, [input.key]: event.target.value }))}
+                  />
+                )}
+              </label>
+            ))}
+          </div>
+        ) : (
+          <p className="local-action-empty">This action runs with the selected resource.</p>
+        )}
+        <div className="local-action-footer">
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            aria-label="Run local function"
+            className="primary"
+            onClick={() => {
+              onRun(values)
+              onClose()
+            }}
+          >
+            Run
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
 function CanvasSurface() {
   const project = useProjectStore((state) => state.project)
   const selectedNodeId = useProjectStore((state) => state.selectedNodeId)
@@ -272,6 +366,7 @@ function CanvasSurface() {
   const selectNode = useProjectStore((state) => state.selectNode)
   const selectNodes = useProjectStore((state) => state.selectNodes)
   const runFunctionNodeWithComfy = useProjectStore((state) => state.runFunctionNodeWithComfy)
+  const runLocalFunctionForResourceNode = useProjectStore((state) => state.runLocalFunctionForResourceNode)
   const rerunResultNode = useProjectStore((state) => state.rerunResultNode)
   const cancelResultRun = useProjectStore((state) => state.cancelResultRun)
   const addTextResourceAtPosition = useProjectStore((state) => state.addTextResourceAtPosition)
@@ -302,6 +397,8 @@ function CanvasSurface() {
   const duplicateNodes = useProjectStore((state) => state.duplicateNodes)
   const { screenToFlowPosition, setCenter } = useReactFlow()
   const [addMenu, setAddMenu] = useState<AddNodeMenuState | null>(null)
+  const [localActionDialog, setLocalActionDialog] = useState<LocalActionDialogState | null>(null)
+  const [quickToolbarPosition, setQuickToolbarPosition] = useState<{ left: number; top: number }>()
   const [comparePair, setComparePair] = useState<CompareImagePair | null>(null)
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([])
   const [addMenuQuery, setAddMenuQuery] = useState('')
@@ -590,7 +687,7 @@ function CanvasSurface() {
     selectionBoxNodeIds.current = changedNodes.map((node) => node.id)
   }
 
-  const sourceResourceRefs = (sourceNodeId: string | undefined, sourceHandleId?: string | null): ResourceRef[] => {
+  const sourceResourceRefs = useCallback((sourceNodeId: string | undefined, sourceHandleId?: string | null): ResourceRef[] => {
     if (!sourceNodeId) return []
     const node = project.canvas.nodes.find((item) => item.id === sourceNodeId)
     if (!node) return []
@@ -613,7 +710,59 @@ function CanvasSurface() {
         return typedResource ? { resourceId, type: typedResource.type } : undefined
       })
       .filter((resource): resource is ResourceRef => Boolean(resource))
-  }
+  }, [project.canvas.nodes, project.resources])
+
+  const selectedQuickSourceNodeId = useMemo(() => {
+    if (activeSelectedNodeIds.length !== 1) return undefined
+    const nodeId = activeSelectedNodeIds[0]
+    const node = project.canvas.nodes.find((item) => item.id === nodeId)
+    return node?.type === 'resource' || node?.type === 'result_group' ? node.id : undefined
+  }, [activeSelectedNodeIds, project.canvas.nodes])
+
+  const localQuickActions = useMemo(() => {
+    if (!selectedQuickSourceNodeId) return []
+    const refs = sourceResourceRefs(selectedQuickSourceNodeId)
+    if (refs.length === 0) return []
+
+    return Object.values(project.functions).filter((fn) => {
+      if (fn.workflow.format !== 'local_transform') return false
+      const requiredInputs = fn.inputs.filter((input) => input.required)
+      return requiredInputs.length > 0 && requiredInputs.every((input) => refs.some((ref) => ref.type === input.type))
+    })
+  }, [project.functions, selectedQuickSourceNodeId, sourceResourceRefs])
+
+  useLayoutEffect(() => {
+    if (!selectedQuickSourceNodeId || localQuickActions.length === 0) {
+      const frame = window.requestAnimationFrame(() => setQuickToolbarPosition(undefined))
+      return () => window.cancelAnimationFrame(frame)
+    }
+
+    const updatePosition = () => {
+      const escapedId =
+        typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(selectedQuickSourceNodeId) : selectedQuickSourceNodeId
+      const nodeElement = canvasRef.current?.querySelector<HTMLElement>(`.react-flow__node[data-id="${escapedId}"]`)
+      const rect = nodeElement?.getBoundingClientRect()
+      if (!rect) {
+        setQuickToolbarPosition(undefined)
+        return
+      }
+      setQuickToolbarPosition({
+        left: Math.min(window.innerWidth - 72, rect.right + 12),
+        top: Math.max(8, rect.top + 8),
+      })
+    }
+
+    const frame = window.requestAnimationFrame(updatePosition)
+    window.addEventListener('resize', updatePosition)
+    window.addEventListener('scroll', updatePosition, true)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.removeEventListener('resize', updatePosition)
+      window.removeEventListener('scroll', updatePosition, true)
+    }
+  }, [localQuickActions.length, nodes, selectedQuickSourceNodeId])
+
+  const activeLocalActionFunction = localActionDialog ? project.functions[localActionDialog.functionId] : undefined
 
   const connectionResourceType = (sourceNodeId: string | undefined, sourceHandleId?: string | null) =>
     sourceResourceRefs(sourceNodeId, sourceHandleId)[0]?.type
@@ -1065,6 +1214,39 @@ function CanvasSurface() {
             <div className="add-node-empty">No matching nodes</div>
           ) : null}
         </div>
+      ) : null}
+      {selectedQuickSourceNodeId && quickToolbarPosition && localQuickActions.length > 0 ? (
+        <div
+          aria-label="Resource quick actions"
+          className="resource-quick-actions nodrag nopan"
+          style={{
+            left: quickToolbarPosition.left,
+            top: quickToolbarPosition.top,
+          }}
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          {localQuickActions.map((fn) => (
+            <button
+              key={fn.id}
+              type="button"
+              aria-label={fn.name}
+              title={fn.name}
+              onClick={() => setLocalActionDialog({ sourceNodeId: selectedQuickSourceNodeId, functionId: fn.id })}
+            >
+              {fn.name}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {localActionDialog && activeLocalActionFunction ? (
+        <LocalActionDialog
+          key={activeLocalActionFunction.id}
+          functionDef={activeLocalActionFunction}
+          onClose={() => setLocalActionDialog(null)}
+          onRun={(values) => {
+            void runLocalFunctionForResourceNode(localActionDialog.sourceNodeId, localActionDialog.functionId, values)
+          }}
+        />
       ) : null}
       {selectedComparePair ? (
         <div className="compare-toolbar">

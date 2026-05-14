@@ -44,6 +44,12 @@ import {
   requestDefaultEncoding,
   type RequestBinaryOutputValue,
 } from '../domain/requestFunction'
+import {
+  createLocalTransformFunctions,
+  executeLocalTransformFunction,
+  isLocalTransformFunction,
+  type LocalTransformOutputValue,
+} from '../domain/localTransforms'
 import { createConfigPackage, createProjectPackage, type ConfigPackage, type FullProjectPackage } from '../domain/projectPackage'
 import { randomizeWorkflowSeeds } from '../domain/seed'
 import { selectEndpoint } from '../domain/scheduler'
@@ -165,6 +171,17 @@ type QueuedRequestRun = {
   runTotal: number
 }
 
+type QueuedLocalRun = {
+  taskId: string
+  resultNodeId: string
+  sourceNodeId: string
+  functionId: string
+  functionDef: GenerationFunction
+  inputValues: RuntimeInputValues
+  runIndex: number
+  runTotal: number
+}
+
 type ProjectStoreDeps = {
   idFactory: () => string
   now: () => string
@@ -254,6 +271,11 @@ export type ProjectStoreState = {
   updateFunctionNodeRequestOutputs: (nodeId: string, outputs: FunctionOutputDef[]) => void
   runFunctionNode: (nodeId: string, runCount?: number) => void
   runFunctionNodeWithComfy: (nodeId: string, runCount?: number) => Promise<void>
+  runLocalFunctionForResourceNode: (
+    sourceNodeId: string,
+    functionId: string,
+    inputValues?: Record<string, PrimitiveInputValue>,
+  ) => Promise<void>
   rerunResultNode: (nodeId: string) => Promise<void>
   cancelResultRun: (nodeId: string) => void
   undoLastProjectChange: () => void
@@ -301,6 +323,7 @@ const initialProject = (now: string, options: ProjectCreateOptions & { id?: stri
   const openAiImageFunction = createOpenAIImageFunction(now)
   const geminiImageFunction = createGeminiImageFunction(now)
   const requestFunction = createRequestFunction(REQUEST_FUNCTION_ID, 'Request', now)
+  const localFunctions = createLocalTransformFunctions(now)
   return {
     schemaVersion: '1.0.0',
     project: {
@@ -323,6 +346,7 @@ const initialProject = (now: string, options: ProjectCreateOptions & { id?: stri
       [openAiImageFunction.id]: openAiImageFunction,
       [geminiImageFunction.id]: geminiImageFunction,
       [requestFunction.id]: requestFunction,
+      ...Object.fromEntries(localFunctions.map((fn) => [fn.id, fn])),
     },
     tasks: {},
     comfy: {
@@ -358,6 +382,7 @@ const syncBuiltInFunction = (current: GenerationFunction | undefined, latest: Ge
     openaiImage: current.openaiImage ? { ...latest.openaiImage, ...current.openaiImage } : latest.openaiImage,
     geminiImage: current.geminiImage ? { ...latest.geminiImage, ...current.geminiImage } : latest.geminiImage,
     request: current.request ? { ...latest.request, ...current.request } : latest.request,
+    localTransform: latest.localTransform,
   }
 }
 
@@ -368,6 +393,7 @@ const withBuiltInFunctions = (project: ProjectState, now: string): ProjectState 
     createOpenAIImageFunction(now),
     createGeminiImageFunction(now),
     createRequestFunction(REQUEST_FUNCTION_ID, 'Request', now),
+    ...createLocalTransformFunctions(now),
   ]
   const builtIns = Object.fromEntries(
     latestBuiltIns.map((builtInFunction) => [
@@ -637,7 +663,11 @@ const nextResultNodePosition = (nodes: CanvasNode[], functionNode: CanvasNode, f
   const existingResultNodes = nodes.filter(
     (node) => node.type === 'result_group' && node.data.sourceFunctionNodeId === functionNode.id,
   )
-  const functionSize = nodeStoredSize(functionNode) ?? functionNodeEstimatedSize(functionDef)
+  const functionSize =
+    nodeStoredSize(functionNode) ??
+    (functionNode.type === 'function'
+      ? functionNodeEstimatedSize(functionDef)
+      : { width: functionNode.type === 'result_group' ? RESULT_NODE_ESTIMATED_WIDTH : 230, height: 180 })
   const existingRightEdges = existingResultNodes.map((node) => node.position.x + RESULT_NODE_ESTIMATED_WIDTH)
   const maxRightEdge = Math.max(functionNode.position.x + functionSize.width, ...existingRightEdges)
 
@@ -2325,6 +2355,216 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       }
     }
 
+    const resourceForLocalOutput = (
+      output: { key: string; label: string; type: ResourceType },
+      value: LocalTransformOutputValue,
+      item: QueuedLocalRun,
+      now: string,
+    ): { resource: Resource; asset?: ProjectState['assets'][string]; ref: ResourceRef } => {
+      const resourceId = runtime.idFactory()
+
+      if (output.type === 'number') {
+        const numericValue = Number(value)
+        return {
+          resource: {
+            id: resourceId,
+            type: 'number',
+            name: output.label,
+            value: Number.isFinite(numericValue) ? numericValue : 0,
+            source: {
+              kind: 'function_output',
+              functionNodeId: item.sourceNodeId,
+              resultGroupNodeId: item.resultNodeId,
+              taskId: item.taskId,
+              outputKey: output.key,
+            },
+            metadata: {
+              workflowFunctionId: item.functionId,
+              endpointId: 'local',
+              createdAt: now,
+            },
+          },
+          ref: { resourceId, type: 'number' },
+        }
+      }
+
+      if (output.type === 'image' || output.type === 'video' || output.type === 'audio') {
+        if (typeof value !== 'object' || value === null || !('url' in value)) {
+          throw new Error(`Local output ${output.key} did not produce a media payload`)
+        }
+        const assetId = runtime.idFactory()
+        const filename = value.filename ?? output.label
+        const asset = {
+          id: assetId,
+          name: filename,
+          mimeType: value.mimeType,
+          sizeBytes: value.sizeBytes,
+          blobUrl: value.url,
+          createdAt: now,
+        }
+        return {
+          asset,
+          resource: {
+            id: resourceId,
+            type: output.type,
+            name: filename,
+            value: mediaValueWithAsset(assetId, value),
+            source: {
+              kind: 'function_output',
+              functionNodeId: item.sourceNodeId,
+              resultGroupNodeId: item.resultNodeId,
+              taskId: item.taskId,
+              outputKey: output.key,
+            },
+            metadata: {
+              workflowFunctionId: item.functionId,
+              endpointId: 'local',
+              createdAt: now,
+            },
+          },
+          ref: { resourceId, type: output.type },
+        }
+      }
+
+      return {
+        resource: {
+          id: resourceId,
+          type: 'text',
+          name: output.label,
+          value: String(value ?? ''),
+          source: {
+            kind: 'function_output',
+            functionNodeId: item.sourceNodeId,
+            resultGroupNodeId: item.resultNodeId,
+            taskId: item.taskId,
+            outputKey: output.key,
+          },
+          metadata: {
+            workflowFunctionId: item.functionId,
+            endpointId: 'local',
+            createdAt: now,
+          },
+        },
+        ref: { resourceId, type: 'text' },
+      }
+    }
+
+    const executeLocalQueueItem = async (item: QueuedLocalRun) => {
+      const startedAt = runtime.now()
+      set((current) => ({
+        project: {
+          ...current.project,
+          tasks: {
+            ...current.project.tasks,
+            [item.taskId]: {
+              ...current.project.tasks[item.taskId]!,
+              status: 'running',
+              endpointId: 'local',
+              startedAt,
+              updatedAt: startedAt,
+            },
+          },
+          canvas: {
+            ...current.project.canvas,
+            nodes: current.project.canvas.nodes.map((node) =>
+              node.id === item.resultNodeId
+                ? { ...node, data: { ...node.data, endpointId: 'local', status: 'running', startedAt } }
+                : node,
+            ),
+          },
+        },
+      }))
+
+      try {
+        const outputs = await executeLocalTransformFunction(
+          item.functionDef,
+          item.inputValues,
+          get().project.resources,
+          (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
+        )
+        const outputRefsByKey: Record<string, ResourceRef[]> = {}
+        const resourceRefs: ResourceRef[] = []
+        const newResources: Record<string, Resource> = {}
+        const newAssets: ProjectState['assets'] = {}
+        const completedAt = runtime.now()
+
+        for (const outputItem of outputs) {
+          const refs: ResourceRef[] = []
+          for (const value of outputItem.values) {
+            const created = resourceForLocalOutput(outputItem, value, item, completedAt)
+            newResources[created.resource.id] = created.resource
+            if (created.asset) newAssets[created.asset.id] = created.asset
+            refs.push(created.ref)
+            resourceRefs.push(created.ref)
+          }
+          outputRefsByKey[outputItem.key] = refs
+        }
+
+        set((current) => ({
+          project: {
+            ...current.project,
+            project: { ...current.project.project, updatedAt: completedAt },
+            resources: { ...current.project.resources, ...newResources },
+            assets: { ...current.project.assets, ...newAssets },
+            tasks: {
+              ...current.project.tasks,
+              [item.taskId]: {
+                ...current.project.tasks[item.taskId]!,
+                status: 'succeeded',
+                outputRefs: outputRefsByKey,
+                updatedAt: completedAt,
+                completedAt,
+              },
+            },
+            canvas: {
+              ...current.project.canvas,
+              nodes: current.project.canvas.nodes.map((node) =>
+                node.id === item.resultNodeId
+                  ? { ...node, data: { ...node.data, resources: resourceRefs, status: 'succeeded', completedAt } }
+                  : node,
+              ),
+            },
+          },
+        }))
+      } catch (err) {
+        const failedAt = runtime.now()
+        const errorMessage = err instanceof Error ? err.message : 'Local transform execution failed'
+        const taskError = { code: 'local_transform_failed', message: errorMessage, raw: err }
+        set((current) => ({
+          project: {
+            ...current.project,
+            project: { ...current.project.project, updatedAt: failedAt },
+            tasks: {
+              ...current.project.tasks,
+              [item.taskId]: {
+                ...current.project.tasks[item.taskId]!,
+                status: 'failed',
+                error: taskError,
+                updatedAt: failedAt,
+                completedAt: failedAt,
+              },
+            },
+            canvas: {
+              ...current.project.canvas,
+              nodes: current.project.canvas.nodes.map((node) =>
+                node.id === item.resultNodeId
+                  ? {
+                      ...node,
+                      data: {
+                        ...node.data,
+                        status: 'failed',
+                        error: { code: taskError.code, message: errorMessage },
+                        completedAt: failedAt,
+                      },
+                    }
+                  : node,
+              ),
+            },
+          },
+        }))
+      }
+    }
+
     const executeRequestQueueItem = async (item: QueuedRequestRun) => {
       const startedAt = runtime.now()
       set((current) => ({
@@ -2477,6 +2717,113 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           },
         }))
       }
+    }
+
+    const inputValuesFromTaskSnapshot = (task: ExecutionTask): RuntimeInputValues => {
+      const values: RuntimeInputValues = {}
+      for (const [key, snapshot] of Object.entries(task.inputValuesSnapshot ?? {})) {
+        if (snapshot.source === 'resource' && snapshot.resourceId) {
+          values[key] = { resourceId: snapshot.resourceId, type: snapshot.type }
+        } else if (snapshot.value === null || typeof snapshot.value === 'string' || typeof snapshot.value === 'number') {
+          values[key] = snapshot.value
+        }
+      }
+      return { ...values, ...structuredClone(task.inputRefs) }
+    }
+
+    const runLocalFunctionNode = async (nodeId: string, requestedRunCount?: number) => {
+      const state = get()
+      const node = state.project.canvas.nodes.find((item) => item.id === nodeId && item.type === 'function')
+      if (!node) return
+      const functionId = String(node.data.functionId ?? '')
+      const functionDef = state.project.functions[functionId]
+      if (!functionDef || !isLocalTransformFunction(functionDef)) return
+
+      const runCount = normalizedRunCount(
+        requestedRunCount ?? Number((node.data.runtime as { runCount?: number } | undefined)?.runCount ?? 1),
+      )
+      const now = runtime.now()
+      const inputValues = (node.data.inputValues ?? {}) as RuntimeInputValues
+      if (validateRequiredInputs(nodeId, functionDef, inputValues, state.project.resources).length > 0) return
+
+      const queuedNodes: CanvasNode[] = []
+      const queuedTasks: Record<string, ExecutionTask> = {}
+      const queuedRuns: QueuedLocalRun[] = []
+      const runRange = functionRunRange(state.project, nodeId, runCount)
+
+      for (let index = 1; index <= runCount; index += 1) {
+        const runIndex = runRange.start + index - 1
+        const taskId = runtime.idFactory()
+        const resultNodeId = runtime.idFactory()
+        const task: ExecutionTask = {
+          id: taskId,
+          functionNodeId: nodeId,
+          functionId,
+          runIndex,
+          runTotal: runRange.total,
+          status: 'queued',
+          inputRefs: resourceInputRefs(inputValues),
+          inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
+          inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
+          paramsSnapshot: {
+            runCount,
+            mode: 'local_transform',
+            kind: functionDef.localTransform?.kind,
+          },
+          workflowTemplateSnapshot: {},
+          compiledWorkflowSnapshot: {},
+          requestSnapshot: { mode: 'local_transform', kind: functionDef.localTransform?.kind, inputValues },
+          seedPatchLog: [],
+          outputRefs: {},
+          createdAt: now,
+          updatedAt: now,
+        }
+        const resultNode: CanvasNode = {
+          id: resultNodeId,
+          type: 'result_group',
+          position: nextResultNodePosition([...state.project.canvas.nodes, ...queuedNodes], node, functionDef),
+          data: {
+            sourceFunctionNodeId: nodeId,
+            functionId,
+            taskId,
+            runIndex,
+            runTotal: runRange.total,
+            title: `Run ${runIndex}`,
+            endpointId: 'local',
+            resources: [],
+            status: 'queued',
+            seedPatchLog: [],
+            createdAt: now,
+          },
+        }
+
+        queuedTasks[taskId] = task
+        queuedNodes.push(resultNode)
+        queuedRuns.push({
+          taskId,
+          resultNodeId,
+          sourceNodeId: nodeId,
+          functionId,
+          functionDef,
+          inputValues,
+          runIndex,
+          runTotal: runRange.total,
+        })
+      }
+
+      set((current) => ({
+        project: {
+          ...current.project,
+          project: { ...current.project.project, updatedAt: now },
+          tasks: { ...tasksWithRunTotal(current.project.tasks, nodeId, runRange.total), ...queuedTasks },
+          canvas: {
+            ...current.project.canvas,
+            nodes: [...nodesWithRunTotal(current.project.canvas.nodes, nodeId, runRange.total), ...queuedNodes],
+          },
+        },
+      }))
+
+      await Promise.all(queuedRuns.map((item) => executeLocalQueueItem(item)))
     }
 
     const runRequestFunctionNode = async (nodeId: string, requestedRunCount?: number) => {
@@ -3979,6 +4326,10 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         void runRequestFunctionNode(nodeId, requestedRunCount)
         return
       }
+      if (isLocalTransformFunction(functionDef)) {
+        void runLocalFunctionNode(nodeId, requestedRunCount)
+        return
+      }
 
       const runCount = normalizedRunCount(
         requestedRunCount ?? Number((node.data.runtime as { runCount?: number } | undefined)?.runCount ?? 1),
@@ -4117,6 +4468,10 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         await runRequestFunctionNode(nodeId, requestedRunCount)
         return
       }
+      if (isLocalTransformFunction(functionDef)) {
+        await runLocalFunctionNode(nodeId, requestedRunCount)
+        return
+      }
 
       const runCount = normalizedRunCount(
         requestedRunCount ?? Number((node.data.runtime as { runCount?: number } | undefined)?.runCount ?? 1),
@@ -4219,6 +4574,98 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       await Promise.all(completionPromises)
     },
 
+    runLocalFunctionForResourceNode: async (sourceNodeId, functionId, primitiveInputs = {}) => {
+      const state = get()
+      const sourceNode = state.project.canvas.nodes.find((node) => node.id === sourceNodeId)
+      const functionDef = state.project.functions[functionId]
+      if (!sourceNode || !functionDef || !isLocalTransformFunction(functionDef)) return
+
+      const sourceRefs = nodeResourceRefs(sourceNode)
+      const inputValues: RuntimeInputValues = {}
+      for (const input of functionDef.inputs) {
+        if (input.required) {
+          const ref = sourceRefs.find((item) => item.type === input.type)
+          if (!ref) return
+          inputValues[input.key] = ref
+        } else if (input.key in primitiveInputs && (input.type === 'text' || input.type === 'number')) {
+          inputValues[input.key] = primitiveInputs[input.key] ?? null
+        }
+      }
+
+      const runCount = 1
+      const now = runtime.now()
+      const runRange = functionRunRange(state.project, sourceNodeId, runCount)
+      const runIndex = runRange.start
+      const taskId = runtime.idFactory()
+      const resultNodeId = runtime.idFactory()
+      const task: ExecutionTask = {
+        id: taskId,
+        functionNodeId: sourceNodeId,
+        functionId,
+        runIndex,
+        runTotal: runRange.total,
+        status: 'queued',
+        inputRefs: resourceInputRefs(inputValues),
+        inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
+        inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
+        paramsSnapshot: {
+          runCount,
+          mode: 'local_transform',
+          kind: functionDef.localTransform?.kind,
+        },
+        workflowTemplateSnapshot: {},
+        compiledWorkflowSnapshot: {},
+        requestSnapshot: { mode: 'local_transform', kind: functionDef.localTransform?.kind, inputValues },
+        seedPatchLog: [],
+        outputRefs: {},
+        createdAt: now,
+        updatedAt: now,
+      }
+      const resultNode: CanvasNode = {
+        id: resultNodeId,
+        type: 'result_group',
+        position: nextResultNodePosition(state.project.canvas.nodes, sourceNode, functionDef),
+        data: {
+          sourceFunctionNodeId: sourceNodeId,
+          functionId,
+          taskId,
+          runIndex,
+          runTotal: runRange.total,
+          title: `${functionDef.name} Run ${runIndex}`,
+          endpointId: 'local',
+          resources: [],
+          status: 'queued',
+          seedPatchLog: [],
+          createdAt: now,
+        },
+      }
+      const queuedRun: QueuedLocalRun = {
+        taskId,
+        resultNodeId,
+        sourceNodeId,
+        functionId,
+        functionDef,
+        inputValues,
+        runIndex,
+        runTotal: runRange.total,
+      }
+
+      set((current) => ({
+        ...selectedState([resultNodeId]),
+        project: {
+          ...current.project,
+          project: { ...current.project.project, updatedAt: now },
+          tasks: { ...tasksWithRunTotal(current.project.tasks, sourceNodeId, runRange.total), [taskId]: task },
+          canvas: {
+            ...current.project.canvas,
+            nodes: [...nodesWithRunTotal(current.project.canvas.nodes, sourceNodeId, runRange.total), resultNode],
+          },
+        },
+      }))
+
+      await executeLocalQueueItem(queuedRun)
+    },
+
     rerunResultNode: async (resultNodeId) => {
       const state = get()
       const resultNode = state.project.canvas.nodes.find((node) => node.id === resultNodeId && node.type === 'result_group')
@@ -4314,6 +4761,20 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           functionId: task.functionId,
           functionDef,
           inputValues,
+          runIndex: task.runIndex,
+          runTotal: task.runTotal,
+        })
+        return
+      }
+
+      if (isLocalTransformFunction(functionDef)) {
+        await executeLocalQueueItem({
+          taskId,
+          resultNodeId,
+          sourceNodeId: task.functionNodeId,
+          functionId: task.functionId,
+          functionDef,
+          inputValues: inputValuesFromTaskSnapshot(task),
           runIndex: task.runIndex,
           runTotal: task.runTotal,
         })

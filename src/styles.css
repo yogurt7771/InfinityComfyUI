@@ -1344,6 +1344,116 @@ textarea[aria-invalid="true"] {
   font-size: 12px;
 }
 
+.resource-quick-actions {
+  position: fixed;
+  z-index: 22;
+  display: grid;
+  gap: 6px;
+  width: 132px;
+  padding: 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.16);
+}
+
+.resource-quick-actions button {
+  justify-content: flex-start;
+  min-height: 32px;
+  padding: 0 9px;
+  overflow: hidden;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-action-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 82;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.36);
+}
+
+.local-action-dialog {
+  display: grid;
+  gap: 14px;
+  width: min(420px, calc(100vw - 48px));
+  padding: 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 24px 72px rgba(15, 23, 42, 0.22);
+}
+
+.local-action-dialog header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.local-action-dialog h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 17px;
+  line-height: 1.2;
+}
+
+.local-action-dialog header span,
+.local-action-empty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.local-action-dialog header button {
+  width: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+}
+
+.local-action-fields {
+  display: grid;
+  gap: 10px;
+}
+
+.local-action-fields label {
+  display: grid;
+  gap: 6px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.local-action-fields input,
+.local-action-fields textarea {
+  width: 100%;
+  min-width: 0;
+}
+
+.local-action-fields textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+.local-action-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.local-action-footer .primary {
+  min-width: 120px;
+  color: #ffffff;
+  border-color: var(--dark-action);
+  background: var(--dark-action);
+}
+
 .compare-toolbar {
   position: absolute;
   top: 16px;
