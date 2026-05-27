@@ -6,9 +6,11 @@ import {
   ChevronLeft,
   ChevronRight,
   Database,
+  Moon,
   PanelLeftClose,
   PanelRightClose,
   Settings,
+  Sun,
 } from 'lucide-react'
 import { CanvasWorkspace } from './components/CanvasWorkspace'
 import { LeftPanel, RightPanel, SettingsPage } from './components/WorkbenchPanels'
@@ -19,8 +21,10 @@ export default function App() {
   const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false)
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [theme, setTheme] = useState<'light' | 'dark'>('light')
   const project = useProjectStore((state) => state.project)
   const checkComfyEndpointStatuses = useProjectStore((state) => state.checkComfyEndpointStatuses)
+  const nextTheme = theme === 'light' ? 'dark' : 'light'
 
   useEffect(() => {
     void checkComfyEndpointStatuses()
@@ -31,7 +35,7 @@ export default function App() {
   }, [checkComfyEndpointStatuses])
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" data-theme={theme} aria-label="Infinity ComfyUI workbench">
       <header className="topbar">
         <div className="brand">
           <Boxes size={24} />
@@ -49,6 +53,15 @@ export default function App() {
             <Activity size={15} />
             {Object.keys(project.tasks).length} tasks
           </span>
+          <button
+            type="button"
+            className="theme-toggle-button"
+            aria-label={`Switch to ${nextTheme} theme`}
+            onClick={() => setTheme(nextTheme)}
+          >
+            {theme === 'light' ? <Sun size={15} /> : <Moon size={15} />}
+            {theme === 'light' ? 'Light' : 'Dark'}
+          </button>
           <button type="button" className="topbar-settings-button" aria-label="Settings" onClick={() => setSettingsOpen(true)}>
             <Settings size={15} />
             Settings

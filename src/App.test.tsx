@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { projectStore } from './store/projectStore'
@@ -29,6 +29,17 @@ describe('App', () => {
     expect(screen.queryByRole('heading', { name: 'Functions' })).not.toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'ComfyUI Servers' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Run MVP' })).not.toBeInTheDocument()
+  })
+
+  it('defaults to the light theme and toggles to dark theme', () => {
+    render(<App />)
+
+    expect(screen.getByLabelText('Infinity ComfyUI workbench')).toHaveAttribute('data-theme', 'light')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to dark theme' }))
+
+    expect(screen.getByLabelText('Infinity ComfyUI workbench')).toHaveAttribute('data-theme', 'dark')
+    expect(screen.getByRole('button', { name: 'Switch to light theme' })).toBeInTheDocument()
   })
 
   it('checks ComfyUI server statuses every five seconds', () => {

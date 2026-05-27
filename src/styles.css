@@ -93,6 +93,7 @@
 
 .topbar-metrics span,
 .topbar-settings-button,
+.theme-toggle-button,
 .panel-footer span {
   display: inline-flex;
   align-items: center;
@@ -108,6 +109,10 @@
 }
 
 .topbar-settings-button {
+  min-height: 30px;
+}
+
+.theme-toggle-button {
   min-height: 30px;
 }
 
@@ -3897,4 +3902,473 @@ option {
     animation-duration: 1ms !important;
     animation-iteration-count: 1 !important;
   }
+}
+
+.app-shell[data-theme='light'],
+.app-shell[data-theme='light'] .canvas-node,
+.app-shell[data-theme='light'] .manager-modal,
+.app-shell[data-theme='light'] .full-preview-modal,
+.app-shell[data-theme='light'] .openai-message-modal,
+.app-shell[data-theme='light'] .side-panel {
+  --ink: #101828;
+  --ink-soft: #344054;
+  --muted: #52616f;
+  --muted-light: #7b8b98;
+  --line: rgba(148, 163, 184, 0.32);
+  --line-strong: rgba(15, 118, 110, 0.34);
+  --panel: #ffffff;
+  --panel-soft: #f8fafc;
+  --canvas: #f3f8fb;
+  --dark-action: #0f172a;
+  --teal: #0f766e;
+  --teal-soft: rgba(13, 148, 136, 0.12);
+  --amber: #b7791f;
+  --danger: #d92d20;
+  --accent-green: #15803d;
+  --accent-coral: #c2410c;
+  --shadow-soft: 0 18px 46px rgba(15, 23, 42, 0.1);
+  --shadow-focus: 0 0 0 3px rgba(13, 148, 136, 0.2);
+  color-scheme: light;
+  scrollbar-color: rgba(15, 118, 110, 0.42) rgba(226, 232, 240, 0.9);
+}
+
+.app-shell[data-theme='light'] {
+  color: var(--ink);
+  background:
+    linear-gradient(135deg, rgba(13, 148, 136, 0.1), transparent 34%),
+    linear-gradient(315deg, rgba(245, 158, 11, 0.1), transparent 34%),
+    #eef5f8;
+}
+
+.app-shell[data-theme='light'] ::selection {
+  color: #042f2e;
+  background: rgba(153, 246, 228, 0.95);
+}
+
+.app-shell[data-theme='light'] .topbar {
+  border-bottom-color: rgba(148, 163, 184, 0.28);
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.94), rgba(240, 253, 250, 0.9)),
+    #ffffff;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+}
+
+.app-shell[data-theme='light'] .brand > svg {
+  border-color: rgba(13, 148, 136, 0.28);
+  color: #0f766e;
+  background: rgba(204, 251, 241, 0.7);
+  box-shadow: 0 12px 24px rgba(13, 148, 136, 0.12);
+}
+
+.app-shell[data-theme='light'] .topbar-metrics span,
+.app-shell[data-theme='light'] .topbar-settings-button,
+.app-shell[data-theme='light'] .theme-toggle-button,
+.app-shell[data-theme='light'] .panel-footer span {
+  border-color: rgba(148, 163, 184, 0.36);
+  color: #243447;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.08);
+}
+
+.app-shell[data-theme='light'] button {
+  border-color: rgba(148, 163, 184, 0.42);
+  color: #101828;
+  background: rgba(255, 255, 255, 0.94);
+}
+
+.app-shell[data-theme='light'] button:hover {
+  border-color: rgba(13, 148, 136, 0.55);
+  background: #ffffff;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.12);
+}
+
+.app-shell[data-theme='light'] input,
+.app-shell[data-theme='light'] textarea,
+.app-shell[data-theme='light'] select {
+  border-color: rgba(100, 116, 139, 0.32);
+  color: #101828;
+  background: rgba(255, 255, 255, 0.96);
+  caret-color: #0f766e;
+}
+
+.app-shell[data-theme='light'] input::placeholder,
+.app-shell[data-theme='light'] textarea::placeholder {
+  color: rgba(82, 97, 111, 0.72);
+}
+
+.app-shell[data-theme='light'] option {
+  color: #101828;
+  background: #ffffff;
+}
+
+.app-shell[data-theme='light'] .workbench {
+  background: #eef5f8;
+}
+
+.app-shell[data-theme='light'] .panel-shell,
+.app-shell[data-theme='light'] .panel-shell.is-collapsed {
+  background:
+    linear-gradient(180deg, rgba(13, 148, 136, 0.06), transparent 150px),
+    rgba(248, 252, 254, 0.92);
+}
+
+.app-shell[data-theme='light'] .side-panel {
+  background:
+    linear-gradient(180deg, rgba(13, 148, 136, 0.05), transparent 190px),
+    rgba(248, 252, 254, 0.96);
+}
+
+.app-shell[data-theme='light'] .left-panel,
+.app-shell[data-theme='light'] .right-panel,
+.app-shell[data-theme='light'] .left-panel-shell,
+.app-shell[data-theme='light'] .right-panel-shell,
+.app-shell[data-theme='light'] .side-panel section,
+.app-shell[data-theme='light'] .manager-header,
+.app-shell[data-theme='light'] .openai-message-modal-header,
+.app-shell[data-theme='light'] .full-preview-header,
+.app-shell[data-theme='light'] .compare-header {
+  border-color: rgba(148, 163, 184, 0.3);
+}
+
+.app-shell[data-theme='light'] .item-list,
+.app-shell[data-theme='light'] .endpoint-list,
+.app-shell[data-theme='light'] .package-actions,
+.app-shell[data-theme='light'] .job-list {
+  border-color: rgba(148, 163, 184, 0.28);
+  background: rgba(226, 238, 244, 0.54);
+}
+
+.app-shell[data-theme='light'] .asset-list-item,
+.app-shell[data-theme='light'] .function-list-item,
+.app-shell[data-theme='light'] .server-list-item,
+.app-shell[data-theme='light'] .list-item,
+.app-shell[data-theme='light'] .job-row,
+.app-shell[data-theme='light'] .endpoint-row,
+.app-shell[data-theme='light'] .settings-section,
+.app-shell[data-theme='light'] .job-card,
+.app-shell[data-theme='light'] .manager-sidebar,
+.app-shell[data-theme='light'] .manager-editor,
+.app-shell[data-theme='light'] .endpoint-manager-list,
+.app-shell[data-theme='light'] .run-inspector,
+.app-shell[data-theme='light'] .history-row,
+.app-shell[data-theme='light'] .openai-message-card,
+.app-shell[data-theme='light'] .result-preview-card,
+.app-shell[data-theme='light'] .inspector-empty,
+.app-shell[data-theme='light'] .empty-list,
+.app-shell[data-theme='light'] .resource-empty-media,
+.app-shell[data-theme='light'] .run-input-row {
+  border-color: rgba(148, 163, 184, 0.32);
+  color: #344054;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+}
+
+.app-shell[data-theme='light'] .asset-list-item:hover,
+.app-shell[data-theme='light'] .function-list-item:hover,
+.app-shell[data-theme='light'] .list-item:hover,
+.app-shell[data-theme='light'] .job-row:hover,
+.app-shell[data-theme='light'] .job-card-button:hover,
+.app-shell[data-theme='light'] .history-row:hover {
+  border-color: rgba(13, 148, 136, 0.44);
+  background: #ffffff;
+}
+
+.app-shell[data-theme='light'] .asset-list-copy span,
+.app-shell[data-theme='light'] .server-copy span,
+.app-shell[data-theme='light'] .function-list-item span,
+.app-shell[data-theme='light'] .job-card-title-row strong,
+.app-shell[data-theme='light'] .manager-editor-title strong,
+.app-shell[data-theme='light'] .run-input-row strong,
+.app-shell[data-theme='light'] .full-preview-header h2,
+.app-shell[data-theme='light'] .openai-message-modal-header h2,
+.app-shell[data-theme='light'] .openai-message-card-header > span,
+.app-shell[data-theme='light'] .result-preview-card span,
+.app-shell[data-theme='light'] .node-title,
+.app-shell[data-theme='light'] .slot-copy span {
+  color: #101828;
+}
+
+.app-shell[data-theme='light'] .asset-list-copy small,
+.app-shell[data-theme='light'] .server-copy small,
+.app-shell[data-theme='light'] .server-list-item em,
+.app-shell[data-theme='light'] .job-card-meta small,
+.app-shell[data-theme='light'] .job-card-meta em,
+.app-shell[data-theme='light'] .job-card-button code,
+.app-shell[data-theme='light'] .settings-section p,
+.app-shell[data-theme='light'] .settings-section > span,
+.app-shell[data-theme='light'] .manager-editor-title span,
+.app-shell[data-theme='light'] .field,
+.app-shell[data-theme='light'] .binding-column-header,
+.app-shell[data-theme='light'] .node-meta,
+.app-shell[data-theme='light'] .run-detail-field span,
+.app-shell[data-theme='light'] .run-input-row small,
+.app-shell[data-theme='light'] .full-preview-header span,
+.app-shell[data-theme='light'] .openai-message-modal-header p,
+.app-shell[data-theme='light'] .openai-messages-header small,
+.app-shell[data-theme='light'] .history-row em,
+.app-shell[data-theme='light'] .slot-copy small {
+  color: #52616f;
+}
+
+.app-shell[data-theme='light'] .workspace-canvas {
+  background-color: #f3f8fb;
+  background-image:
+    linear-gradient(rgba(15, 118, 110, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15, 118, 110, 0.08) 1px, transparent 1px),
+    linear-gradient(rgba(100, 116, 139, 0.08) 2px, transparent 2px),
+    linear-gradient(90deg, rgba(100, 116, 139, 0.08) 2px, transparent 2px);
+}
+
+.app-shell[data-theme='light'] .workspace-canvas .react-flow__minimap,
+.app-shell[data-theme='light'] .workspace-canvas .react-flow__controls {
+  border-color: rgba(13, 148, 136, 0.22);
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.1);
+}
+
+.app-shell[data-theme='light'] .workspace-canvas .react-flow__controls button {
+  color: #344054;
+  background: transparent;
+}
+
+.app-shell[data-theme='light'] .workspace-canvas .react-flow__controls button:hover {
+  color: #0f766e;
+  background: rgba(204, 251, 241, 0.58);
+}
+
+.app-shell[data-theme='light'] .workspace-canvas .react-flow__minimap-mask {
+  fill: rgba(255, 255, 255, 0.42) !important;
+  stroke: rgba(13, 148, 136, 0.28);
+}
+
+.app-shell[data-theme='light'] .workspace-canvas .react-flow__minimap-node {
+  fill: rgba(13, 148, 136, 0.34) !important;
+  stroke: rgba(15, 118, 110, 0.52) !important;
+}
+
+.app-shell[data-theme='light'] .workspace-canvas .react-flow__handle {
+  border-color: rgba(255, 255, 255, 0.98);
+  background: #0f766e;
+  box-shadow:
+    0 0 0 1px rgba(15, 118, 110, 0.2),
+    0 8px 16px rgba(15, 23, 42, 0.12);
+}
+
+.app-shell[data-theme='light'] .workspace-canvas .react-flow__edge.input-edge .react-flow__edge-path {
+  stroke: rgba(15, 118, 110, 0.84);
+}
+
+.app-shell[data-theme='light'] .workspace-canvas .react-flow__edge.result-edge .react-flow__edge-path {
+  stroke: rgba(37, 99, 235, 0.72);
+}
+
+.app-shell[data-theme='light'] .workspace-canvas .react-flow__edge-textbg {
+  fill: rgba(255, 255, 255, 0.94);
+}
+
+.app-shell[data-theme='light'] .workspace-canvas .react-flow__edge-text {
+  fill: #344054;
+}
+
+.app-shell[data-theme='light'] .canvas-node {
+  border-color: rgba(148, 163, 184, 0.34);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(248, 252, 254, 0.92)),
+    #ffffff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 18px 46px rgba(15, 23, 42, 0.12);
+}
+
+.app-shell[data-theme='light'] .react-flow__node.selected .canvas-node {
+  border-color: rgba(13, 148, 136, 0.76);
+  box-shadow:
+    0 0 0 3px rgba(13, 148, 136, 0.18),
+    0 24px 54px rgba(15, 23, 42, 0.16);
+}
+
+.app-shell[data-theme='light'] .node-title svg {
+  color: #0f766e;
+}
+
+.app-shell[data-theme='light'] .node-reference-button,
+.app-shell[data-theme='light'] .node-reference-empty,
+.app-shell[data-theme='light'] .slot-requirement,
+.app-shell[data-theme='light'] .job-status,
+.app-shell[data-theme='light'] .result-status-chip,
+.app-shell[data-theme='light'] .run-input-row span,
+.app-shell[data-theme='light'] .history-row div span {
+  border-color: rgba(148, 163, 184, 0.24);
+  color: #52616f;
+  background: rgba(241, 245, 249, 0.78);
+}
+
+.app-shell[data-theme='light'] .slot-row {
+  border-color: rgba(148, 163, 184, 0.28);
+  background: rgba(248, 250, 252, 0.9);
+}
+
+.app-shell[data-theme='light'] .required-slot {
+  border-color: rgba(13, 148, 136, 0.3);
+  background: rgba(240, 253, 250, 0.86);
+}
+
+.app-shell[data-theme='light'] .optional-slot {
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.app-shell[data-theme='light'] .missing-slot {
+  border-color: rgba(225, 29, 72, 0.52);
+  background: rgba(255, 241, 242, 0.92);
+}
+
+.app-shell[data-theme='light'] .slot-connected-value,
+.app-shell[data-theme='light'] .run-count-control {
+  border-color: rgba(148, 163, 184, 0.28);
+  color: #52616f;
+  background: rgba(241, 245, 249, 0.9);
+}
+
+.app-shell[data-theme='light'] .required-slot .slot-requirement,
+.app-shell[data-theme='light'] .job-status-running,
+.app-shell[data-theme='light'] .job-status-queued,
+.app-shell[data-theme='light'] .result-status-chip.running,
+.app-shell[data-theme='light'] .result-status-chip.fetching_outputs,
+.app-shell[data-theme='light'] .result-status-chip.queued {
+  color: #0f766e;
+  background: rgba(204, 251, 241, 0.86);
+}
+
+.app-shell[data-theme='light'] .job-status-succeeded,
+.app-shell[data-theme='light'] .result-status-chip.succeeded {
+  color: #166534;
+  background: rgba(220, 252, 231, 0.92);
+}
+
+.app-shell[data-theme='light'] .job-status-failed,
+.app-shell[data-theme='light'] .job-status-canceled,
+.app-shell[data-theme='light'] .result-status-chip.failed,
+.app-shell[data-theme='light'] .result-status-chip.canceled,
+.app-shell[data-theme='light'] .missing-slot .slot-requirement,
+.app-shell[data-theme='light'] .history-row-failed div span {
+  color: #be123c;
+  background: rgba(255, 228, 230, 0.94);
+}
+
+.app-shell[data-theme='light'] .primary-action,
+.app-shell[data-theme='light'] .node-actions button,
+.app-shell[data-theme='light'] .local-action-footer .primary,
+.app-shell[data-theme='light'] .compare-toolbar button {
+  border-color: #0f766e;
+  color: #ffffff;
+  background: linear-gradient(135deg, #0f766e, #14b8a6);
+  box-shadow: 0 14px 32px rgba(13, 148, 136, 0.2);
+}
+
+.app-shell[data-theme='light'] .danger-button,
+.app-shell[data-theme='light'] .node-delete,
+.app-shell[data-theme='light'] .result-run-control-stop {
+  border-color: rgba(225, 29, 72, 0.32);
+  color: #be123c;
+  background: rgba(255, 241, 242, 0.88);
+}
+
+.app-shell[data-theme='light'] .modal-backdrop,
+.app-shell[data-theme='light'] .node-modal-backdrop,
+.app-shell[data-theme='light'] .full-preview-backdrop,
+.app-shell[data-theme='light'] .compare-backdrop,
+.app-shell[data-theme='light'] .local-action-backdrop {
+  background: rgba(15, 23, 42, 0.28);
+}
+
+.app-shell[data-theme='light'] .manager-modal,
+.app-shell[data-theme='light'] .full-preview-modal,
+.app-shell[data-theme='light'] .openai-message-modal,
+.app-shell[data-theme='light'] .local-action-dialog,
+.app-shell[data-theme='light'] .compare-modal {
+  border-color: rgba(148, 163, 184, 0.36);
+  background:
+    linear-gradient(180deg, rgba(240, 253, 250, 0.86), transparent 210px),
+    rgba(255, 255, 255, 0.98);
+  box-shadow: 0 30px 90px rgba(15, 23, 42, 0.22);
+}
+
+.app-shell[data-theme='light'] .manager-header,
+.app-shell[data-theme='light'] .openai-message-modal-header,
+.app-shell[data-theme='light'] .full-preview-header,
+.app-shell[data-theme='light'] .compare-header,
+.app-shell[data-theme='light'] .settings-page,
+.app-shell[data-theme='light'] .full-preview-body,
+.app-shell[data-theme='light'] .new-workflow-dialog {
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.app-shell[data-theme='light'] .searchable-options,
+.app-shell[data-theme='light'] .node-reference-popover,
+.app-shell[data-theme='light'] .add-node-menu,
+.app-shell[data-theme='light'] .resource-quick-actions {
+  border-color: rgba(13, 148, 136, 0.26);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.18);
+}
+
+.app-shell[data-theme='light'] .searchable-option,
+.app-shell[data-theme='light'] .add-node-menu button,
+.app-shell[data-theme='light'] .resource-quick-actions button,
+.app-shell[data-theme='light'] .node-reference-popover button {
+  color: #344054;
+  background: transparent;
+}
+
+.app-shell[data-theme='light'] .searchable-option:hover,
+.app-shell[data-theme='light'] .searchable-option[aria-selected="true"],
+.app-shell[data-theme='light'] .add-node-menu button:hover,
+.app-shell[data-theme='light'] .resource-quick-actions button:hover,
+.app-shell[data-theme='light'] .node-reference-popover button:hover {
+  color: #101828;
+  background: rgba(204, 251, 241, 0.68);
+}
+
+.app-shell[data-theme='light'] .json-preview,
+.app-shell[data-theme='light'] .full-preview-text,
+.app-shell[data-theme='light'] .inspector-block code,
+.app-shell[data-theme='light'] .inspector-block pre,
+.app-shell[data-theme='light'] .run-detail-field input,
+.app-shell[data-theme='light'] .run-input-value,
+.app-shell[data-theme='light'] .run-workflow-json,
+.app-shell[data-theme='light'] .history-modal-json {
+  border-color: rgba(148, 163, 184, 0.3);
+  color: #334155;
+  background: rgba(248, 250, 252, 0.96);
+}
+
+.app-shell[data-theme='light'] .run-workflow-json,
+.app-shell[data-theme='light'] .json-preview {
+  color: #dbeafe;
+  background: #0f172a;
+}
+
+.app-shell[data-theme='light'] .result-error,
+.app-shell[data-theme='light'] .toast-error {
+  border-color: rgba(225, 29, 72, 0.32);
+  color: #9f1239;
+  background: rgba(255, 241, 242, 0.94);
+}
+
+.app-shell[data-theme='light'] .asset-thumb-image,
+.app-shell[data-theme='light'] .asset-thumb-icon,
+.app-shell[data-theme='light'] .asset-thumb-text,
+.app-shell[data-theme='light'] .resource-preview-image,
+.app-shell[data-theme='light'] .resource-preview-video,
+.app-shell[data-theme='light'] .full-preview-image,
+.app-shell[data-theme='light'] .full-preview-video {
+  border-color: rgba(148, 163, 184, 0.26);
+  background: #eef5f8;
+}
+
+.app-shell[data-theme='light'] .compare-stage {
+  background:
+    linear-gradient(90deg, rgba(15, 23, 42, 0.06) 1px, transparent 1px),
+    linear-gradient(rgba(15, 23, 42, 0.06) 1px, transparent 1px),
+    #f8fafc;
 }
