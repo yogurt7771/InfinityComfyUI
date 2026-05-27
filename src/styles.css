@@ -4,22 +4,24 @@
 .full-preview-modal,
 .openai-message-modal,
 .side-panel {
-  --ink: #101828;
-  --ink-soft: #344054;
-  --muted: #667085;
-  --muted-light: #98a2b3;
-  --line: #d9e4ea;
-  --line-strong: #b8cbd4;
-  --panel: #ffffff;
-  --panel-soft: #f8fafc;
-  --canvas: #f7fbfd;
-  --dark-action: #111827;
-  --teal: #138894;
-  --teal-soft: #e8f7f8;
-  --amber: #9a6700;
-  --danger: #d92d20;
-  --shadow-soft: 0 18px 48px rgba(15, 23, 42, 0.08);
-  --shadow-focus: 0 0 0 3px rgba(19, 136, 148, 0.18);
+  --ink: #f6fbfc;
+  --ink-soft: #dce8ed;
+  --muted: #96a9b8;
+  --muted-light: #647887;
+  --line: rgba(148, 163, 184, 0.22);
+  --line-strong: rgba(94, 234, 212, 0.34);
+  --panel: #111923;
+  --panel-soft: #0c131d;
+  --canvas: #050810;
+  --dark-action: #17202c;
+  --teal: #35dcc8;
+  --teal-soft: rgba(45, 212, 191, 0.14);
+  --amber: #f6c453;
+  --danger: #fb7185;
+  --accent-green: #6ee7b7;
+  --accent-coral: #fb8f67;
+  --shadow-soft: 0 22px 70px rgba(0, 0, 0, 0.36);
+  --shadow-focus: 0 0 0 3px rgba(53, 220, 200, 0.28);
 }
 
 .app-shell {
@@ -30,7 +32,10 @@
   display: grid;
   grid-template-rows: 66px minmax(0, 1fr);
   color: var(--ink);
-  background: #eef4f7;
+  background:
+    linear-gradient(135deg, rgba(53, 220, 200, 0.1), transparent 34%),
+    linear-gradient(315deg, rgba(246, 196, 83, 0.08), transparent 32%),
+    #050810;
 }
 
 .topbar {
@@ -40,8 +45,11 @@
   gap: 16px;
   padding: 0 20px;
   border-bottom: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.95);
-  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.04);
+  background:
+    linear-gradient(90deg, rgba(53, 220, 200, 0.08), rgba(246, 196, 83, 0.05)),
+    rgba(8, 13, 21, 0.92);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(18px);
 }
 
 .brand {
@@ -49,6 +57,17 @@
   align-items: center;
   gap: 12px;
   min-width: 0;
+}
+
+.brand > svg {
+  width: 38px;
+  height: 38px;
+  padding: 8px;
+  border: 1px solid rgba(94, 234, 212, 0.36);
+  border-radius: 8px;
+  color: var(--teal);
+  background: rgba(45, 212, 191, 0.12);
+  box-shadow: 0 0 24px rgba(53, 220, 200, 0.16);
 }
 
 .brand h1 {
@@ -83,9 +102,9 @@
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--ink-soft);
-  background: var(--panel);
+  background: rgba(17, 25, 35, 0.86);
   font-size: 13px;
-  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.04);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.22);
 }
 
 .topbar-settings-button {
@@ -102,18 +121,20 @@ button {
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   color: var(--ink);
-  background: var(--panel);
+  background: rgba(17, 25, 35, 0.94);
   font-weight: 700;
   transition:
-    border-color 120ms ease,
-    background-color 120ms ease,
-    box-shadow 120ms ease,
-    transform 120ms ease;
+    border-color 180ms ease,
+    background-color 180ms ease,
+    color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
 }
 
 button:hover {
-  border-color: #9fb6c1;
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  border-color: rgba(110, 231, 183, 0.68);
+  background: rgba(22, 32, 44, 0.98);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.26);
 }
 
 button:focus-visible,
@@ -131,6 +152,7 @@ select:focus-visible {
   overflow: hidden;
   display: grid;
   grid-template-columns: 340px minmax(480px, 1fr) 312px;
+  background: #050810;
 }
 
 .workbench.left-collapsed {
@@ -150,7 +172,7 @@ select:focus-visible {
   min-width: 0;
   min-height: 0;
   height: 100%;
-  background: #f7fafc;
+  background: rgba(8, 13, 21, 0.94);
 }
 
 .panel-shell.is-collapsed {
@@ -165,7 +187,9 @@ select:focus-visible {
   min-width: 0;
   overflow: auto;
   padding: 14px 12px;
-  background: #f7fafc;
+  background:
+    linear-gradient(180deg, rgba(53, 220, 200, 0.06), transparent 190px),
+    rgba(8, 13, 21, 0.92);
 }
 
 .left-panel {
@@ -3108,5 +3132,769 @@ textarea[aria-invalid="true"] {
     max-height: none;
     border-right: 0;
     border-bottom: 1px solid #cfd8dc;
+  }
+}
+
+/* Visual refresh: dense dark workstation theme. */
+.app-shell,
+.canvas-node,
+.manager-modal,
+.full-preview-modal,
+.openai-message-modal,
+.side-panel {
+  color-scheme: dark;
+  scrollbar-color: rgba(94, 234, 212, 0.46) rgba(15, 23, 42, 0.72);
+}
+
+.app-shell ::selection {
+  color: #031012;
+  background: rgba(110, 231, 183, 0.9);
+}
+
+.side-panel::-webkit-scrollbar,
+.manager-sidebar::-webkit-scrollbar,
+.manager-editor::-webkit-scrollbar,
+.endpoint-manager-list::-webkit-scrollbar,
+.openai-message-list::-webkit-scrollbar,
+.history-list::-webkit-scrollbar,
+.full-preview-body::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.side-panel::-webkit-scrollbar-thumb,
+.manager-sidebar::-webkit-scrollbar-thumb,
+.manager-editor::-webkit-scrollbar-thumb,
+.endpoint-manager-list::-webkit-scrollbar-thumb,
+.openai-message-list::-webkit-scrollbar-thumb,
+.history-list::-webkit-scrollbar-thumb,
+.full-preview-body::-webkit-scrollbar-thumb {
+  border: 2px solid rgba(15, 23, 42, 0.72);
+  border-radius: 999px;
+  background: rgba(94, 234, 212, 0.42);
+}
+
+.topbar-settings-button:hover,
+.panel-collapse-button:hover,
+.section-manage-button:hover,
+.history-row-actions button:hover,
+.history-row-actions a:hover,
+.run-input-focus-button:hover {
+  color: var(--accent-green);
+}
+
+.left-panel,
+.right-panel,
+.left-panel-shell,
+.right-panel-shell {
+  border-color: rgba(148, 163, 184, 0.18);
+}
+
+.panel-shell.is-collapsed {
+  background:
+    linear-gradient(180deg, rgba(53, 220, 200, 0.08), transparent 140px),
+    rgba(8, 13, 21, 0.94);
+}
+
+.side-panel section {
+  margin: 0 0 10px;
+  padding: 13px 4px 18px;
+  border-bottom-color: rgba(148, 163, 184, 0.16);
+}
+
+.panel-title {
+  color: var(--muted);
+}
+
+.panel-title svg,
+.topbar-metrics svg {
+  color: var(--teal);
+}
+
+.panel-title h2,
+.settings-section h3,
+.manager-header h3,
+.binding-header h4,
+.run-inspector h3,
+.inspector-block strong,
+.history-row strong {
+  color: var(--ink);
+}
+
+button svg {
+  flex: 0 0 auto;
+}
+
+input,
+textarea,
+select {
+  border-color: rgba(148, 163, 184, 0.26);
+  color: var(--ink);
+  background: rgba(8, 13, 21, 0.86);
+  caret-color: var(--teal);
+  transition:
+    border-color 180ms ease,
+    background-color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: rgba(150, 169, 184, 0.68);
+}
+
+option {
+  color: var(--ink);
+  background: #0b121c;
+}
+
+.primary-action,
+.node-actions button,
+.local-action-footer .primary,
+.compare-toolbar button {
+  border-color: rgba(110, 231, 183, 0.8);
+  color: #031012;
+  background:
+    linear-gradient(135deg, rgba(110, 231, 183, 0.98), rgba(53, 220, 200, 0.94));
+  box-shadow: 0 14px 34px rgba(45, 212, 191, 0.22);
+}
+
+.primary-action:hover,
+.node-actions button:hover,
+.local-action-footer .primary:hover,
+.compare-toolbar button:hover {
+  border-color: rgba(167, 243, 208, 0.95);
+  color: #031012;
+  background:
+    linear-gradient(135deg, rgba(167, 243, 208, 1), rgba(94, 234, 212, 0.98));
+  box-shadow: 0 18px 42px rgba(45, 212, 191, 0.3);
+}
+
+.danger-button,
+.node-delete,
+.result-run-control-stop {
+  border-color: rgba(251, 113, 133, 0.45);
+  color: #fecdd3;
+  background: rgba(127, 29, 29, 0.22);
+}
+
+.danger-button:hover,
+.node-delete:hover,
+.result-run-control-stop:hover {
+  border-color: rgba(251, 113, 133, 0.82);
+  color: #fff1f2;
+  background: rgba(159, 18, 57, 0.34);
+}
+
+.item-list,
+.endpoint-list,
+.package-actions,
+.job-list {
+  border-color: rgba(148, 163, 184, 0.16);
+  background: rgba(2, 6, 23, 0.3);
+}
+
+.asset-list-item,
+.function-list-item,
+.server-list-item,
+.list-item,
+.job-row,
+.endpoint-row,
+.settings-section,
+.job-card,
+.manager-sidebar,
+.manager-editor,
+.endpoint-manager-list,
+.run-inspector,
+.history-row,
+.openai-message-card,
+.result-preview-card,
+.inspector-empty,
+.empty-list,
+.resource-empty-media,
+.run-input-row {
+  border-color: rgba(148, 163, 184, 0.2);
+  color: var(--ink-soft);
+  background: rgba(17, 25, 35, 0.78);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.18);
+}
+
+.asset-list-item:hover,
+.function-list-item:hover,
+.list-item:hover,
+.job-row:hover,
+.job-card-button:hover,
+.history-row:hover {
+  border-color: rgba(94, 234, 212, 0.42);
+  background: rgba(19, 32, 44, 0.92);
+}
+
+.asset-list-copy span,
+.server-copy span,
+.function-list-item span,
+.job-card-title-row strong,
+.manager-editor-title strong,
+.run-input-row strong,
+.full-preview-header h2,
+.openai-message-modal-header h2,
+.openai-message-card-header > span,
+.result-preview-card span {
+  color: var(--ink);
+}
+
+.asset-list-copy small,
+.server-copy small,
+.server-list-item em,
+.job-card-meta small,
+.job-card-meta em,
+.job-card-button code,
+.settings-section p,
+.settings-section > span,
+.manager-editor-title span,
+.field,
+.binding-column-header,
+.node-meta,
+.run-detail-field span,
+.run-input-row small,
+.full-preview-header span,
+.openai-message-modal-header p,
+.openai-messages-header small,
+.history-row em {
+  color: var(--muted);
+}
+
+.asset-list-item {
+  border-left-color: var(--muted-light);
+}
+
+.function-list-item {
+  border-left-color: var(--teal);
+}
+
+.server-list-item {
+  border-left-color: var(--amber);
+}
+
+.asset-thumb-image,
+.asset-thumb-icon,
+.asset-thumb-text,
+.resource-preview-image,
+.resource-preview-video,
+.full-preview-image,
+.full-preview-video {
+  border-color: rgba(148, 163, 184, 0.2);
+  background: #070d16;
+}
+
+.asset-thumb-icon,
+.asset-thumb-text {
+  color: var(--teal);
+}
+
+.status-dot {
+  box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.12);
+}
+
+.status-dot.online {
+  background: var(--accent-green);
+  box-shadow: 0 0 0 3px rgba(110, 231, 183, 0.18);
+}
+
+.status-dot.offline,
+.status-dot.cors_error,
+.status-dot.auth_error {
+  background: var(--accent-coral);
+  box-shadow: 0 0 0 3px rgba(251, 143, 103, 0.18);
+}
+
+.job-status,
+.result-status-chip,
+.run-input-row span,
+.history-row div span {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  color: var(--muted);
+  background: rgba(148, 163, 184, 0.1);
+}
+
+.job-status-running,
+.job-status-queued,
+.result-status-chip.running,
+.result-status-chip.fetching_outputs,
+.result-status-chip.queued {
+  color: #99f6e4;
+  background: rgba(20, 184, 166, 0.18);
+}
+
+.job-status-succeeded,
+.result-status-chip.succeeded {
+  color: #bbf7d0;
+  background: rgba(34, 197, 94, 0.18);
+}
+
+.job-status-failed,
+.job-status-canceled,
+.result-status-chip.failed,
+.result-status-chip.canceled,
+.history-row-failed div span {
+  color: #fecdd3;
+  background: rgba(225, 29, 72, 0.18);
+}
+
+.modal-backdrop,
+.node-modal-backdrop,
+.full-preview-backdrop,
+.compare-backdrop,
+.local-action-backdrop {
+  background: rgba(2, 6, 12, 0.72);
+  backdrop-filter: blur(14px);
+}
+
+.manager-modal,
+.full-preview-modal,
+.openai-message-modal,
+.local-action-dialog,
+.compare-modal {
+  border-color: rgba(94, 234, 212, 0.24);
+  background:
+    linear-gradient(180deg, rgba(53, 220, 200, 0.05), transparent 210px),
+    rgba(9, 14, 23, 0.96);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.5);
+}
+
+.manager-header,
+.openai-message-modal-header,
+.full-preview-header,
+.compare-header {
+  border-color: rgba(148, 163, 184, 0.18);
+  background: rgba(17, 25, 35, 0.88);
+}
+
+.settings-page,
+.full-preview-body,
+.new-workflow-dialog {
+  background:
+    linear-gradient(180deg, rgba(53, 220, 200, 0.05), transparent 200px),
+    rgba(8, 13, 21, 0.72);
+}
+
+.project-actions {
+  align-items: end;
+}
+
+.searchable-options,
+.node-reference-popover,
+.add-node-menu,
+.resource-quick-actions {
+  border-color: rgba(94, 234, 212, 0.28);
+  background: rgba(8, 13, 21, 0.96);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(18px);
+}
+
+.searchable-option,
+.add-node-menu button,
+.resource-quick-actions button,
+.node-reference-popover button {
+  color: var(--ink-soft);
+  background: transparent;
+}
+
+.searchable-option:hover,
+.searchable-option[aria-selected="true"],
+.add-node-menu button:hover,
+.resource-quick-actions button:hover,
+.node-reference-popover button:hover {
+  color: var(--ink);
+  background: rgba(45, 212, 191, 0.14);
+}
+
+.workspace-canvas {
+  background-color: var(--canvas);
+  background-image:
+    linear-gradient(rgba(94, 234, 212, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(94, 234, 212, 0.06) 1px, transparent 1px),
+    linear-gradient(rgba(148, 163, 184, 0.05) 2px, transparent 2px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.05) 2px, transparent 2px);
+  background-position:
+    0 0,
+    0 0,
+    -1px -1px,
+    -1px -1px;
+  background-size:
+    24px 24px,
+    24px 24px,
+    120px 120px,
+    120px 120px;
+}
+
+.workspace-canvas .react-flow__background {
+  opacity: 0.2;
+}
+
+.workspace-canvas .react-flow__minimap {
+  width: 132px !important;
+  height: 96px !important;
+  margin: 14px;
+  opacity: 0.5;
+  border: 1px solid rgba(94, 234, 212, 0.22);
+  border-radius: 8px;
+  background: rgba(8, 13, 21, 0.82);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.34);
+}
+
+.workspace-canvas .react-flow__minimap svg {
+  background: transparent !important;
+}
+
+.workspace-canvas .react-flow__minimap-mask {
+  fill: rgba(8, 13, 21, 0.18) !important;
+  stroke: rgba(94, 234, 212, 0.28);
+}
+
+.workspace-canvas .react-flow__minimap-node {
+  fill: rgba(53, 220, 200, 0.36) !important;
+  stroke: rgba(110, 231, 183, 0.52) !important;
+}
+
+.workspace-canvas .react-flow__controls {
+  overflow: hidden;
+  border: 1px solid rgba(94, 234, 212, 0.22);
+  border-radius: 8px;
+  background: rgba(8, 13, 21, 0.86);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.34);
+}
+
+.workspace-canvas .react-flow__controls button {
+  min-height: 34px;
+  border: 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 0;
+  color: var(--ink-soft);
+  background: transparent;
+  box-shadow: none;
+}
+
+.workspace-canvas .react-flow__controls button:hover {
+  color: var(--teal);
+  background: rgba(45, 212, 191, 0.14);
+}
+
+.workspace-canvas .react-flow__handle {
+  border-color: rgba(17, 25, 35, 0.98);
+  background: #162536;
+  box-shadow:
+    0 0 0 1px rgba(94, 234, 212, 0.24),
+    0 0 18px rgba(53, 220, 200, 0.12);
+}
+
+.workspace-canvas .react-flow__handle:hover,
+.workspace-canvas .react-flow__handle:focus-visible {
+  background: var(--teal);
+  box-shadow:
+    0 0 0 4px rgba(53, 220, 200, 0.2),
+    0 0 24px rgba(53, 220, 200, 0.28);
+}
+
+.workspace-canvas .react-flow__edge.input-edge .react-flow__edge-path {
+  stroke: rgba(110, 231, 183, 0.82);
+}
+
+.workspace-canvas .react-flow__edge.result-edge .react-flow__edge-path {
+  stroke: rgba(147, 197, 253, 0.78);
+}
+
+.workspace-canvas .react-flow__edge.selected .react-flow__edge-path {
+  stroke: var(--teal);
+  filter: drop-shadow(0 0 6px rgba(53, 220, 200, 0.45));
+}
+
+.workspace-canvas .react-flow__edge-textbg {
+  fill: rgba(8, 13, 21, 0.92);
+}
+
+.workspace-canvas .react-flow__edge-text {
+  fill: #dce8ed;
+}
+
+.canvas-node {
+  border-color: rgba(148, 163, 184, 0.22);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent 34%),
+    rgba(15, 23, 33, 0.94);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 18px 54px rgba(0, 0, 0, 0.28);
+}
+
+.react-flow__node.selected .canvas-node {
+  border-color: rgba(53, 220, 200, 0.78);
+  box-shadow:
+    0 0 0 3px rgba(53, 220, 200, 0.2),
+    0 24px 70px rgba(0, 0, 0, 0.42);
+}
+
+.resource-node {
+  border-top-color: var(--teal);
+}
+
+.function-node {
+  border-top-color: var(--amber);
+}
+
+.openai-node {
+  border-top-color: #68a9ff;
+}
+
+.gemini-node,
+.image-generation-node {
+  border-top-color: var(--accent-coral);
+}
+
+.request-node {
+  border-top-color: #9ae6b4;
+}
+
+.result-node {
+  border-top-color: var(--accent-green);
+}
+
+.result-node-active {
+  border-color: rgba(94, 234, 212, 0.46);
+  box-shadow:
+    0 0 0 3px rgba(53, 220, 200, 0.18),
+    0 22px 58px rgba(0, 0, 0, 0.34);
+}
+
+.result-node-active::before {
+  background: linear-gradient(90deg, rgba(53, 220, 200, 0.34), rgba(110, 231, 183, 0.42), rgba(251, 143, 103, 0.24));
+}
+
+.result-node-failed {
+  border-color: rgba(251, 113, 133, 0.42);
+  border-top-color: var(--danger);
+  background:
+    linear-gradient(180deg, rgba(251, 113, 133, 0.08), transparent 42%),
+    rgba(30, 17, 26, 0.94);
+}
+
+.react-flow__node.selected .result-node-failed {
+  border-color: rgba(251, 113, 133, 0.78);
+  box-shadow:
+    0 0 0 3px rgba(251, 113, 133, 0.2),
+    0 24px 70px rgba(0, 0, 0, 0.42);
+}
+
+.node-title {
+  color: var(--ink);
+}
+
+.node-title svg {
+  color: var(--teal);
+}
+
+.node-reference-button,
+.node-reference-empty {
+  border-color: rgba(148, 163, 184, 0.2);
+  color: var(--muted);
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.node-reference-button:hover {
+  color: var(--teal);
+  background: rgba(45, 212, 191, 0.12);
+}
+
+.node-resize-handle {
+  border-color: rgba(94, 234, 212, 0.75);
+  background: var(--canvas);
+}
+
+.node-slots {
+  gap: 10px;
+}
+
+.slot-row {
+  border-color: rgba(148, 163, 184, 0.2);
+  background: rgba(8, 13, 21, 0.68);
+}
+
+.required-slot {
+  border-color: rgba(53, 220, 200, 0.36);
+  background: rgba(45, 212, 191, 0.08);
+}
+
+.optional-slot {
+  background: rgba(148, 163, 184, 0.06);
+}
+
+.missing-slot {
+  border-color: rgba(251, 113, 133, 0.76);
+  background: rgba(127, 29, 29, 0.28);
+}
+
+.slot-copy span {
+  color: var(--ink);
+}
+
+.slot-copy small {
+  color: var(--muted);
+}
+
+.slot-connected-value,
+.run-count-control {
+  border-color: rgba(148, 163, 184, 0.2);
+  color: var(--muted);
+  background: rgba(2, 6, 23, 0.34);
+}
+
+.slot-requirement {
+  color: var(--muted);
+  background: rgba(148, 163, 184, 0.1);
+}
+
+.required-slot .slot-requirement {
+  color: #99f6e4;
+  background: rgba(20, 184, 166, 0.18);
+}
+
+.missing-slot .slot-requirement {
+  color: #fecdd3;
+  background: rgba(225, 29, 72, 0.18);
+}
+
+.result-output-slot {
+  background: rgba(34, 197, 94, 0.1);
+}
+
+.result-preview-card {
+  background: rgba(8, 13, 21, 0.72);
+}
+
+.result-preview-card span {
+  background: rgba(45, 212, 191, 0.1);
+}
+
+.result-card-actions button {
+  color: var(--ink);
+  background: rgba(8, 13, 21, 0.78);
+  backdrop-filter: blur(8px);
+}
+
+.result-error,
+.toast-error,
+.field-error,
+.job-error {
+  color: #fecdd3;
+}
+
+.result-error,
+.toast-error {
+  border-color: rgba(251, 113, 133, 0.42);
+  background: rgba(127, 29, 29, 0.24);
+}
+
+.json-preview,
+.full-preview-text,
+.inspector-block code,
+.inspector-block pre,
+.run-detail-field input,
+.run-input-value,
+.run-workflow-json,
+.history-modal-json {
+  border-color: rgba(148, 163, 184, 0.2);
+  color: #dbeafe;
+  background: rgba(2, 6, 23, 0.66);
+}
+
+.json-key,
+.run-workflow-json .json-key {
+  color: #5eead4;
+}
+
+.json-string,
+.run-workflow-json .json-string {
+  color: #bbf7d0;
+}
+
+.json-number,
+.run-workflow-json .json-number {
+  color: #facc15;
+}
+
+.json-literal,
+.run-workflow-json .json-literal {
+  color: #fda4af;
+}
+
+.openai-node-editor,
+.request-output-editor,
+.workflow-editor-section {
+  border-color: rgba(148, 163, 184, 0.18);
+  background: rgba(2, 6, 23, 0.28);
+}
+
+.openai-node-editor label,
+.openai-messages-header {
+  color: var(--ink-soft);
+}
+
+.compare-modal {
+  border-radius: 8px;
+}
+
+.compare-stage {
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.055) 1px, transparent 1px),
+    linear-gradient(rgba(255, 255, 255, 0.055) 1px, transparent 1px),
+    #050810;
+  background-size: 28px 28px;
+}
+
+.compare-header button {
+  border-color: rgba(148, 163, 184, 0.28);
+  color: var(--ink);
+  background: rgba(17, 25, 35, 0.86);
+}
+
+.compare-divider {
+  background: var(--teal);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.7),
+    0 0 20px rgba(53, 220, 200, 0.55);
+}
+
+.compare-divider span {
+  border-color: rgba(255, 255, 255, 0.72);
+  background: rgba(8, 13, 21, 0.78);
+}
+
+@media (max-width: 820px) {
+  .topbar {
+    gap: 10px;
+  }
+
+  .topbar-metrics {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .topbar-metrics span,
+  .topbar-settings-button {
+    min-height: 36px;
+  }
+
+  .left-panel {
+    border-bottom-color: rgba(148, 163, 184, 0.18);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
   }
 }
