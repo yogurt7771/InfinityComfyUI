@@ -331,6 +331,92 @@ describe('NodeViews', () => {
     )
   })
 
+  it('opens media resource nodes from the central preview area', () => {
+    const props = {
+      id: 'node_image',
+      selected: false,
+      data: {
+        ...baseNodeData,
+        resourcesById: { res_image: outputResource },
+        resourceId: 'res_image',
+        title: 'Reference Image',
+      },
+    } as unknown as ComponentProps<typeof ResourceNodeView>
+
+    render(
+      <ReactFlowProvider>
+        <ResourceNodeView {...props} />
+      </ReactFlowProvider>,
+    )
+
+    fireEvent.doubleClick(screen.getByRole('button', { name: 'Open Reference Image resource preview' }))
+
+    expect(screen.getByRole('dialog', { name: 'Preview render.png' })).toBeVisible()
+  })
+
+  it('shows generated function output previews, opens them, locates their result nodes, and scrolls to new outputs', async () => {
+    const latestOutput: Resource = {
+      ...outputResource,
+      id: 'res_image_latest',
+      name: 'render-latest.png',
+      value: {
+        ...(outputResource.value as MediaResourceValue),
+        assetId: 'asset_image_latest',
+        url: 'data:image/png;base64,BBBB',
+        filename: 'render-latest.png',
+      },
+      source: {
+        ...outputResource.source,
+        resultGroupNodeId: 'node_result_latest',
+      },
+      metadata: { createdAt: '2026-05-09T00:00:05.000Z' },
+    }
+    const scrollTo = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: scrollTo })
+    const onFocusReferenceNode = vi.fn()
+    const baseProps = {
+      id: 'node_fn',
+      selected: false,
+      data: {
+        ...baseNodeData,
+        resourcesById: { res_image: outputResource },
+        functionsById: { fn_render: renderFunction },
+        functionId: 'fn_render',
+        title: 'Flux2 Text To Image',
+        onFocusReferenceNode,
+      },
+    } as unknown as ComponentProps<typeof FunctionNodeView>
+
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <FunctionNodeView {...baseProps} />
+      </ReactFlowProvider>,
+    )
+
+    const strip = screen.getByLabelText('Function output resources')
+    expect(within(strip).getByRole('button', { name: 'Open render.png output preview' })).toBeVisible()
+    fireEvent.click(within(strip).getByRole('button', { name: 'Open render.png output preview' }))
+    expect(screen.getByRole('dialog', { name: 'Preview render.png' })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Close full preview' }))
+    scrollTo.mockClear()
+
+    rerender(
+      <ReactFlowProvider>
+        <FunctionNodeView
+          {...baseProps}
+          data={{
+            ...baseProps.data,
+            resourcesById: { res_image: outputResource, res_image_latest: latestOutput },
+          }}
+        />
+      </ReactFlowProvider>,
+    )
+
+    await waitFor(() => expect(scrollTo).toHaveBeenCalled())
+    fireEvent.doubleClick(screen.getByRole('button', { name: 'Open render-latest.png output preview' }))
+    expect(onFocusReferenceNode).toHaveBeenCalledWith('node_result_latest')
+  })
+
   it('renders one connectable slot per function input and output definition', () => {
     const functionWithOptionalInput: GenerationFunction = {
       ...renderFunction,

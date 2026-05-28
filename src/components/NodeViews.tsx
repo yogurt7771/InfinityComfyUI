@@ -3,8 +3,6 @@ import { createPortal } from 'react-dom'
 import { Handle, NodeResizeControl, Position, type NodeProps } from '@xyflow/react'
 import {
   Box,
-  ChevronLeft,
-  ChevronRight,
   Copy,
   Cpu,
   Download,
@@ -18,7 +16,6 @@ import {
   Square,
   Trash2,
   Upload,
-  X,
 } from 'lucide-react'
 import { defaultOpenAILlmConfig, isOpenAILlmFunction, mergedOpenAILlmConfig } from '../domain/openaiLlm'
 import { defaultGeminiLlmConfig, isGeminiLlmFunction, mergedGeminiLlmConfig } from '../domain/geminiLlm'
@@ -57,6 +54,7 @@ import type {
   ResourceType,
 } from '../domain/types'
 import { ResourcePreview } from './ResourcePreview'
+import { FullResourcePreviewModal, sameTypePreviewResources } from './ResourcePreviewModal'
 
 type WorkbenchNodeData = {
   resourceId?: string
@@ -137,6 +135,16 @@ const isResourceRef = (value: PrimitiveInputValue | ResourceRef | undefined): va
 
 const mediaValue = (resource: Resource) =>
   typeof resource.value === 'object' && resource.value !== null && 'url' in resource.value ? resource.value : undefined
+
+const resourcePreviewName = (resource: Resource) => {
+  const media = mediaValue(resource)
+  if (media?.filename) return media.filename
+  if (resource.type === 'text' || resource.type === 'number') {
+    const name = resource.name ?? resource.id
+    return name.toLowerCase().endsWith('.txt') ? name : `${name}.txt`
+  }
+  return resource.name ?? resource.id
+}
 
 const connectedPrimitiveLabel = (resource: Resource | undefined, fallback: string) => {
   if (!resource) return fallback
@@ -428,6 +436,116 @@ function FunctionInputSlot({
   )
 }
 
+const createdAtValue = (resource: Resource) => {
+  const value = resource.metadata?.createdAt
+  if (!value) return 0
+  const time = Date.parse(value)
+  return Number.isFinite(time) ? time : 0
+}
+
+const functionOutputResources = (resourcesById: Record<string, Resource>, functionNodeId: string) =>
+  Object.values(resourcesById)
+    .filter((resource) => resource.source.kind === 'function_output' && resource.source.functionNodeId === functionNodeId)
+    .sort((left, right) => createdAtValue(left) - createdAtValue(right))
+
+const resourceFocusNodeId = (resource: Resource) => resource.source.resultGroupNodeId ?? resource.source.functionNodeId
+
+function FunctionOutputResourcePreview({ resource }: { resource: Resource }) {
+  const mediaSource = usePreviewMediaSource(resource)
+  const label = resourcePreviewName(resource)
+
+  if (resource.type === 'image' && mediaSource) {
+    return (
+      <span className="function-output-resource-frame">
+        <img className="media-preview-contain" src={String(mediaSource)} alt="" aria-hidden="true" />
+      </span>
+    )
+  }
+
+  if (resource.type === 'video' && mediaSource) {
+    return (
+      <span className="function-output-resource-frame">
+        <video
+          aria-hidden="true"
+          className="media-preview-contain"
+          src={String(mediaSource)}
+          muted
+          preload="metadata"
+        />
+      </span>
+    )
+  }
+
+  if (resource.type === 'audio') {
+    return (
+      <span className="function-output-resource-frame function-output-resource-audio" aria-label={`${label} output preview`}>
+        Audio
+      </span>
+    )
+  }
+
+  return (
+    <span className="function-output-resource-frame function-output-resource-primitive" title={String(resource.value)}>
+      <span>{resource.type}</span>
+    </span>
+  )
+}
+
+function FunctionOutputResourceStrip({
+  resources,
+  onFocusResourceNode,
+  onOpenResource,
+}: {
+  resources: Resource[]
+  onFocusResourceNode?: (resource: Resource) => void
+  onOpenResource: (resource: Resource) => void
+}) {
+  const stripRef = useRef<HTMLDivElement | null>(null)
+  const resourceIds = resources.map((resource) => resource.id).join('|')
+
+  useEffect(() => {
+    const strip = stripRef.current
+    if (!strip || resources.length === 0) return
+
+    if (typeof strip.scrollTo === 'function') {
+      strip.scrollTo({ left: strip.scrollWidth, behavior: 'auto' })
+      return
+    }
+
+    strip.scrollLeft = strip.scrollWidth
+  }, [resourceIds, resources.length])
+
+  if (resources.length === 0) return null
+
+  return (
+    <div className="function-output-resource-strip nodrag nopan" aria-label="Function output resources" ref={stripRef}>
+      {resources.map((resource) => {
+        const label = resourcePreviewName(resource)
+        return (
+          <button
+            type="button"
+            aria-label={`Open ${label} output preview`}
+            className={`function-output-resource function-output-resource-${resource.type}`}
+            key={resource.id}
+            title={label}
+            onClick={(event) => {
+              event.stopPropagation()
+              onOpenResource(resource)
+            }}
+            onDoubleClick={(event) => {
+              event.stopPropagation()
+              onFocusResourceNode?.(resource)
+            }}
+          >
+            <FunctionOutputResourcePreview resource={resource} />
+            <span>{label}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 function FunctionOutputSlot({ output }: { output: FunctionOutputDef }) {
   return (
     <div className="slot-row output-slot" data-testid={`function-output-slot-${output.key}`}>
@@ -592,151 +710,6 @@ function usePreviewMediaSource(resource: Resource) {
 
   if (!media?.url) return undefined
   return key ? (objectUrl?.key === key ? objectUrl.url : undefined) : media.url
-}
-
-function FullResourcePreview({ resource }: { resource: Resource }) {
-  const mediaSource = usePreviewMediaSource(resource)
-  const label = resourceDownloadName(resource)
-
-  if (resource.type === 'image' && mediaSource) {
-    return <img className="full-preview-image" src={String(mediaSource)} alt={label} />
-  }
-
-  if (resource.type === 'video' && mediaSource) {
-    return <video className="full-preview-video" src={String(mediaSource)} controls aria-label={`${label} full preview`} />
-  }
-
-  if (resource.type === 'audio' && mediaSource) {
-    return <audio className="full-preview-audio" src={String(mediaSource)} controls aria-label={`${label} full preview`} />
-  }
-
-  const textValue = typeof resource.value === 'string' ? resource.value : JSON.stringify(resource.value, null, 2)
-  return <pre className="full-preview-text">{textValue}</pre>
-}
-
-function sameTypePreviewResources(
-  resourcesById: Record<string, Resource>,
-  resource: Resource,
-  fallbackFunctionNodeId?: string,
-  fallbackWorkflowFunctionId?: string,
-) {
-  const functionNodeId = resource.source.functionNodeId ?? fallbackFunctionNodeId
-  const workflowFunctionId = resource.metadata?.workflowFunctionId ?? fallbackWorkflowFunctionId
-  const candidates = Object.values(resourcesById).filter(
-    (candidate) =>
-      candidate.source.kind === 'function_output' &&
-      candidate.type === resource.type &&
-      ((Boolean(functionNodeId) && candidate.source.functionNodeId === functionNodeId) ||
-        (Boolean(workflowFunctionId) && candidate.metadata?.workflowFunctionId === workflowFunctionId)),
-  )
-
-  if (candidates.some((candidate) => candidate.id === resource.id)) return candidates
-  return [resource, ...candidates]
-}
-
-function FullResourcePreviewModal({
-  resource,
-  resources = [],
-  onClose,
-}: {
-  resource?: Resource
-  resources?: Resource[]
-  onClose: () => void
-}) {
-  const [previewState, setPreviewState] = useState<{
-    initialResourceId?: string
-    currentResourceId?: string
-  }>({})
-
-  const initialResourceId = resource?.id
-  const currentResourceId =
-    previewState.initialResourceId === initialResourceId ? previewState.currentResourceId : initialResourceId
-  const currentIndex = Math.max(
-    0,
-    resources.findIndex((item) => item.id === currentResourceId),
-  )
-  const currentResource = resources[currentIndex] ?? resource
-  const canNavigate = resources.length > 1
-  const setCurrentResourceId = (id: string | undefined) => {
-    setPreviewState({ initialResourceId, currentResourceId: id })
-  }
-  const goToPrevious = () => {
-    if (!canNavigate) return
-    setCurrentResourceId(resources[(currentIndex - 1 + resources.length) % resources.length]?.id)
-  }
-  const goToNext = () => {
-    if (!canNavigate) return
-    setCurrentResourceId(resources[(currentIndex + 1) % resources.length]?.id)
-  }
-
-  useEffect(() => {
-    if (!resource || !canNavigate) return undefined
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'ArrowLeft') {
-        event.preventDefault()
-        goToPrevious()
-      }
-      if (event.key === 'ArrowRight') {
-        event.preventDefault()
-        goToNext()
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  })
-
-  if (!resource || !currentResource) return null
-
-  const label = resourceDownloadName(currentResource)
-  const dialog = (
-    <div
-      className="full-preview-backdrop nodrag nopan"
-      onMouseDown={(event) => {
-        event.stopPropagation()
-        if (event.target === event.currentTarget) onClose()
-      }}
-    >
-      <section
-        aria-label={`Preview ${label}`}
-        aria-modal="true"
-        className="full-preview-modal"
-        role="dialog"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <div className="full-preview-header">
-          <div>
-            <h2>{label}</h2>
-            <span>{currentResource.type}</span>
-          </div>
-          <div className="full-preview-header-actions">
-            {canNavigate ? (
-              <div className="full-preview-nav" aria-label="Preview navigation">
-                <button type="button" aria-label="Previous result" onClick={goToPrevious}>
-                  <ChevronLeft size={16} />
-                </button>
-                <span className="full-preview-counter">
-                  {currentIndex + 1} / {resources.length}
-                </span>
-                <button type="button" aria-label="Next result" onClick={goToNext}>
-                  <ChevronRight size={16} />
-                </button>
-              </div>
-            ) : null}
-            <button type="button" aria-label="Close full preview" onClick={onClose}>
-              <X size={16} />
-            </button>
-          </div>
-        </div>
-        <div className="full-preview-body">
-          <FullResourcePreview resource={currentResource} />
-        </div>
-      </section>
-    </div>
-  )
-
-  return createPortal(dialog, document.body)
 }
 
 function ResourceActions({
@@ -1851,6 +1824,7 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
   const resource = nodeData.resourceId ? nodeData.resourcesById[nodeData.resourceId] : undefined
   const title = String(nodeData.title ?? resource?.name ?? 'Resource')
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const [previewResource, setPreviewResource] = useState<Resource | undefined>()
 
   const replaceFromFile = async (file: File | undefined) => {
     if (!resource || !isMediaResource(resource) || !file) return
@@ -1917,19 +1891,45 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
             resource={resource}
             onUpload={(file) => void replaceFromFile(file)}
           />
-          {mediaValue(resource)?.url ? <ResourcePreview resource={resource} /> : <EmptyMediaPreview type={resource.type} />}
+          {mediaValue(resource)?.url ? (
+            <div
+              aria-label={`Open ${title} resource preview`}
+              className="resource-preview-trigger nodrag nopan"
+              role="button"
+              tabIndex={0}
+              onDoubleClick={(event) => {
+                event.stopPropagation()
+                setPreviewResource(resource)
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return
+                event.preventDefault()
+                setPreviewResource(resource)
+              }}
+            >
+              <ResourcePreview resource={resource} />
+            </div>
+          ) : (
+            <EmptyMediaPreview type={resource.type} />
+          )}
         </>
       ) : resource ? (
         <ResourcePreview resource={resource} />
       ) : (
         <p className="resource-preview-text">Missing resource</p>
       )}
+      <FullResourcePreviewModal
+        resource={previewResource}
+        resources={previewResource ? [previewResource] : []}
+        onClose={() => setPreviewResource(undefined)}
+      />
     </div>
   )
 })
 
 export const FunctionNodeView = memo(({ id, data, selected }: NodeProps) => {
   const nodeData = data as WorkbenchNodeData
+  const [previewResource, setPreviewResource] = useState<Resource | undefined>()
   const functionDef = nodeData.functionId ? nodeData.functionsById[nodeData.functionId] : undefined
   const title = String(nodeData.title ?? functionDef?.name ?? 'Function')
   const inputs = functionDef?.inputs ?? []
@@ -1966,6 +1966,12 @@ export const FunctionNodeView = memo(({ id, data, selected }: NodeProps) => {
   const nodeHeight = Number(nodeData.size?.height)
   const optionalTextInputMinHeight =
     optionalTextInputCount > 0 && Number.isFinite(nodeHeight) ? Math.min(180, Math.max(54, 54 + (nodeHeight - 220) / optionalTextInputCount)) : undefined
+  const generatedOutputResources = functionOutputResources(nodeData.resourcesById, id)
+  const focusOutputResourceNode = (resource: Resource) => {
+    setPreviewResource(undefined)
+    const nodeId = resourceFocusNodeId(resource)
+    if (nodeId) nodeData.onFocusReferenceNode?.(nodeId)
+  }
 
   return (
     <div
@@ -2018,6 +2024,11 @@ export const FunctionNodeView = memo(({ id, data, selected }: NodeProps) => {
             ))}
           </div>
           <div className="slot-column output-column" aria-label="Function outputs">
+            <FunctionOutputResourceStrip
+              resources={generatedOutputResources}
+              onFocusResourceNode={focusOutputResourceNode}
+              onOpenResource={setPreviewResource}
+            />
             {outputs.map((output) => (
               <FunctionOutputSlot key={output.key} output={output} />
             ))}
@@ -2078,6 +2089,15 @@ export const FunctionNodeView = memo(({ id, data, selected }: NodeProps) => {
           Run
         </button>
       </div>
+      <FullResourcePreviewModal
+        resource={previewResource}
+        resources={
+          previewResource
+            ? sameTypePreviewResources(nodeData.resourcesById, previewResource, id, nodeData.functionId)
+            : []
+        }
+        onClose={() => setPreviewResource(undefined)}
+      />
     </div>
   )
 })

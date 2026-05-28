@@ -191,6 +191,11 @@ test('runs a canvas workflow in a browser', async ({ page }) => {
   await expect(canvas.locator('[data-slot-handle="output:image"]')).toHaveCount(1)
   await expect(canvas.locator('[data-testid^="result-output-slot-"]')).toHaveCount(3)
   await expect(canvas.locator('[data-slot-handle^="result:"]')).toHaveCount(3)
+  await expect(
+    canvas.getByLabel('Function output resources').getByRole('button', {
+      name: `Open ${testWorkflowName} Run 1.txt output preview`,
+    }),
+  ).toBeVisible()
   await expect(canvas.getByRole('spinbutton', { name: 'Run count' })).toHaveValue('3')
   await expect(canvas.getByRole('button', { name: 'Copy asset' }).first()).toBeVisible()
   await expect(canvas.getByRole('button', { name: 'Download asset' }).first()).toBeVisible()
@@ -198,7 +203,7 @@ test('runs a canvas workflow in a browser', async ({ page }) => {
   await expect(canvas.getByRole('button', { name: 'Download result' })).toHaveCount(3)
   await expect(page.locator('.react-flow__edge.input-edge')).toHaveCount(1)
   await expect(page.locator('.react-flow__edge.result-edge')).toHaveCount(3)
-  await expect(canvas.getByText(`Simulated ComfyUI result for ${testWorkflowName} run 1`)).toBeVisible()
+  await expect(canvas.getByTestId('result-resource-grid').getByText(`Simulated ComfyUI result for ${testWorkflowName} run 1`)).toBeVisible()
 
   await page.keyboard.press('Escape')
   await expect(page.getByRole('heading', { name: 'Project Tasks' })).toBeVisible()
@@ -530,7 +535,7 @@ test('creates and runs the built-in OpenAI LLM node with editable messages', asy
   await messageDialog.getByRole('button', { name: 'Close OpenAI Messages' }).click()
   await openAiNode.getByRole('button', { name: 'Run function' }).click()
 
-  await expect(canvas.getByText('OpenAI text result')).toBeVisible()
+  await expect(canvas.getByTestId('result-resource-grid').getByText('OpenAI text result')).toBeVisible()
   await expect(canvas.getByRole('button', { name: 'Copy result' })).toBeVisible()
 })
 
@@ -654,7 +659,7 @@ test('creates and runs the built-in Gemini LLM node directly', async ({ page }) 
   await messageDialog.getByRole('button', { name: 'Close Gemini Messages' }).click()
   await geminiNode.getByRole('button', { name: 'Run function' }).click()
 
-  await expect(canvas.getByText('Gemini text result')).toBeVisible()
+  await expect(canvas.getByTestId('result-resource-grid').getByText('Gemini text result')).toBeVisible()
   await expect(canvas.getByRole('button', { name: 'Copy result' })).toBeVisible()
 })
 
@@ -745,8 +750,8 @@ test('creates and runs the built-in OpenAI and Gemini image nodes directly', asy
   await page.mouse.up()
   await expect(page.locator('.react-flow__edge.input-edge')).toHaveCount(1)
   await openAiImageNode.getByRole('button', { name: 'Run function' }).click()
-  await expect(canvas.getByRole('img', { name: 'openai-image-1.webp' })).toBeVisible()
-  await expect(canvas.getByRole('img', { name: 'openai-image-2.webp' })).toBeVisible()
+  await expect(canvas.getByTestId('result-resource-grid').getByRole('img', { name: 'openai-image-1.webp' })).toBeVisible()
+  await expect(canvas.getByTestId('result-resource-grid').getByRole('img', { name: 'openai-image-2.webp' })).toBeVisible()
   const firstOpenAiImageResult = canvas.locator('.react-flow__node-result_group').filter({ hasText: 'openai-image-1.webp' }).first()
   await firstOpenAiImageResult.evaluate((element) => {
     ;(element as HTMLElement).style.width = '700px'

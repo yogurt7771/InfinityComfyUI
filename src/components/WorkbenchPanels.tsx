@@ -46,6 +46,7 @@ import type {
   ResourceType,
 } from '../domain/types'
 import { projectStore, useProjectStore } from '../store/projectStore'
+import { FullResourcePreviewModal } from './ResourcePreviewModal'
 
 const resourceTypes: ResourceType[] = ['text', 'number', 'image', 'video', 'audio']
 const outputSources: FunctionOutputDef['extract']['source'][] = [
@@ -76,6 +77,28 @@ const resourceSummary = (resource: Resource) => {
   const media = mediaValue(resource)
   if (media?.filename) return media.filename
   return String(resource.value)
+}
+
+const resourceOwnerNodeId = (project: ProjectState, resource: Resource) => {
+  const nodeExists = (nodeId: string | undefined) =>
+    Boolean(nodeId && project.canvas.nodes.some((node) => node.id === nodeId))
+  const sourceNodeId = [resource.source.resultGroupNodeId, resource.source.functionNodeId].find(nodeExists)
+  if (sourceNodeId) return sourceNodeId
+
+  const resourceNode = project.canvas.nodes.find(
+    (node) => node.type === 'resource' && typeof node.data.resourceId === 'string' && node.data.resourceId === resource.id,
+  )
+  if (resourceNode) return resourceNode.id
+
+  const resultNode = project.canvas.nodes.find(
+    (node) =>
+      node.type === 'result_group' &&
+      Array.isArray(node.data.resources) &&
+      node.data.resources.some(
+        (ref) => typeof ref === 'object' && ref !== null && 'resourceId' in ref && ref.resourceId === resource.id,
+      ),
+  )
+  return resultNode?.id
 }
 
 const shouldProxyMedia = (resource: Resource) => {
@@ -2571,6 +2594,15 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
 
 export function LeftPanel() {
   const project = useProjectStore((state) => state.project)
+  const selectNode = useProjectStore((state) => state.selectNode)
+  const [previewResource, setPreviewResource] = useState<Resource | undefined>()
+  const focusResourceNode = (resource: Resource) => {
+    setPreviewResource(undefined)
+    const nodeId = resourceOwnerNodeId(project, resource)
+    if (!nodeId) return
+    selectNode(nodeId)
+    window.dispatchEvent(new CustomEvent('infinity-focus-node', { detail: { nodeId } }))
+  }
 
   return (
     <aside className="side-panel left-panel">
@@ -2582,7 +2614,16 @@ export function LeftPanel() {
         <div className="item-list asset-list" aria-label="Asset list">
           {Object.values(project.resources).length > 0 ? (
             Object.values(project.resources).map((resource) => (
-              <button key={resource.id} type="button" className="asset-list-item">
+              <button
+                key={resource.id}
+                type="button"
+                className="asset-list-item"
+                onClick={() => setPreviewResource(resource)}
+                onDoubleClick={(event) => {
+                  event.preventDefault()
+                  focusResourceNode(resource)
+                }}
+              >
                 <ResourceListPreview resource={resource} />
                 <span className="asset-list-copy">
                   <span>{resourceLabel(resource)}</span>
@@ -2596,6 +2637,11 @@ export function LeftPanel() {
           )}
         </div>
       </section>
+      <FullResourcePreviewModal
+        resource={previewResource}
+        resources={previewResource ? [previewResource] : []}
+        onClose={() => setPreviewResource(undefined)}
+      />
     </aside>
   )
 }

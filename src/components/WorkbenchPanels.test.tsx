@@ -171,6 +171,48 @@ describe('LeftPanel', () => {
     )
   })
 
+  it('opens asset list resources in a preview modal and double-clicks to locate their canvas node', () => {
+    const state = panelProject()
+    state.canvas.nodes = [
+      {
+        id: 'node_result_1',
+        type: 'result_group',
+        position: { x: 420, y: 0 },
+        data: { resources: [{ resourceId: 'res_image', type: 'image' }] },
+      },
+      {
+        id: 'node_image_asset',
+        type: 'resource',
+        position: { x: 0, y: 0 },
+        data: { resourceId: 'res_image' },
+      },
+    ]
+    state.resources.res_image.source = {
+      ...state.resources.res_image.source,
+      resultGroupNodeId: 'node_result_1',
+      functionNodeId: 'node_fn_render',
+    }
+    projectStore.setState({
+      project: state,
+      projectLibrary: { [state.project.id]: state },
+      selectedNodeId: undefined,
+      selectedNodeIds: [],
+    } as unknown as Partial<ReturnType<typeof projectStore.getState>>)
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
+
+    render(<LeftPanel />)
+
+    const assetItem = screen.getByRole('button', { name: /Render\.png/ })
+    fireEvent.click(assetItem)
+
+    expect(screen.getByRole('dialog', { name: 'Preview render.png' })).toBeVisible()
+
+    fireEvent.doubleClick(assetItem)
+
+    expect(projectStore.getState().selectedNodeId).toBe('node_result_1')
+    expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'infinity-focus-node' }))
+  })
+
   it('manages projects from settings', () => {
     render(<SettingsPage onClose={() => undefined} />)
 
