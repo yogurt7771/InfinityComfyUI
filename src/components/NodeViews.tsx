@@ -1682,12 +1682,30 @@ function NodeReferenceBadge({
   onFocusReferenceNode?: (nodeId: string) => void
 }) {
   const [open, setOpen] = useState(false)
+  const referenceRef = useRef<HTMLDivElement>(null)
   const count = references?.length ?? 0
+
+  useEffect(() => {
+    if (!open) return undefined
+
+    const closeIfOutside = (event: PointerEvent | FocusEvent) => {
+      const target = event.target
+      if (target instanceof Node && referenceRef.current?.contains(target)) return
+      setOpen(false)
+    }
+
+    document.addEventListener('pointerdown', closeIfOutside)
+    document.addEventListener('focusin', closeIfOutside)
+    return () => {
+      document.removeEventListener('pointerdown', closeIfOutside)
+      document.removeEventListener('focusin', closeIfOutside)
+    }
+  }, [open])
 
   if (count === 0) return <span className="node-reference-empty">0 refs</span>
 
   return (
-    <div className="node-reference">
+    <div className="node-reference" ref={referenceRef}>
       <button
         type="button"
         aria-expanded={open}

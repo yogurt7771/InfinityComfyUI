@@ -170,6 +170,36 @@ describe('NodeViews', () => {
     expect(onFocusReferenceNode).toHaveBeenCalledWith('node_fn')
   })
 
+  it('closes node reference popovers when focus moves outside the refs control', () => {
+    const props = {
+      id: 'node_text',
+      selected: false,
+      data: {
+        ...baseNodeData,
+        resourcesById: { res_text: textResource },
+        resourceId: 'res_text',
+        title: 'Prompt',
+        nodeReferences: [
+          { nodeId: 'node_fn', title: 'Flux Render', type: 'function', direction: 'outgoing' },
+        ],
+      },
+    } as unknown as ComponentProps<typeof ResourceNodeView>
+
+    render(
+      <ReactFlowProvider>
+        <ResourceNodeView {...props} />
+        <button type="button">Outside target</button>
+      </ReactFlowProvider>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show 1 node references' }))
+    expect(screen.getByRole('dialog', { name: 'Node references' })).toBeVisible()
+
+    fireEvent.focusIn(screen.getByRole('button', { name: 'Outside target' }))
+
+    expect(screen.queryByRole('dialog', { name: 'Node references' })).not.toBeInTheDocument()
+  })
+
   it('shows compact previews for every resource type in node reference popovers', () => {
     const numberResource: Resource = {
       id: 'res_number',
