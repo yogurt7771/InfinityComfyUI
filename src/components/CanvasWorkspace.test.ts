@@ -103,10 +103,10 @@ describe('CanvasWorkspace helpers', () => {
     const references = buildNodeReferenceMap(project)
 
     expect(references.node_text).toEqual([
-      { nodeId: 'node_fn', title: 'Render', type: 'function', direction: 'outgoing' },
+      { nodeId: 'node_fn', title: 'Render', type: 'function', direction: 'outgoing', resourceId: 'res_text' },
     ])
     expect(references.node_fn).toEqual([
-      { nodeId: 'node_text', title: 'Prompt', type: 'resource', direction: 'incoming' },
+      { nodeId: 'node_text', title: 'Prompt', type: 'resource', direction: 'incoming', resourceId: 'res_text' },
     ])
   })
 

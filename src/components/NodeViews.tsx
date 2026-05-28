@@ -97,6 +97,7 @@ type WorkbenchNodeData = {
     title: string
     type: string
     direction: 'incoming' | 'outgoing'
+    resourceId?: string
   }>
   onFocusReferenceNode?: (nodeId: string) => void
   onRunFunction: (nodeId: string) => void
@@ -1672,9 +1673,11 @@ function EditableNodeTitle({
 
 function NodeReferenceBadge({
   references,
+  resourcesById,
   onFocusReferenceNode,
 }: {
   references?: WorkbenchNodeData['nodeReferences']
+  resourcesById: Record<string, Resource>
   onFocusReferenceNode?: (nodeId: string) => void
 }) {
   const [open, setOpen] = useState(false)
@@ -1698,32 +1701,98 @@ function NodeReferenceBadge({
       </button>
       {open ? (
         <div className="node-reference-popover nodrag nopan" role="dialog" aria-label="Node references">
-          {references?.map((reference) => (
-            <button
-              key={`${reference.direction}-${reference.nodeId}`}
-              type="button"
-              aria-label={`Locate referenced node ${reference.title}`}
-              onClick={(event) => {
-                event.stopPropagation()
-                onFocusReferenceNode?.(reference.nodeId)
-                setOpen(false)
-              }}
-            >
-              <span>{reference.direction === 'incoming' ? 'From' : 'To'}</span>
-              <strong>{reference.title}</strong>
-              <small>{reference.type}</small>
-            </button>
-          ))}
+          {references?.map((reference) => {
+            const resource = reference.resourceId ? resourcesById[reference.resourceId] : undefined
+            return (
+              <div
+                key={`${reference.direction}-${reference.nodeId}`}
+                className={`node-reference-item ${resource ? `node-reference-item-${resource.type}` : ''}`}
+              >
+                <button
+                  type="button"
+                  aria-label={`Locate referenced node ${reference.title}`}
+                  className="node-reference-locate"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    onFocusReferenceNode?.(reference.nodeId)
+                    setOpen(false)
+                  }}
+                >
+                  <span>{reference.direction === 'incoming' ? 'From' : 'To'}</span>
+                  <strong>{reference.title}</strong>
+                  <small>{resource?.type ?? reference.type}</small>
+                </button>
+                {resource ? <NodeReferenceResourcePreview referenceTitle={reference.title} resource={resource} /> : null}
+              </div>
+            )
+          })}
         </div>
       ) : null}
     </div>
   )
 }
 
+function NodeReferenceResourcePreview({ referenceTitle, resource }: { referenceTitle: string; resource: Resource }) {
+  const mediaSource = usePreviewMediaSource(resource)
+  const mediaLabel = resource.name ?? mediaValue(resource)?.filename ?? resource.id
+
+  if (resource.type === 'text' || resource.type === 'number') {
+    return (
+      <span
+        aria-label={`${referenceTitle} reference ${resource.type} preview`}
+        className={`node-reference-resource-preview node-reference-primitive-preview node-reference-${resource.type}-preview`}
+        title={String(resource.value)}
+      >
+        {String(resource.value)}
+      </span>
+    )
+  }
+
+  if (resource.type === 'image' && mediaSource) {
+    return (
+      <div className="node-reference-resource-preview node-reference-media-preview" title={mediaLabel}>
+        <img src={String(mediaSource)} alt={`${referenceTitle} reference image preview`} />
+      </div>
+    )
+  }
+
+  if (resource.type === 'video' && mediaSource) {
+    return (
+      <div
+        className="node-reference-resource-preview node-reference-media-preview node-reference-video-preview"
+        title={mediaLabel}
+      >
+        <video
+          aria-label={`${referenceTitle} reference video preview`}
+          src={String(mediaSource)}
+          controls
+          muted
+          preload="metadata"
+        />
+      </div>
+    )
+  }
+
+  if (resource.type === 'audio' && mediaSource) {
+    return (
+      <div className="node-reference-resource-preview node-reference-audio-preview" title={mediaLabel}>
+        <audio aria-label={`${referenceTitle} reference audio preview`} src={String(mediaSource)} controls preload="metadata" />
+      </div>
+    )
+  }
+
+  if (mediaValue(resource)?.url) {
+    return <span className="node-reference-resource-preview node-reference-loading-preview">Loading {resource.type}</span>
+  }
+
+  return null
+}
+
 function nodeReferenceBadge(nodeData: WorkbenchNodeData) {
   return (
     <NodeReferenceBadge
       references={nodeData.nodeReferences}
+      resourcesById={nodeData.resourcesById}
       onFocusReferenceNode={nodeData.onFocusReferenceNode}
     />
   )

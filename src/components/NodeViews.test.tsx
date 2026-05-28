@@ -170,6 +170,79 @@ describe('NodeViews', () => {
     expect(onFocusReferenceNode).toHaveBeenCalledWith('node_fn')
   })
 
+  it('shows compact previews for every resource type in node reference popovers', () => {
+    const numberResource: Resource = {
+      id: 'res_number',
+      type: 'number',
+      name: 'Scale',
+      value: 1.5,
+      source: { kind: 'manual_input' },
+    }
+    const videoResource: Resource = {
+      id: 'res_video',
+      type: 'video',
+      name: 'motion.mp4',
+      value: {
+        assetId: 'asset_video',
+        url: 'data:video/mp4;base64,AAAA',
+        filename: 'motion.mp4',
+        mimeType: 'video/mp4',
+        sizeBytes: 4,
+      },
+      source: { kind: 'manual_input' },
+    }
+    const audioResource: Resource = {
+      id: 'res_audio',
+      type: 'audio',
+      name: 'voice.wav',
+      value: {
+        assetId: 'asset_audio',
+        url: 'data:audio/wav;base64,AAAA',
+        filename: 'voice.wav',
+        mimeType: 'audio/wav',
+        sizeBytes: 4,
+      },
+      source: { kind: 'manual_input' },
+    }
+    const props = {
+      id: 'node_fn',
+      selected: false,
+      data: {
+        ...baseNodeData,
+        resourcesById: {
+          res_text: textResource,
+          res_number: numberResource,
+          res_image: outputResource,
+          res_video: videoResource,
+          res_audio: audioResource,
+        },
+        functionId: 'fn_render',
+        title: 'Flux Render',
+        nodeReferences: [
+          { nodeId: 'node_text', title: 'Prompt', type: 'resource', direction: 'incoming', resourceId: 'res_text' },
+          { nodeId: 'node_number', title: 'Scale', type: 'resource', direction: 'incoming', resourceId: 'res_number' },
+          { nodeId: 'node_image', title: 'Reference Image', type: 'resource', direction: 'incoming', resourceId: 'res_image' },
+          { nodeId: 'node_video', title: 'Reference Video', type: 'resource', direction: 'incoming', resourceId: 'res_video' },
+          { nodeId: 'node_audio', title: 'Reference Audio', type: 'resource', direction: 'incoming', resourceId: 'res_audio' },
+        ],
+      },
+    } as unknown as ComponentProps<typeof FunctionNodeView>
+
+    render(
+      <ReactFlowProvider>
+        <FunctionNodeView {...props} />
+      </ReactFlowProvider>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show 5 node references' }))
+
+    expect(screen.getByLabelText('Prompt reference text preview')).toHaveTextContent('new text resource')
+    expect(screen.getByLabelText('Scale reference number preview')).toHaveTextContent('1.5')
+    expect(screen.getByRole('img', { name: 'Reference Image reference image preview' })).toBeVisible()
+    expect(screen.getByLabelText('Reference Video reference video preview')).toHaveAttribute('controls')
+    expect(screen.getByLabelText('Reference Audio reference audio preview')).toHaveAttribute('controls')
+  })
+
   it('adds upload, download, and drop replacement controls to media resources', async () => {
     const onReplaceResourceMedia = vi.fn()
     const props = {

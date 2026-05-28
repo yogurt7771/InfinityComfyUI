@@ -1831,10 +1831,10 @@ textarea[aria-invalid="true"] {
   right: 0;
   z-index: 25;
   display: grid;
-  width: 190px;
-  max-height: 220px;
+  width: 238px;
+  max-height: 300px;
   overflow: auto;
-  gap: 4px;
+  gap: 6px;
   padding: 6px;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
@@ -1842,25 +1842,37 @@ textarea[aria-invalid="true"] {
   box-shadow: 0 18px 38px rgba(15, 23, 42, 0.18);
 }
 
-.node-reference-popover button {
+.node-reference-item {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 2px 6px;
-  justify-content: stretch;
-  height: auto;
-  min-height: 38px;
-  padding: 6px 8px;
-  border-color: transparent;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px;
+  border: 1px solid transparent;
+  border-radius: 8px;
   background: #f8fbfc;
-  text-align: left;
 }
 
-.node-reference-popover button:hover {
+.node-reference-item:hover {
   border-color: var(--teal);
   background: #eefafa;
 }
 
-.node-reference-popover button span {
+.node-reference-locate {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 2px 6px;
+  justify-content: stretch;
+  width: 100%;
+  height: auto;
+  min-height: 30px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  text-align: left;
+}
+
+.node-reference-locate span {
   flex: 0 0 auto;
   overflow: visible;
   color: var(--muted);
@@ -1870,7 +1882,7 @@ textarea[aria-invalid="true"] {
   white-space: nowrap;
 }
 
-.node-reference-popover button strong {
+.node-reference-locate strong {
   min-width: 0;
   overflow: hidden;
   color: var(--ink);
@@ -1879,10 +1891,70 @@ textarea[aria-invalid="true"] {
   white-space: nowrap;
 }
 
-.node-reference-popover button small {
+.node-reference-locate small {
   grid-column: 2;
   color: var(--muted);
   font-size: 11px;
+}
+
+.node-reference-resource-preview {
+  min-width: 0;
+}
+
+.node-reference-primitive-preview,
+.node-reference-loading-preview {
+  display: block;
+  overflow: hidden;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--panel);
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-reference-number-preview {
+  font-variant-numeric: tabular-nums;
+}
+
+.node-reference-media-preview {
+  width: 100%;
+  height: 70px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #020617;
+}
+
+.node-reference-media-preview img,
+.node-reference-media-preview video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.node-reference-video-preview video {
+  cursor: pointer;
+}
+
+.node-reference-audio-preview {
+  overflow: hidden;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+}
+
+.node-reference-audio-preview audio {
+  display: block;
+  width: 100%;
+  height: 30px;
 }
 
 .result-run-control {
@@ -3546,10 +3618,15 @@ option {
   backdrop-filter: blur(18px);
 }
 
+.node-reference-item {
+  border-color: rgba(148, 163, 184, 0.16);
+  background: rgba(15, 23, 42, 0.68);
+}
+
 .searchable-option,
 .add-node-menu button,
 .resource-quick-actions button,
-.node-reference-popover button {
+.node-reference-locate {
   color: var(--ink-soft);
   background: transparent;
 }
@@ -3558,7 +3635,7 @@ option {
 .searchable-option[aria-selected="true"],
 .add-node-menu button:hover,
 .resource-quick-actions button:hover,
-.node-reference-popover button:hover {
+.node-reference-item:hover {
   color: var(--ink);
   background: rgba(45, 212, 191, 0.14);
 }
@@ -4362,10 +4439,15 @@ option {
   box-shadow: 0 24px 64px rgba(15, 23, 42, 0.18);
 }
 
+.app-shell[data-theme='light'] .node-reference-item {
+  border-color: transparent;
+  background: #f8fbfc;
+}
+
 .app-shell[data-theme='light'] .searchable-option,
 .app-shell[data-theme='light'] .add-node-menu button,
 .app-shell[data-theme='light'] .resource-quick-actions button,
-.app-shell[data-theme='light'] .node-reference-popover button {
+.app-shell[data-theme='light'] .node-reference-locate {
   color: #344054;
   background: transparent;
 }
@@ -4374,7 +4456,7 @@ option {
 .app-shell[data-theme='light'] .searchable-option[aria-selected="true"],
 .app-shell[data-theme='light'] .add-node-menu button:hover,
 .app-shell[data-theme='light'] .resource-quick-actions button:hover,
-.app-shell[data-theme='light'] .node-reference-popover button:hover {
+.app-shell[data-theme='light'] .node-reference-item:hover {
   color: #101828;
   background: rgba(204, 251, 241, 0.68);
 }
