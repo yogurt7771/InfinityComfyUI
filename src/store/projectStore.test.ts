@@ -767,6 +767,27 @@ describe('project store actions', () => {
     })
   })
 
+  it('ignores unchanged node position and size updates', () => {
+    const ids = ['fn_1', 'node_fn_1']
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now: () => '2026-05-09T00:00:00.000Z',
+      randomInt: () => 1,
+    })
+
+    addTestWorkflowFunction(slice)
+    slice.getState().addFunctionNode('fn_1')
+    slice.getState().updateNodePosition('node_fn_1', { x: 120, y: 96 })
+    const positionedProject = slice.getState().project
+    slice.getState().updateNodePosition('node_fn_1', { x: 120, y: 96 })
+    expect(slice.getState().project).toBe(positionedProject)
+
+    slice.getState().updateNodeSize('node_fn_1', { width: 520, height: 380 })
+    const sizedProject = slice.getState().project
+    slice.getState().updateNodeSize('node_fn_1', { width: 520, height: 380 })
+    expect(slice.getState().project).toBe(sizedProject)
+  })
+
   it('creates empty text assets with an empty string by default and accepts explicit primitive initial values', () => {
     const ids = ['res_text_default', 'res_text_initial', 'res_number_initial']
     const slice = createProjectSlice({

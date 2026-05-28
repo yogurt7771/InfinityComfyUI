@@ -111,6 +111,34 @@ const addMenuItemMatches = (label: string, query: string) => {
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
 
+const markerKey = (marker: Edge['markerEnd']) =>
+  marker && typeof marker === 'object'
+    ? `${marker.type ?? ''}|${marker.width ?? ''}|${marker.height ?? ''}|${marker.color ?? ''}`
+    : String(marker ?? '')
+
+export const sameFlowEdgesForSync = (left: Edge[], right: Edge[]) => {
+  if (left === right) return true
+  if (left.length !== right.length) return false
+
+  return left.every((edge, index) => {
+    const next = right[index]
+    return (
+      next &&
+      edge.id === next.id &&
+      edge.source === next.source &&
+      edge.sourceHandle === next.sourceHandle &&
+      edge.target === next.target &&
+      edge.targetHandle === next.targetHandle &&
+      edge.animated === next.animated &&
+      edge.label === next.label &&
+      edge.type === next.type &&
+      edge.className === next.className &&
+      edge.selected === next.selected &&
+      markerKey(edge.markerEnd) === markerKey(next.markerEnd)
+    )
+  })
+}
+
 const mediaValue = (resource: Resource | undefined) =>
   typeof resource?.value === 'object' && resource.value !== null && 'url' in resource.value ? resource.value : undefined
 
@@ -537,7 +565,7 @@ function CanvasSurface() {
   }, [flowNodes, setNodes])
 
   useEffect(() => {
-    setEdges(flowEdges)
+    setEdges((current) => (sameFlowEdgesForSync(current, flowEdges) ? current : flowEdges))
   }, [flowEdges, setEdges])
 
   const clipboardPastePosition = useCallback(() => {

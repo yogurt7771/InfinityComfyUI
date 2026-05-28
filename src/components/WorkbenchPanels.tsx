@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import JSZip from 'jszip'
 import {
   Download,
@@ -173,13 +173,15 @@ const bindingStatus = (workflow: ComfyWorkflow, bind: { nodeId?: string; nodeTit
 const jsonTokenPattern =
   /("(?:\\.|[^"\\])*"(?=\s*:))|("(?:\\.|[^"\\])*")|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|\b(true|false|null)\b/g
 
-function highlightedJson(value: string): ReactNode[] {
+export function highlightedJson(value: string): ReactNode[] {
   const parts: ReactNode[] = []
   let cursor = 0
 
   for (const match of value.matchAll(jsonTokenPattern)) {
     const index = match.index ?? 0
-    if (index > cursor) parts.push(value.slice(cursor, index))
+    if (index > cursor) {
+      parts.push(<Fragment key={`text-${cursor}-${index}`}>{value.slice(cursor, index)}</Fragment>)
+    }
 
     const token = match[0]
     const className = match[1]
@@ -198,7 +200,9 @@ function highlightedJson(value: string): ReactNode[] {
     cursor = index + token.length
   }
 
-  if (cursor < value.length) parts.push(value.slice(cursor))
+  if (cursor < value.length) {
+    parts.push(<Fragment key={`text-${cursor}-${value.length}`}>{value.slice(cursor)}</Fragment>)
+  }
   return parts
 }
 

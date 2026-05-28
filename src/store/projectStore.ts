@@ -5032,18 +5032,26 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
     updateNodePositions: (positionsByNodeId) => {
       const now = runtime.now()
-      set((state) => ({
-        project: {
-          ...state.project,
-          project: { ...state.project.project, updatedAt: now },
-          canvas: {
-            ...state.project.canvas,
-            nodes: state.project.canvas.nodes.map((node) =>
-              positionsByNodeId[node.id] ? { ...node, position: positionsByNodeId[node.id] } : node,
-            ),
+      set((state) => {
+        const hasPositionChange = state.project.canvas.nodes.some((node) => {
+          const nextPosition = positionsByNodeId[node.id]
+          return Boolean(nextPosition && (node.position.x !== nextPosition.x || node.position.y !== nextPosition.y))
+        })
+        if (!hasPositionChange) return state
+
+        return {
+          project: {
+            ...state.project,
+            project: { ...state.project.project, updatedAt: now },
+            canvas: {
+              ...state.project.canvas,
+              nodes: state.project.canvas.nodes.map((node) =>
+                positionsByNodeId[node.id] ? { ...node, position: positionsByNodeId[node.id] } : node,
+              ),
+            },
           },
-        },
-      }))
+        }
+      })
     },
 
     updateNodeSize: (nodeId, size) => {
@@ -5052,29 +5060,41 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       if (!Number.isFinite(width) || !Number.isFinite(height)) return
 
       const now = runtime.now()
-      set((state) => ({
-        project: {
-          ...state.project,
-          project: { ...state.project.project, updatedAt: now },
-          canvas: {
-            ...state.project.canvas,
-            nodes: state.project.canvas.nodes.map((node) =>
-              node.id === nodeId
-                ? {
-                    ...node,
-                    data: {
-                      ...node.data,
-                      size: {
-                        width: Math.max(220, width),
-                        height: Math.max(120, height),
+      set((state) => {
+        const nextSize = {
+          width: Math.max(220, width),
+          height: Math.max(120, height),
+        }
+        const targetNode = state.project.canvas.nodes.find((node) => node.id === nodeId)
+        const currentSize = targetNode?.data.size as { width?: unknown; height?: unknown } | undefined
+        if (
+          !targetNode ||
+          (Number(currentSize?.width) === nextSize.width && Number(currentSize?.height) === nextSize.height)
+        ) {
+          return state
+        }
+
+        return {
+          project: {
+            ...state.project,
+            project: { ...state.project.project, updatedAt: now },
+            canvas: {
+              ...state.project.canvas,
+              nodes: state.project.canvas.nodes.map((node) =>
+                node.id === nodeId
+                  ? {
+                      ...node,
+                      data: {
+                        ...node.data,
+                        size: nextSize,
                       },
-                    },
-                  }
-                : node,
-            ),
+                    }
+                  : node,
+              ),
+            },
           },
-        },
-      }))
+        }
+      })
     },
 
     renameNode: (nodeId, title) => {

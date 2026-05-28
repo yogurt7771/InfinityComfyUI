@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { LeftPanel, RightPanel, SettingsPage } from './WorkbenchPanels'
+import { LeftPanel, RightPanel, SettingsPage, highlightedJson } from './WorkbenchPanels'
 import { projectStore } from '../store/projectStore'
 import type { ProjectState } from '../domain/types'
 import { createOpenAIImageFunction } from '../domain/openaiImage'
@@ -140,6 +140,13 @@ describe('LeftPanel', () => {
       selectedNodeId: undefined,
       selectedNodeIds: [],
     } as unknown as Partial<ReturnType<typeof projectStore.getState>>)
+  })
+
+  it('wraps highlighted JSON text fragments so React does not warn about missing keys', () => {
+    const parts = highlightedJson('{\n  "prompt": "sunlit kitchen",\n  "steps": 20\n}')
+
+    expect(parts.length).toBeGreaterThan(1)
+    expect(parts.every((part) => typeof part !== 'string')).toBe(true)
   })
 
   it('shows compact previews for text and image assets', () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { targetInputInitialResourceValue } from '../domain/inputInitialValue'
 import { buildNodeReferenceMap } from '../domain/nodeReferences'
 import type { ProjectState } from '../domain/types'
+import { sameFlowEdgesForSync } from './CanvasWorkspace'
 
 const projectWithOptionalInput = (inputValues: Record<string, unknown> = {}): ProjectState => ({
   schemaVersion: '1.0.0',
@@ -75,6 +76,27 @@ const projectWithOptionalInput = (inputValues: Record<string, unknown> = {}): Pr
 })
 
 describe('CanvasWorkspace helpers', () => {
+  it('does not resync React Flow edges when derived edge fields are unchanged', () => {
+    const previous = [
+      {
+        id: 'edge_1',
+        source: 'node_text',
+        sourceHandle: 'resource:res_text',
+        target: 'node_fn',
+        targetHandle: 'input:prompt',
+        animated: true,
+        label: 'prompt',
+        type: 'default',
+        className: 'input-edge',
+        selected: false,
+      },
+    ]
+    const next = previous.map((edge) => ({ ...edge }))
+
+    expect(sameFlowEdgesForSync(previous, next)).toBe(true)
+    expect(sameFlowEdgesForSync(previous, [{ ...next[0], selected: true }])).toBe(false)
+  })
+
   it('builds incoming and outgoing node reference summaries from canvas edges', () => {
     const project = projectWithOptionalInput()
     project.canvas.nodes.push({
