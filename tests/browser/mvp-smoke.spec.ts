@@ -267,7 +267,8 @@ test('runs a canvas workflow in a browser', async ({ page }) => {
   await page.keyboard.press('ArrowLeft')
   previewDialog = page.getByRole('dialog', { name: `Preview ${testWorkflowName} Run 1.txt` })
   await expect(previewDialog.getByText(`Simulated ComfyUI result for ${testWorkflowName} run 1`)).toBeVisible()
-  await previewDialog.getByRole('button', { name: 'Close full preview' }).click()
+  await page.keyboard.press('Escape')
+  await expect(previewDialog).toHaveCount(0)
 
   await expect
     .poll(async () =>

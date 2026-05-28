@@ -144,14 +144,21 @@ export function FullResourcePreviewModal({
   }
 
   useEffect(() => {
-    if (!resource || !canNavigate) return undefined
+    if (!resource) return undefined
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+        return
+      }
       if (event.key === 'ArrowLeft') {
+        if (!canNavigate) return
         event.preventDefault()
         goToPrevious()
       }
       if (event.key === 'ArrowRight') {
+        if (!canNavigate) return
         event.preventDefault()
         goToNext()
       }

@@ -352,6 +352,10 @@ describe('NodeViews', () => {
     fireEvent.doubleClick(screen.getByRole('button', { name: 'Open Reference Image resource preview' }))
 
     expect(screen.getByRole('dialog', { name: 'Preview render.png' })).toBeVisible()
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(screen.queryByRole('dialog', { name: 'Preview render.png' })).not.toBeInTheDocument()
   })
 
   it('shows generated function output previews, opens them, locates their result nodes, and scrolls to new outputs', async () => {
