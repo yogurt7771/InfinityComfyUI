@@ -315,7 +315,7 @@ function ConnectedMediaPreview({ inputLabel, resource }: { inputLabel: string; r
   if (resource.type === 'image' && mediaSource) {
     return (
       <div className="slot-media-preview nodrag nopan" title={label}>
-        <img src={String(mediaSource)} alt={`${inputLabel} connected image preview`} />
+        <img className="media-preview-contain" src={String(mediaSource)} alt={`${inputLabel} connected image preview`} />
       </div>
     )
   }
@@ -325,6 +325,7 @@ function ConnectedMediaPreview({ inputLabel, resource }: { inputLabel: string; r
       <div className="slot-media-preview slot-video-preview nodrag nopan" title={label}>
         <video
           aria-label={`${inputLabel} connected video preview`}
+          className="media-preview-contain"
           src={String(mediaSource)}
           controls
           muted
@@ -1751,7 +1752,7 @@ function NodeReferenceResourcePreview({ referenceTitle, resource }: { referenceT
   if (resource.type === 'image' && mediaSource) {
     return (
       <div className="node-reference-resource-preview node-reference-media-preview" title={mediaLabel}>
-        <img src={String(mediaSource)} alt={`${referenceTitle} reference image preview`} />
+        <img className="media-preview-contain" src={String(mediaSource)} alt={`${referenceTitle} reference image preview`} />
       </div>
     )
   }
@@ -1764,6 +1765,7 @@ function NodeReferenceResourcePreview({ referenceTitle, resource }: { referenceT
       >
         <video
           aria-label={`${referenceTitle} reference video preview`}
+          className="media-preview-contain"
           src={String(mediaSource)}
           controls
           muted

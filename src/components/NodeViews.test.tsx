@@ -238,8 +238,9 @@ describe('NodeViews', () => {
 
     expect(screen.getByLabelText('Prompt reference text preview')).toHaveTextContent('new text resource')
     expect(screen.getByLabelText('Scale reference number preview')).toHaveTextContent('1.5')
-    expect(screen.getByRole('img', { name: 'Reference Image reference image preview' })).toBeVisible()
+    expect(screen.getByRole('img', { name: 'Reference Image reference image preview' })).toHaveClass('media-preview-contain')
     expect(screen.getByLabelText('Reference Video reference video preview')).toHaveAttribute('controls')
+    expect(screen.getByLabelText('Reference Video reference video preview')).toHaveClass('media-preview-contain')
     expect(screen.getByLabelText('Reference Audio reference audio preview')).toHaveAttribute('controls')
   })
 
@@ -557,8 +558,9 @@ describe('NodeViews', () => {
       </ReactFlowProvider>,
     )
 
-    expect(screen.getByRole('img', { name: 'Image Input connected image preview' })).toBeVisible()
+    expect(screen.getByRole('img', { name: 'Image Input connected image preview' })).toHaveClass('media-preview-contain')
     expect(screen.getByLabelText('Video Input connected video preview')).toHaveAttribute('controls')
+    expect(screen.getByLabelText('Video Input connected video preview')).toHaveClass('media-preview-contain')
     expect(screen.getByLabelText('Audio Input connected audio preview')).toHaveAttribute('controls')
 
     rerender(
