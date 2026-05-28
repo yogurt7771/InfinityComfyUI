@@ -51,6 +51,7 @@ import {
   type LocalTransformOutputValue,
 } from '../domain/localTransforms'
 import { createConfigPackage, createProjectPackage, type ConfigPackage, type FullProjectPackage } from '../domain/projectPackage'
+import { blobToDataUrl } from '../domain/projectAssets'
 import { randomizeWorkflowSeeds } from '../domain/seed'
 import { selectEndpoint } from '../domain/scheduler'
 import { createGenerationFunctionFromWorkflow, injectWorkflowInputs, workflowPrimitiveInputValue } from '../domain/workflow'
@@ -947,15 +948,64 @@ const readProjectResourceBlob = async (
   resource: Resource,
   createComfyClient: ProjectStoreDeps['createComfyClient'],
 ) => {
+  const media =
+    typeof resource.value === 'object' && resource.value !== null && 'assetId' in resource.value
+      ? resource.value
+      : undefined
+  const assetUrl = media?.assetId ? project.assets[media.assetId]?.blobUrl : undefined
+  if (assetUrl) {
+    try {
+      return await fetchUrlBlob(assetUrl)
+    } catch {
+      // Fall through to the resource URL or ComfyUI provenance when an old browser blob URL is stale.
+    }
+  }
+
+  const url = resourceUrl(resource)
+  if (url) {
+    const dataBlob = dataUrlToBlob(url)
+    if (dataBlob) return dataBlob
+    if (url.startsWith('blob:')) {
+      try {
+        return await fetchUrlBlob(url)
+      } catch {
+        // Fall through to ComfyUI metadata if this was a stale object URL.
+      }
+    }
+  }
+
   const endpoint = comfyEndpointForResource(project, resource)
   if (endpoint) {
     const server = new ComfyServer(endpoint, createComfyClient(endpoint))
     return server.readResourceBlob(resource)
   }
 
-  const url = resourceUrl(resource)
   if (!url) throw new Error(`Resource is missing a URL: ${resource.id}`)
   return fetchUrlBlob(url)
+}
+
+const persistedComfyFile = async (
+  client: RuntimeComfyClient,
+  endpoint: ComfyEndpointConfig,
+  file: ComfyFileRef,
+  fallbackMimeType: string,
+) => {
+  const externalUrl = comfyViewUrl(endpoint, file)
+  try {
+    const blob = client.viewFile ? await client.viewFile(file) : await fetchUrlBlob(externalUrl)
+    const mimeType = blob.type || fallbackMimeType
+    return {
+      url: await blobToDataUrl(blob, mimeType),
+      mimeType,
+      sizeBytes: blob.size,
+    }
+  } catch {
+    return {
+      url: externalUrl,
+      mimeType: fallbackMimeType,
+      sizeBytes: 0,
+    }
+  }
 }
 
 const prepareComfyInputValues = async (
@@ -1312,15 +1362,14 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           for (const file of output.files) {
             const assetId = runtime.idFactory()
             const resourceId = runtime.idFactory()
-            const url = comfyViewUrl(endpoint, file)
-            const mimeType = outputMimeType(output.type, file.filename)
+            const persisted = await persistedComfyFile(client, endpoint, file, outputMimeType(output.type, file.filename))
 
             newAssets[assetId] = {
               id: assetId,
               name: file.filename,
-              mimeType,
-              sizeBytes: 0,
-              blobUrl: url,
+              mimeType: persisted.mimeType,
+              sizeBytes: persisted.sizeBytes,
+              blobUrl: persisted.url,
               createdAt: runtime.now(),
             }
             newResources[resourceId] = {
@@ -1329,10 +1378,10 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
               name: file.filename,
               value: {
                 assetId,
-                url,
+                url: persisted.url,
                 filename: file.filename,
-                mimeType,
-                sizeBytes: 0,
+                mimeType: persisted.mimeType,
+                sizeBytes: persisted.sizeBytes,
                 comfy: {
                   endpointId: endpoint.id,
                   filename: file.filename,
@@ -2626,7 +2675,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             `${firstBinaryOutput?.label ?? 'response'}.${extensionForMimeType(outputType, mimeType)}`
           const blob = new Blob([responseBuffer], { type: mimeType })
           responseBinary = {
-            url: URL.createObjectURL(blob),
+            url: await blobToDataUrl(blob, mimeType),
             filename,
             mimeType: responseMimeType(response, outputType, filename),
             sizeBytes: responseBuffer.byteLength,

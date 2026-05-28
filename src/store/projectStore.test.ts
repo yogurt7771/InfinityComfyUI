@@ -1975,6 +1975,14 @@ describe('project store actions', () => {
       'res_audio_1',
       'res_text_1',
     ]
+    const viewFile = vi.fn(async (file: { filename: string; subfolder?: string; type: string }) => {
+      const mimeType = file.filename.endsWith('.mp4')
+        ? 'video/mp4'
+        : file.filename.endsWith('.wav')
+          ? 'audio/wav'
+          : 'image/png'
+      return new Blob([`${file.filename}-bytes`], { type: mimeType })
+    })
     const slice = createProjectSlice({
       idFactory: () => ids.shift() ?? 'fallback',
       now: () => '2026-05-08T09:00:00.000Z',
@@ -2000,6 +2008,7 @@ describe('project store actions', () => {
             },
           },
         }),
+        viewFile,
       }),
       comfyRunOptions: {
         maxPollAttempts: 1,
@@ -2057,9 +2066,10 @@ describe('project store actions', () => {
     const state = slice.getState()
     expect(state.project.tasks.task_1.comfyPromptId).toBe('prompt_1')
     expect(state.project.resources.res_img_1.type).toBe('image')
+    expect(viewFile).toHaveBeenCalledWith({ filename: 'render.png', subfolder: 'renders', type: 'output' })
     expect(state.project.resources.res_img_1.value).toMatchObject({
       assetId: 'asset_1',
-      url: 'http://127.0.0.1:8188/view?filename=render.png&subfolder=renders&type=output',
+      url: expect.stringMatching(/^data:image\/png;base64,/),
       comfy: {
         endpointId: 'endpoint_local',
         filename: 'render.png',
@@ -2071,7 +2081,7 @@ describe('project store actions', () => {
       type: 'video',
       value: {
         assetId: 'asset_2',
-        url: 'http://127.0.0.1:8188/view?filename=clip.mp4&subfolder=renders&type=output',
+        url: expect.stringMatching(/^data:video\/mp4;base64,/),
         comfy: {
           endpointId: 'endpoint_local',
           filename: 'clip.mp4',
@@ -2084,7 +2094,7 @@ describe('project store actions', () => {
       type: 'audio',
       value: {
         assetId: 'asset_3',
-        url: 'http://127.0.0.1:8188/view?filename=voice.wav&subfolder=&type=output',
+        url: expect.stringMatching(/^data:audio\/wav;base64,/),
         comfy: {
           endpointId: 'endpoint_local',
           filename: 'voice.wav',
@@ -2097,6 +2107,9 @@ describe('project store actions', () => {
       type: 'text',
       value: 'Generated caption',
     })
+    expect(state.project.assets.asset_1.blobUrl).toBe(
+      typeof state.project.resources.res_img_1.value === 'object' ? state.project.resources.res_img_1.value.url : undefined,
+    )
     expect(state.project.tasks.task_1.outputRefs).toEqual({
       image: [{ resourceId: 'res_img_1', type: 'image' }],
       video: [{ resourceId: 'res_video_1', type: 'video' }],
@@ -3415,13 +3428,19 @@ describe('project store actions', () => {
     expect(state.resources.resource_image).toMatchObject({
       type: 'image',
       name: 'render.jpg',
-      value: { url: 'blob:request-image', filename: 'render.jpg', mimeType: 'image/jpeg', sizeBytes: 6 },
+      value: {
+        url: expect.stringMatching(/^data:image\/jpeg;base64,/),
+        filename: 'render.jpg',
+        mimeType: 'image/jpeg',
+        sizeBytes: 6,
+      },
     })
     expect(state.assets.asset_image).toMatchObject({
-      blobUrl: 'blob:request-image',
+      blobUrl: expect.stringMatching(/^data:image\/jpeg;base64,/),
       mimeType: 'image/jpeg',
       sizeBytes: 6,
     })
+    expect(URL.createObjectURL).not.toHaveBeenCalled()
 
     globalThis.fetch = originalFetch
     URL.createObjectURL = originalCreateObjectUrl

@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, shell } = require('electron')
 const fs = require('node:fs/promises')
 const path = require('node:path')
+const { hydrateProjectAssets } = require('./projectAssetStorage.cjs')
 
 const PROJECTS_FOLDER = 'projects'
 const CONFIG_FOLDER = 'config'
@@ -243,8 +244,11 @@ const loadProjectLibrary = async () => {
     const entries = await fs.readdir(root, { withFileTypes: true })
     for (const entry of entries) {
       if (!entry.isDirectory()) continue
-      const project = await readJson(path.join(root, entry.name, CONFIG_FOLDER, 'project.json'))
-      if (project?.project?.id) projects[project.project.id] = project
+      const projectDir = path.join(root, entry.name)
+      const project = await readJson(path.join(projectDir, CONFIG_FOLDER, 'project.json'))
+      if (project?.project?.id) {
+        projects[project.project.id] = await hydrateProjectAssets(projectDir, project).catch(() => project)
+      }
     }
   } catch {
     // Empty project directory is valid on first launch.

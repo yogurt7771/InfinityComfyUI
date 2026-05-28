@@ -29,6 +29,7 @@ import {
 import { defaultOpenAILlmConfig, isOpenAILlmFunction, mergedOpenAILlmConfig } from '../domain/openaiLlm'
 import { defaultGeminiLlmConfig, isGeminiLlmFunction, mergedGeminiLlmConfig } from '../domain/geminiLlm'
 import { getNodeRunHistory } from '../domain/runHistory'
+import { collectProjectAssetFiles, hydrateProjectAssetFiles, type ProjectAssetFileEntry } from '../domain/projectAssets'
 import type {
   ComfyEndpointConfig,
   ComfyWorkflow,
@@ -215,10 +216,13 @@ function downloadBlob(filename: string, blob: Blob) {
   URL.revokeObjectURL(url)
 }
 
-async function downloadPackage(filename: string, entries: Record<string, unknown>) {
+async function downloadPackage(filename: string, entries: Record<string, unknown>, files: ProjectAssetFileEntry[] = []) {
   const zip = new JSZip()
   for (const [path, value] of Object.entries(entries)) {
     zip.file(path, JSON.stringify(value, null, 2))
+  }
+  for (const file of files) {
+    zip.file(file.path, file.blob)
   }
   downloadBlob(filename, await zip.generateAsync({ type: 'blob' }))
 }
@@ -232,10 +236,19 @@ async function readPackageFile(file: File) {
   const manifestFile = zip.file('manifest.json')
   const projectFile = zip.file('project.json')
   const configFile = zip.file('config.json')
+  const assetManifestFile = zip.file('config/assets.json') ?? zip.file('assets.json')
+  const assetManifest = assetManifestFile ? JSON.parse(await assetManifestFile.async('text')) : undefined
+  const project = projectFile ? JSON.parse(await projectFile.async('text')) : undefined
+  const hydratedProject = project
+    ? await hydrateProjectAssetFiles(project, assetManifest, async (assetPath) => {
+        const normalizedPath = assetPath.startsWith('assets/') ? assetPath : `assets/${assetPath}`
+        return (await (zip.file(normalizedPath) ?? zip.file(assetPath))?.async('blob')) ?? undefined
+      })
+    : undefined
 
   return {
     manifest: manifestFile ? JSON.parse(await manifestFile.async('text')) : undefined,
-    project: projectFile ? JSON.parse(await projectFile.async('text')) : undefined,
+    project: hydratedProject,
     config: configFile ? JSON.parse(await configFile.async('text')) : undefined,
   }
 }
@@ -2370,10 +2383,16 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
 
   const handleExportProject = async () => {
     const pkg = exportProject()
-    await downloadPackage('project.aicanvas', {
-      'manifest.json': pkg.manifest,
-      'project.json': pkg.project,
-    })
+    const assetFiles = await collectProjectAssetFiles(pkg.project)
+    await downloadPackage(
+      'project.aicanvas',
+      {
+        'manifest.json': pkg.manifest,
+        'project.json': pkg.project,
+        'config/assets.json': assetFiles.manifest,
+      },
+      assetFiles.files,
+    )
   }
 
   const handleExportConfig = async () => {
