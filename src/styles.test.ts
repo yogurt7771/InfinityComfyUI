@@ -21,4 +21,15 @@ describe('preview media CSS', () => {
     expect(block).toContain('object-fit: contain !important')
     expect(block).toContain('object-position: center')
   })
+
+  it('uses the app media preview surface instead of black letterboxing', () => {
+    const referenceBlock = cssBlock('.node-reference-media-preview')
+    const slotBlock = cssBlock('.slot-media-preview')
+    const mediaBlock = cssBlock('.media-preview-contain')
+
+    expect(referenceBlock).toContain('var(--media-preview-surface)')
+    expect(slotBlock).toContain('var(--media-preview-surface)')
+    expect(mediaBlock).toContain('var(--media-preview-surface)')
+    expect(`${referenceBlock}\n${slotBlock}\n${mediaBlock}`).not.toContain('#020617')
+  })
 })

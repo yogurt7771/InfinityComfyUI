@@ -13,6 +13,9 @@
   --panel: #111923;
   --panel-soft: #0c131d;
   --canvas: #050810;
+  --media-preview-surface: #121d27;
+  --media-preview-accent: rgba(53, 220, 200, 0.1);
+  --media-preview-border: rgba(94, 234, 212, 0.22);
   --dark-action: #17202c;
   --teal: #35dcc8;
   --teal-soft: rgba(45, 212, 191, 0.14);
@@ -1927,9 +1930,11 @@ textarea[aria-invalid="true"] {
   overflow: hidden;
   display: grid;
   place-items: center;
-  border: 1px solid var(--line);
+  border: 1px solid var(--media-preview-border);
   border-radius: 8px;
-  background: #020617;
+  background:
+    linear-gradient(135deg, var(--media-preview-accent), transparent 58%),
+    var(--media-preview-surface);
 }
 
 .node-reference-media-preview img,
@@ -2177,9 +2182,11 @@ textarea[aria-invalid="true"] {
   overflow: hidden;
   display: grid;
   place-items: center;
-  border: 1px solid var(--line);
+  border: 1px solid var(--media-preview-border);
   border-radius: 8px;
-  background: var(--panel-soft);
+  background:
+    linear-gradient(135deg, var(--media-preview-accent), transparent 58%),
+    var(--media-preview-surface);
 }
 
 .slot-media-preview img,
@@ -2187,7 +2194,7 @@ textarea[aria-invalid="true"] {
   display: block;
   width: 100%;
   height: 100%;
-  background: #020617;
+  background: var(--media-preview-surface);
   object-fit: contain;
   object-position: center;
 }
@@ -2197,6 +2204,9 @@ textarea[aria-invalid="true"] {
   inset: 0;
   width: 100% !important;
   height: 100% !important;
+  background:
+    linear-gradient(135deg, var(--media-preview-accent), transparent 58%),
+    var(--media-preview-surface);
   object-fit: contain !important;
   object-position: center;
 }
@@ -4059,6 +4069,9 @@ option {
   --panel: #ffffff;
   --panel-soft: #f8fafc;
   --canvas: #f3f8fb;
+  --media-preview-surface: #f3fbfc;
+  --media-preview-accent: rgba(13, 148, 136, 0.08);
+  --media-preview-border: rgba(15, 118, 110, 0.18);
   --dark-action: #0f172a;
   --teal: #0f766e;
   --teal-soft: rgba(13, 148, 136, 0.12);
