@@ -33,3 +33,24 @@ describe('preview media CSS', () => {
     expect(`${referenceBlock}\n${slotBlock}\n${mediaBlock}`).not.toContain('#020617')
   })
 })
+
+describe('canvas resource UI CSS', () => {
+  it('lets text result previews fill the available result card area', () => {
+    const block = cssBlock('.result-preview-card .resource-preview-text')
+
+    expect(block).toContain('height: 100%')
+    expect(block).toContain('max-height: none')
+    expect(block).toContain('overflow: auto')
+  })
+
+  it('renders resource quick actions as a compact menu instead of large cards', () => {
+    const menuBlock = cssBlock('.resource-quick-actions')
+    const buttonBlock = cssBlock('.resource-quick-actions button')
+
+    expect(menuBlock).toContain('gap: 3px')
+    expect(menuBlock).toContain('border-radius: 8px')
+    expect(buttonBlock).toContain('min-height: 30px')
+    expect(buttonBlock).toContain('border-color: transparent')
+    expect(buttonBlock).toContain('box-shadow: none')
+  })
+})

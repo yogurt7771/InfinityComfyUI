@@ -24,7 +24,7 @@ import {
   useNodesState,
   useReactFlow,
 } from '@xyflow/react'
-import { GitCompareArrows, X } from 'lucide-react'
+import { CaseSensitive, GitCompareArrows, Grid2X2, Image, Info, Scissors, Shrink, Video, Volume2, X } from 'lucide-react'
 import { EmptyNodeView, FunctionNodeView, GroupNodeView, ResourceNodeView, ResultGroupNodeView } from './NodeViews'
 import { buildCanvasFlowEdges } from '../domain/canvasEdges'
 import { targetInputInitialResourceValue } from '../domain/inputInitialValue'
@@ -143,6 +143,17 @@ const mediaValue = (resource: Resource | undefined) =>
   typeof resource?.value === 'object' && resource.value !== null && 'url' in resource.value ? resource.value : undefined
 
 const resourceLabel = (resource: Resource) => mediaValue(resource)?.filename ?? resource.name ?? resource.id
+
+function LocalQuickActionIcon({ kind }: { kind?: string }) {
+  if (kind === 'image_resize') return <Shrink aria-hidden="true" size={14} />
+  if (kind === 'image_blur') return <Image aria-hidden="true" size={14} />
+  if (kind === 'image_grid_split') return <Grid2X2 aria-hidden="true" size={14} />
+  if (kind === 'text_trim') return <Scissors aria-hidden="true" size={14} />
+  if (kind === 'text_case') return <CaseSensitive aria-hidden="true" size={14} />
+  if (kind === 'video_info') return <Video aria-hidden="true" size={14} />
+  if (kind === 'audio_info') return <Volume2 aria-hidden="true" size={14} />
+  return <Info aria-hidden="true" size={14} />
+}
 
 const resultImageResource = (node: CanvasNode | undefined, resourcesById: Record<string, Resource>) => {
   if (!node || node.type !== 'result_group' || !Array.isArray(node.data.resources)) return undefined
@@ -1261,7 +1272,8 @@ function CanvasSurface() {
               title={fn.name}
               onClick={() => setLocalActionDialog({ sourceNodeId: selectedQuickSourceNodeId, functionId: fn.id })}
             >
-              {fn.name}
+              <LocalQuickActionIcon kind={fn.localTransform?.kind} />
+              <span>{fn.name}</span>
             </button>
           ))}
         </div>
