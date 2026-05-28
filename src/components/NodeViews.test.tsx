@@ -399,6 +399,115 @@ describe('NodeViews', () => {
     expect(screen.getByTestId('function-input-slot-negative_prompt')).toHaveTextContent('new text resource')
   })
 
+  it('renders compact previews for connected media function inputs and hides them when disconnected', () => {
+    const mediaFunction: GenerationFunction = {
+      ...renderFunction,
+      inputs: [
+        {
+          key: 'image_input',
+          label: 'Image Input',
+          type: 'image',
+          required: true,
+          bind: { path: 'inputs.image' },
+          upload: { strategy: 'none' },
+        },
+        {
+          key: 'video_input',
+          label: 'Video Input',
+          type: 'video',
+          required: false,
+          bind: { path: 'inputs.video' },
+          upload: { strategy: 'none' },
+        },
+        {
+          key: 'audio_input',
+          label: 'Audio Input',
+          type: 'audio',
+          required: false,
+          bind: { path: 'inputs.audio' },
+          upload: { strategy: 'none' },
+        },
+      ],
+      outputs: [],
+    }
+    const videoResource: Resource = {
+      id: 'res_video',
+      type: 'video',
+      name: 'motion.mp4',
+      value: {
+        assetId: 'asset_video',
+        url: 'data:video/mp4;base64,AAAA',
+        filename: 'motion.mp4',
+        mimeType: 'video/mp4',
+        sizeBytes: 4,
+      },
+      source: { kind: 'manual_input' },
+    }
+    const audioResource: Resource = {
+      id: 'res_audio',
+      type: 'audio',
+      name: 'voice.wav',
+      value: {
+        assetId: 'asset_audio',
+        url: 'data:audio/wav;base64,AAAA',
+        filename: 'voice.wav',
+        mimeType: 'audio/wav',
+        sizeBytes: 4,
+      },
+      source: { kind: 'manual_input' },
+    }
+    const connectedData = {
+      ...baseNodeData,
+      resourcesById: {
+        res_image: outputResource,
+        res_video: videoResource,
+        res_audio: audioResource,
+      },
+      functionsById: { fn_media: mediaFunction },
+      functionId: 'fn_media',
+      title: 'Media Function',
+      inputValues: {
+        image_input: { resourceId: 'res_image', type: 'image' },
+        video_input: { resourceId: 'res_video', type: 'video' },
+        audio_input: { resourceId: 'res_audio', type: 'audio' },
+      },
+    }
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <FunctionNodeView
+          {...({
+            id: 'node_fn',
+            selected: false,
+            data: connectedData,
+          } as unknown as ComponentProps<typeof FunctionNodeView>)}
+        />
+      </ReactFlowProvider>,
+    )
+
+    expect(screen.getByRole('img', { name: 'Image Input connected image preview' })).toBeVisible()
+    expect(screen.getByLabelText('Video Input connected video preview')).toHaveAttribute('controls')
+    expect(screen.getByLabelText('Audio Input connected audio preview')).toHaveAttribute('controls')
+
+    rerender(
+      <ReactFlowProvider>
+        <FunctionNodeView
+          {...({
+            id: 'node_fn',
+            selected: false,
+            data: {
+              ...connectedData,
+              inputValues: {},
+            },
+          } as unknown as ComponentProps<typeof FunctionNodeView>)}
+        />
+      </ReactFlowProvider>,
+    )
+
+    expect(screen.queryByRole('img', { name: 'Image Input connected image preview' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Video Input connected video preview')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Audio Input connected audio preview')).not.toBeInTheDocument()
+  })
+
   it('keeps optional text edits local while Chinese IME composition is active', () => {
     const onUpdateFunctionInputValue = vi.fn()
     const functionWithOptionalPrompt: GenerationFunction = {

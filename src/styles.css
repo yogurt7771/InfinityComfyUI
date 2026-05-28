@@ -2085,6 +2085,56 @@ textarea[aria-invalid="true"] {
   white-space: nowrap;
 }
 
+.media-connected-slot {
+  gap: 8px;
+  padding-right: 8px;
+}
+
+.media-connected-slot .slot-copy {
+  flex: 0 1 96px;
+}
+
+.slot-media-preview {
+  flex: 0 0 76px;
+  width: 76px;
+  height: 42px;
+  min-width: 72px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.slot-media-preview img,
+.slot-media-preview video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: #020617;
+  object-fit: cover;
+}
+
+.slot-video-preview video {
+  cursor: pointer;
+}
+
+.slot-audio-preview {
+  flex: 1 1 118px;
+  width: auto;
+  max-width: 150px;
+  height: 34px;
+  min-width: 108px;
+  padding: 2px;
+  border-radius: 999px;
+}
+
+.slot-audio-preview audio {
+  width: 100%;
+  height: 30px;
+}
+
 .connected-slot {
   background: #f3f6f8;
 }

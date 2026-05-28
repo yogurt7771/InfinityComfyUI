@@ -134,6 +134,9 @@ const commitActiveTextControl = () => {
 const isResourceRef = (value: PrimitiveInputValue | ResourceRef | undefined): value is ResourceRef =>
   typeof value === 'object' && value !== null && 'resourceId' in value
 
+const mediaValue = (resource: Resource) =>
+  typeof resource.value === 'object' && resource.value !== null && 'url' in resource.value ? resource.value : undefined
+
 const connectedPrimitiveLabel = (resource: Resource | undefined, fallback: string) => {
   if (!resource) return fallback
   if (typeof resource.value === 'object' && resource.value !== null && 'filename' in resource.value) {
@@ -304,6 +307,47 @@ function OptionalPrimitiveInput({
   )
 }
 
+function ConnectedMediaPreview({ inputLabel, resource }: { inputLabel: string; resource: Resource }) {
+  const mediaSource = usePreviewMediaSource(resource)
+  const label = resource.name ?? mediaValue(resource)?.filename ?? resource.id
+
+  if (resource.type === 'image' && mediaSource) {
+    return (
+      <div className="slot-media-preview nodrag nopan" title={label}>
+        <img src={String(mediaSource)} alt={`${inputLabel} connected image preview`} />
+      </div>
+    )
+  }
+
+  if (resource.type === 'video' && mediaSource) {
+    return (
+      <div className="slot-media-preview slot-video-preview nodrag nopan" title={label}>
+        <video
+          aria-label={`${inputLabel} connected video preview`}
+          src={String(mediaSource)}
+          controls
+          muted
+          preload="metadata"
+        />
+      </div>
+    )
+  }
+
+  if (resource.type === 'audio' && mediaSource) {
+    return (
+      <div className="slot-media-preview slot-audio-preview nodrag nopan" title={label}>
+        <audio aria-label={`${inputLabel} connected audio preview`} src={String(mediaSource)} controls preload="metadata" />
+      </div>
+    )
+  }
+
+  if (mediaValue(resource)?.url) {
+    return <span className="slot-connected-value">Loading {resource.type}</span>
+  }
+
+  return null
+}
+
 function FunctionInputSlot({
   input,
   missing,
@@ -326,6 +370,11 @@ function FunctionInputSlot({
   const canEditInline = !input.required && (input.type === 'text' || input.type === 'number')
   const connectedRef = isResourceRef(value) ? value : undefined
   const connectedResource = connectedRef ? resourcesById[connectedRef.resourceId] : undefined
+  const inputLabel = input.label || input.key
+  const connectedMediaPreview =
+    connectedResource && (connectedResource.type === 'image' || connectedResource.type === 'video' || connectedResource.type === 'audio') ? (
+      <ConnectedMediaPreview inputLabel={inputLabel} resource={connectedResource} />
+    ) : undefined
   const primitiveValue =
     canEditInline && !isResourceRef(value)
       ? value !== undefined && value !== null
@@ -338,7 +387,7 @@ function FunctionInputSlot({
   return (
     <div
       aria-invalid={missing ? 'true' : undefined}
-      className={`slot-row input-slot ${input.required ? 'required-slot' : 'optional-slot'} ${canEditInline ? 'primitive-slot' : ''} ${canEditInline && input.type === 'text' ? 'text-primitive-slot' : ''} ${canEditInline && input.type === 'number' ? 'number-primitive-slot' : ''} ${connectedRef ? 'connected-slot' : ''} ${missing ? 'missing-slot' : ''}`}
+      className={`slot-row input-slot ${input.required ? 'required-slot' : 'optional-slot'} ${canEditInline ? 'primitive-slot' : ''} ${canEditInline && input.type === 'text' ? 'text-primitive-slot' : ''} ${canEditInline && input.type === 'number' ? 'number-primitive-slot' : ''} ${connectedRef ? 'connected-slot' : ''} ${connectedMediaPreview ? 'media-connected-slot' : ''} ${missing ? 'missing-slot' : ''}`}
       data-testid={`function-input-slot-${input.key}`}
     >
       <Handle
@@ -349,10 +398,12 @@ function FunctionInputSlot({
         type="target"
       />
       <div className="slot-copy">
-        <span>{input.label || input.key}</span>
+        <span>{inputLabel}</span>
         <small>{input.type}</small>
       </div>
-      {canEditInline ? (
+      {connectedMediaPreview ? (
+        connectedMediaPreview
+      ) : canEditInline ? (
         connectedRef ? (
           <span
             className="slot-connected-value"
@@ -442,9 +493,6 @@ function PendingResultOutputSlot({ output }: { output: FunctionOutputDef }) {
 
 const isMediaResource = (resource: Resource): resource is Resource & { type: MediaResourceKind } =>
   resource.type === 'image' || resource.type === 'video' || resource.type === 'audio'
-
-const mediaValue = (resource: Resource) =>
-  typeof resource.value === 'object' && resource.value !== null && 'url' in resource.value ? resource.value : undefined
 
 const mediaAccept = (type: MediaResourceKind) => `${type}/*`
 
