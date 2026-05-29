@@ -10,6 +10,7 @@
     "test:watch": "vitest",
     "browser:smoke": "playwright test",
     "build": "tsc -b && vite build",
+    "serve": "node server/serve.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
     "electron": "npm run build && electron .",

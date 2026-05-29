@@ -38,6 +38,34 @@ npm run dev -- --host 127.0.0.1 --port 5173
 http://127.0.0.1:5173
 ```
 
+### Docker 版本
+
+构建镜像：
+
+```powershell
+docker build -t infinity-comfyui:local .
+```
+
+启动容器：
+
+```powershell
+docker run --rm -p 5173:5173 --name infinity-comfyui infinity-comfyui:local
+```
+
+或者使用 Compose：
+
+```powershell
+docker compose up -d --build
+```
+
+启动后打开：
+
+```text
+http://127.0.0.1:5173
+```
+
+如果 ComfyUI 跑在宿主机本地，容器内的嵌入式 ComfyUI 代理会默认把 `127.0.0.1` / `localhost` 转到 `host.docker.internal`。在不支持该主机名的 Linux Docker 环境里，请保留 `docker-compose.yml` 里的 `extra_hosts`，或手动添加 `--add-host host.docker.internal:host-gateway`。
+
 ### Windows 桌面版本
 
 ```powershell
@@ -55,6 +83,7 @@ npm test               # 运行单元测试
 npm run typecheck      # TypeScript 类型检查
 npm run lint           # ESLint 检查
 npm run build          # 构建前端产物
+npm run serve          # 服务 dist/ 生产产物
 npm run browser:smoke  # 浏览器端冒烟测试
 npm run electron       # 构建后启动 Electron
 npm run package:win    # 打包 Windows exe

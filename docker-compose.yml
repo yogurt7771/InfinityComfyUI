@@ -1,0 +1,13 @@
+services:
+  infinity-comfyui:
+    build:
+      context: .
+    image: infinity-comfyui:local
+    ports:
+      - "5173:5173"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 5173
+      COMFY_PROXY_LOOPBACK_HOST: host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
