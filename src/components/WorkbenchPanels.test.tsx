@@ -622,6 +622,7 @@ describe('LeftPanel', () => {
 
     const editor = await screen.findByRole('dialog', { name: 'ComfyUI Workflow Editor' })
     const frame = within(editor).getByTitle('ComfyUI editor Local ComfyUI') as HTMLIFrameElement
+    const handleFile = vi.fn().mockResolvedValue(undefined)
     const loadGraphData = vi.fn().mockResolvedValue(undefined)
     const loadApiJson = vi.fn().mockResolvedValue(undefined)
     const sourceNode = { id: 6, connect: vi.fn() }
@@ -644,6 +645,7 @@ describe('LeftPanel', () => {
       configurable: true,
       value: {
         app: {
+          handleFile,
           graphToPrompt,
           loadGraphData,
           loadApiJson,
@@ -653,9 +655,12 @@ describe('LeftPanel', () => {
     })
 
     fireEvent.load(frame)
-    await waitFor(() => expect(loadApiJson).toHaveBeenCalledWith(projectStore.getState().project.functions.fn_render.workflow.rawJson))
+    await waitFor(() => expect(handleFile).toHaveBeenCalled())
+    const openedFile = handleFile.mock.calls[0]?.[0] as File
+    await expect(openedFile.text()).resolves.toContain('"class_type"')
     expect(sourceNode.connect).toHaveBeenCalledWith(0, targetNode, 0)
     expect(loadGraphData).not.toHaveBeenCalled()
+    expect(loadApiJson).not.toHaveBeenCalled()
     fireEvent.click(within(editor).getByRole('button', { name: 'Save from ComfyUI' }))
 
     await waitFor(() =>

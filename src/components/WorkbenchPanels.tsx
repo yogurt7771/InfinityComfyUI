@@ -48,7 +48,11 @@ import type {
   ResourceType,
 } from '../domain/types'
 import { comfyProxyUrl } from '../domain/comfyProxy'
-import { loadApiWorkflowIntoComfyEditor } from '../domain/comfyEditorBridge'
+import {
+  loadApiWorkflowIntoComfyEditor,
+  openApiWorkflowJsonFileInComfyEditor,
+  openWorkflowJsonFileInComfyEditor,
+} from '../domain/comfyEditorBridge'
 import { projectStore, useProjectStore } from '../store/projectStore'
 import { FullResourcePreviewModal } from './ResourcePreviewModal'
 
@@ -1000,6 +1004,7 @@ type EmbeddedComfySave = {
 type ComfyFrameWindow = Window & {
   app?: {
     graphToPrompt?: () => Promise<{ output?: unknown; workflow?: unknown }> | { output?: unknown; workflow?: unknown }
+    handleFile?: (file: File, openSource?: unknown, options?: unknown) => Promise<unknown> | unknown
     loadGraphData?: (workflow: ComfyUiWorkflow) => Promise<unknown> | unknown
     loadApiJson?: (workflow: ComfyWorkflow) => Promise<unknown> | unknown
     graph?: {
@@ -1052,9 +1057,15 @@ function ComfyWorkflowEditorDialog({
     if (!frameRef.current || !endpoint) return
     try {
       const app = await waitForComfyFrameApp(frameRef.current)
-      if (initialUiJson && app.loadGraphData) {
+      if (initialUiJson && app.handleFile) {
+        await openWorkflowJsonFileInComfyEditor(app, initialUiJson, 'Infinity Workflow.json')
+        setStatus('Opened editable workflow through ComfyUI File Open')
+      } else if (initialUiJson && app.loadGraphData) {
         await app.loadGraphData(initialUiJson)
         setStatus('Loaded editable ComfyUI workflow')
+      } else if (initialApiJson && app.handleFile) {
+        await openApiWorkflowJsonFileInComfyEditor(app, initialApiJson)
+        setStatus('Opened API workflow through ComfyUI File Open')
       } else if (initialApiJson && app.loadApiJson) {
         await loadApiWorkflowIntoComfyEditor(app, initialApiJson)
         setStatus('Loaded API workflow into ComfyUI editor')

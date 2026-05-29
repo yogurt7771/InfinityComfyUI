@@ -1,4 +1,4 @@
-import type { ComfyWorkflow } from './types'
+import type { ComfyUiWorkflow, ComfyWorkflow } from './types'
 
 export type ComfyEditorGraph = {
   getNodeById?: (id: unknown) => unknown
@@ -11,10 +11,30 @@ export type ComfyEditorAppLike = {
   graph?: ComfyEditorGraph
   rootGraph?: ComfyEditorGraph
   rootGraphInternal?: ComfyEditorGraph
+  handleFile?: (file: File, openSource?: unknown, options?: unknown) => Promise<unknown> | unknown
   loadApiJson?: (workflow: ComfyWorkflow) => Promise<unknown> | unknown
   canvas?: {
     draw?: (forceCanvas?: boolean, forceBgCanvas?: boolean) => void
   }
+}
+
+export async function openWorkflowJsonFileInComfyEditor(
+  app: Pick<ComfyEditorAppLike, 'handleFile'>,
+  workflow: ComfyWorkflow | ComfyUiWorkflow,
+  filename = 'Infinity Workflow.json',
+) {
+  if (!app.handleFile) throw new Error('ComfyUI file open handler is not available')
+  const file = new File([JSON.stringify(workflow, null, 2)], filename, { type: 'application/json' })
+  await app.handleFile(file)
+}
+
+export async function openApiWorkflowJsonFileInComfyEditor(
+  app: ComfyEditorAppLike,
+  workflow: ComfyWorkflow,
+  filename = 'Infinity API Workflow.json',
+) {
+  await openWorkflowJsonFileInComfyEditor(app, workflow, filename)
+  restoreApiWorkflowLinks(app, workflow)
 }
 
 type ComfyEditorNode = {
