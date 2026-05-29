@@ -563,42 +563,24 @@ describe('LeftPanel', () => {
     expect(preview.querySelector('.json-string')).not.toBeNull()
   })
 
-  it('edits and previews the selected function workflow JSON', () => {
+  it('renders the selected function workflow JSON only as a syntax highlighted view', () => {
     render(<SettingsPage onClose={() => undefined} />)
 
     fireEvent.click(screen.getByRole('button', { name: 'Function Management' }))
     const dialog = screen.getByRole('dialog', { name: 'Function Management' })
     const selectedWorkflowJson = within(dialog).getByLabelText('Selected workflow JSON')
 
-    expect((selectedWorkflowJson as HTMLTextAreaElement).value).toContain('"Positive Prompt"')
+    expect(selectedWorkflowJson.tagName).toBe('PRE')
+    expect(selectedWorkflowJson).toHaveClass('selected-workflow-preview')
+    expect(dialog.querySelector('.workflow-editor-grid textarea')).toBeNull()
+    expect(within(selectedWorkflowJson).getByText('"Positive Prompt"')).toBeVisible()
+    expect(selectedWorkflowJson.querySelector('.json-key')).not.toBeNull()
 
-    fireEvent.change(selectedWorkflowJson, {
-      target: {
-        value: '{"42":{"class_type":"SaveImage","_meta":{"title":"Edited Result"},"inputs":{"filename_prefix":"edited"}}}',
-      },
-    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Format selected JSON' }))
 
     expect(projectStore.getState().project.functions.fn_render.workflow.rawJson).toMatchObject({
       '6': { class_type: 'CLIPTextEncode', _meta: { title: 'Positive Prompt' } },
     })
-    fireEvent.blur(selectedWorkflowJson)
-
-    expect(projectStore.getState().project.functions.fn_render.workflow.rawJson).toMatchObject({
-      '42': { class_type: 'SaveImage', _meta: { title: 'Edited Result' } },
-    })
-
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Format selected JSON' }))
-
-    expect((selectedWorkflowJson as HTMLTextAreaElement).value).toContain('\n    "class_type"')
-    const selectedPreview = within(dialog).getByLabelText('Selected workflow preview')
-    expect(within(selectedPreview).getByText('"Edited Result"')).toBeVisible()
-    expect(selectedPreview.querySelector('.json-key')).not.toBeNull()
-
-    fireEvent.change(selectedWorkflowJson, { target: { value: '{"42":' } })
-    fireEvent.blur(selectedWorkflowJson)
-
-    expect(selectedWorkflowJson).toHaveAttribute('aria-invalid', 'true')
-    expect(within(dialog).getByText(/Invalid workflow JSON/)).toBeVisible()
   })
 
   it('saves the selected workflow from an embedded ComfyUI editor with API and UI JSON', async () => {

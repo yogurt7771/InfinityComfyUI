@@ -1256,17 +1256,7 @@ textarea[aria-invalid="true"] {
 }
 
 .workflow-editor-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 10px;
-  align-items: stretch;
-}
-
-.workflow-json-field textarea {
-  min-height: 220px;
-  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.45;
+  display: block;
 }
 
 .selected-workflow-preview {

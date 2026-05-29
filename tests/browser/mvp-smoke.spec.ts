@@ -366,7 +366,7 @@ test('manages projects from settings in a browser', async ({ page }) => {
   await expect(page.getByText('Browser Project B')).toBeVisible()
 })
 
-test('edits selected function workflow JSON in the function manager', async ({ page }) => {
+test('shows selected function workflow JSON as a single highlighted view', async ({ page }) => {
   await page.goto('/')
 
   await addTestWorkflow(page)
@@ -374,19 +374,15 @@ test('edits selected function workflow JSON in the function manager', async ({ p
   await dialog.getByLabel('Managed function list').getByRole('button', { name: testWorkflowName }).click()
 
   const selectedWorkflowJson = dialog.getByLabel('Selected workflow JSON')
-  await expect(selectedWorkflowJson).toHaveValue(/Positive Prompt/)
+  await expect(selectedWorkflowJson).toContainText('"Positive Prompt"')
+  await expect(dialog.locator('.workflow-editor-grid textarea')).toHaveCount(0)
+  await expect(dialog.locator('.selected-workflow-preview .json-key').first()).toBeVisible()
 
-  await selectedWorkflowJson.fill(
-    '{"42":{"class_type":"SaveImage","_meta":{"title":"Edited Result"},"inputs":{"filename_prefix":"edited"}}}',
-  )
   await dialog.getByRole('button', { name: 'Format selected JSON' }).click()
 
-  await expect(selectedWorkflowJson).toHaveValue(/"class_type": "SaveImage"/)
-  await expect(dialog.getByLabel('Selected workflow preview')).toContainText('"Edited Result"')
+  await expect(selectedWorkflowJson).toContainText('"class_type"')
+  await expect(selectedWorkflowJson).toContainText('"Positive Prompt"')
 
-  await selectedWorkflowJson.fill('{"42":')
-  await expect(selectedWorkflowJson).toHaveAttribute('aria-invalid', 'true')
-  await expect(dialog.getByText(/Invalid workflow JSON/)).toBeVisible()
   await dialog.getByRole('button', { name: 'Close Function Management' }).click()
   await closeSettings(page)
 })

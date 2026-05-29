@@ -1623,41 +1623,6 @@ function FunctionManager({
     })
   }
 
-  const editSelectedWorkflowJson = (value: string) => {
-    if (!selectedFunction) return
-    try {
-      JSON.parse(value)
-      setSelectedWorkflowDraft({ functionId: selectedFunction.id, value })
-    } catch (err) {
-      setSelectedWorkflowDraft({
-        functionId: selectedFunction.id,
-        value,
-        error: `Invalid workflow JSON: ${err instanceof Error ? err.message : 'Invalid JSON'}`,
-      })
-    }
-  }
-
-  const commitSelectedWorkflowJson = (value: string) => {
-    if (!selectedFunction) return
-
-    try {
-      const rawJson = JSON.parse(value) as ComfyWorkflow
-      onUpdateFunction(selectedFunction.id, {
-        workflow: {
-          ...selectedFunction.workflow,
-          rawJson,
-        },
-      })
-      setSelectedWorkflowDraft({ functionId: selectedFunction.id, value })
-    } catch (err) {
-      setSelectedWorkflowDraft({
-        functionId: selectedFunction.id,
-        value,
-        error: `Invalid workflow JSON: ${err instanceof Error ? err.message : 'Invalid JSON'}`,
-      })
-    }
-  }
-
   const formatSelectedWorkflowJson = () => {
     if (!selectedFunction) return
 
@@ -2013,18 +1978,11 @@ function FunctionManager({
                     </div>
                   </div>
                   <div className="workflow-editor-grid">
-                    <label className="field workflow-json-field">
-                      <span>Selected workflow JSON</span>
-                      <textarea
-                        aria-invalid={selectedWorkflowJsonError ? true : undefined}
-                        aria-label="Selected workflow JSON"
-                        value={selectedWorkflowJson}
-                        onBlur={(event) => commitSelectedWorkflowJson(event.currentTarget.value)}
-                        onChange={(event) => editSelectedWorkflowJson(event.target.value)}
-                        rows={11}
-                      />
-                    </label>
-                    <pre className="json-preview selected-workflow-preview" aria-label="Selected workflow preview">
+                    <pre
+                      className="json-preview selected-workflow-preview"
+                      aria-invalid={selectedWorkflowJsonError ? true : undefined}
+                      aria-label="Selected workflow JSON"
+                    >
                       <code>{highlightedJson(selectedWorkflowJson)}</code>
                     </pre>
                   </div>
