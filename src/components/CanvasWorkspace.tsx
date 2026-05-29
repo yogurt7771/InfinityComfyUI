@@ -79,6 +79,12 @@ type LocalActionDialogState = {
   functionId: string
 }
 
+type QuickToolbarState = {
+  sourceNodeId: string
+  left: number
+  top: number
+}
+
 const nodeTypes: NodeTypes = {
   resource: ResourceNodeView,
   function: FunctionNodeView,
@@ -775,11 +781,12 @@ function CanvasSurface() {
   const { screenToFlowPosition, setCenter } = useReactFlow()
   const [addMenu, setAddMenu] = useState<AddNodeMenuState | null>(null)
   const [localActionDialog, setLocalActionDialog] = useState<LocalActionDialogState | null>(null)
-  const [quickToolbarPosition, setQuickToolbarPosition] = useState<{ left: number; top: number }>()
+  const [quickToolbar, setQuickToolbar] = useState<QuickToolbarState>()
   const [comparePair, setComparePair] = useState<CompareImagePair | null>(null)
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([])
   const [addMenuQuery, setAddMenuQuery] = useState('')
   const addMenuRef = useRef<HTMLDivElement | null>(null)
+  const quickToolbarRef = useRef<HTMLDivElement | null>(null)
   const addMenuSearchRef = useRef<HTMLInputElement | null>(null)
   const canvasRef = useRef<HTMLElement | null>(null)
   const connectionStart = useRef<ConnectionStartState | null>(null)
@@ -989,6 +996,7 @@ function CanvasSurface() {
       }
       if (event.key === 'Escape') {
         setAddMenu(null)
+        setQuickToolbar(undefined)
         selectNode(undefined)
         setSelectedEdgeIds([])
       }
@@ -1096,9 +1104,9 @@ function CanvasSurface() {
     return node?.type === 'resource' || node?.type === 'result_group' ? node.id : undefined
   }, [activeSelectedNodeIds, project.canvas.nodes])
 
-  const localQuickActions = useMemo(() => {
-    if (!selectedQuickSourceNodeId) return []
-    const refs = sourceResourceRefs(selectedQuickSourceNodeId)
+  const quickActionsForSourceNode = useCallback((sourceNodeId: string | undefined) => {
+    if (!sourceNodeId) return []
+    const refs = sourceResourceRefs(sourceNodeId)
     if (refs.length === 0) return []
 
     return Object.values(project.functions).filter((fn) => {
@@ -1106,38 +1114,39 @@ function CanvasSurface() {
       const requiredInputs = fn.inputs.filter((input) => input.required)
       return requiredInputs.length > 0 && requiredInputs.every((input) => refs.some((ref) => ref.type === input.type))
     })
-  }, [project.functions, selectedQuickSourceNodeId, sourceResourceRefs])
+  }, [project.functions, sourceResourceRefs])
+
+  const quickToolbarSourceNodeId = quickToolbar?.sourceNodeId
+  const localQuickActions = useMemo(
+    () => quickActionsForSourceNode(quickToolbarSourceNodeId),
+    [quickActionsForSourceNode, quickToolbarSourceNodeId],
+  )
+
+  useEffect(() => {
+    setQuickToolbar((current) => {
+      if (!current) return current
+      return activeSelectedNodeIds.length === 1 && activeSelectedNodeIds[0] === current.sourceNodeId ? current : undefined
+    })
+  }, [activeSelectedNodeIds])
+
+  useEffect(() => {
+    if (quickToolbar && localQuickActions.length === 0) setQuickToolbar(undefined)
+  }, [localQuickActions.length, quickToolbar])
 
   useLayoutEffect(() => {
-    if (!selectedQuickSourceNodeId || localQuickActions.length === 0) {
-      const frame = window.requestAnimationFrame(() => setQuickToolbarPosition(undefined))
-      return () => window.cancelAnimationFrame(frame)
-    }
+    if (!quickToolbar) return
 
-    const updatePosition = () => {
-      const escapedId =
-        typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(selectedQuickSourceNodeId) : selectedQuickSourceNodeId
-      const nodeElement = canvasRef.current?.querySelector<HTMLElement>(`.react-flow__node[data-id="${escapedId}"]`)
-      const rect = nodeElement?.getBoundingClientRect()
-      if (!rect) {
-        setQuickToolbarPosition(undefined)
-        return
-      }
-      setQuickToolbarPosition({
-        left: Math.min(window.innerWidth - 72, rect.right + 12),
-        top: Math.max(8, rect.top + 8),
-      })
-    }
+    const toolbar = quickToolbarRef.current
+    if (!toolbar) return
 
-    const frame = window.requestAnimationFrame(updatePosition)
-    window.addEventListener('resize', updatePosition)
-    window.addEventListener('scroll', updatePosition, true)
-    return () => {
-      window.cancelAnimationFrame(frame)
-      window.removeEventListener('resize', updatePosition)
-      window.removeEventListener('scroll', updatePosition, true)
-    }
-  }, [localQuickActions.length, nodes, selectedQuickSourceNodeId])
+    const margin = 8
+    const rect = toolbar.getBoundingClientRect()
+    const left = Math.min(Math.max(quickToolbar.left, margin), Math.max(margin, window.innerWidth - rect.width - margin))
+    const top = Math.min(Math.max(quickToolbar.top, margin), Math.max(margin, window.innerHeight - rect.height - margin))
+
+    toolbar.style.left = `${left}px`
+    toolbar.style.top = `${top}px`
+  }, [localQuickActions.length, quickToolbar])
 
   const activeLocalActionFunction = localActionDialog ? project.functions[localActionDialog.functionId] : undefined
 
@@ -1209,12 +1218,36 @@ function CanvasSurface() {
     connection?: AddNodeMenuState['connection'],
     placement?: AddNodeMenuState['placement'],
   ) => {
+    setQuickToolbar(undefined)
     setAddMenuQuery('')
     setAddMenu({
       screen: { x: clientX, y: clientY },
       flow: screenToFlowPosition({ x: clientX, y: clientY }),
       placement,
       connection,
+    })
+  }
+
+  const handleNodeContextMenu = (event: ReactMouseEvent, node: Node) => {
+    event.preventDefault()
+    event.stopPropagation()
+    setAddMenu(null)
+
+    if (selectedQuickSourceNodeId !== node.id) {
+      selectNode(node.id)
+      setQuickToolbar(undefined)
+      return
+    }
+
+    if (quickActionsForSourceNode(node.id).length === 0) {
+      setQuickToolbar(undefined)
+      return
+    }
+
+    setQuickToolbar({
+      sourceNodeId: node.id,
+      left: event.clientX,
+      top: event.clientY,
     })
   }
 
@@ -1434,7 +1467,11 @@ function CanvasSurface() {
       }}
       onContextMenu={(event) => {
         const target = event.target as HTMLElement
-        if (target.closest('.react-flow__node, button, input, textarea, .react-flow__controls, .comfy-minimap, .add-node-menu')) {
+        if (
+          target.closest(
+            '.react-flow__node, button, input, textarea, .react-flow__controls, .comfy-minimap, .add-node-menu, .resource-quick-actions',
+          )
+        ) {
           return
         }
         event.preventDefault()
@@ -1453,6 +1490,7 @@ function CanvasSurface() {
           selectionBoxActive.current = true
           selectionBoxNodeIds.current = []
           setSelectedEdgeIds([])
+          setQuickToolbar(undefined)
         }}
         onSelectionEnd={() => {
           selectionBoxActive.current = false
@@ -1472,6 +1510,7 @@ function CanvasSurface() {
         onEdgeClick={(event, edge) => {
           event.stopPropagation()
           setSelectedEdgeIds([edge.id])
+          setQuickToolbar(undefined)
           selectNode(undefined)
         }}
         onConnectStart={(_, params) => {
@@ -1526,6 +1565,7 @@ function CanvasSurface() {
         }}
         onNodeClick={(event, node) => {
           setSelectedEdgeIds([])
+          setQuickToolbar(undefined)
           if (suppressNextNodeClick.current) {
             suppressNextNodeClick.current = false
             return
@@ -1535,6 +1575,7 @@ function CanvasSurface() {
           }
           selectNode(node.id, selectionModeFromEvent(event))
         }}
+        onNodeContextMenu={handleNodeContextMenu}
         onNodeDragStop={(_, node, draggedNodes) => {
           suppressNextNodeClick.current = true
           window.setTimeout(() => {
@@ -1550,6 +1591,7 @@ function CanvasSurface() {
           selectNode(undefined)
           setSelectedEdgeIds([])
           setAddMenu(null)
+          setQuickToolbar(undefined)
         }}
         zoomOnDoubleClick={false}
         deleteKeyCode={null}
@@ -1601,13 +1643,14 @@ function CanvasSurface() {
           ) : null}
         </div>
       ) : null}
-      {selectedQuickSourceNodeId && quickToolbarPosition && localQuickActions.length > 0 ? (
+      {quickToolbar && localQuickActions.length > 0 ? (
         <div
+          ref={quickToolbarRef}
           aria-label="Resource quick actions"
           className="resource-quick-actions nodrag nopan"
           style={{
-            left: quickToolbarPosition.left,
-            top: quickToolbarPosition.top,
+            left: quickToolbar.left,
+            top: quickToolbar.top,
           }}
           onMouseDown={(event) => event.stopPropagation()}
         >
@@ -1617,7 +1660,10 @@ function CanvasSurface() {
               type="button"
               aria-label={fn.name}
               title={fn.name}
-              onClick={() => setLocalActionDialog({ sourceNodeId: selectedQuickSourceNodeId, functionId: fn.id })}
+              onClick={() => {
+                setLocalActionDialog({ sourceNodeId: quickToolbar.sourceNodeId, functionId: fn.id })
+                setQuickToolbar(undefined)
+              }}
             >
               <LocalQuickActionIcon kind={fn.localTransform?.kind} />
               <span>{fn.name}</span>

@@ -453,7 +453,7 @@ test('creates a one-off request node and extracts media output from the canvas',
   await expect(page.getByText('result.png').first()).toBeVisible()
 })
 
-test('runs local image tools from the selected resource quick actions', async ({ page }) => {
+test('runs local image tools from the selected resource context menu', async ({ page }) => {
   await page.goto('/')
 
   await addImageAssetByDrop(page)
@@ -462,6 +462,8 @@ test('runs local image tools from the selected resource quick actions', async ({
   await imageNode.click()
 
   const quickActions = page.getByLabel('Resource quick actions')
+  await expect(quickActions).toHaveCount(0)
+  await imageNode.click({ button: 'right' })
   await expect(quickActions.getByRole('button', { name: 'Resize Image' })).toBeVisible()
   await expect(quickActions.getByRole('button', { name: 'Blur Image' })).toBeVisible()
   await expect(quickActions.getByRole('button', { name: 'Split Image Grid' })).toBeVisible()
