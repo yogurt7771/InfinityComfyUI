@@ -273,11 +273,12 @@ test('runs a canvas workflow in a browser', async ({ page }) => {
   await expect
     .poll(async () =>
       page.evaluate(() => {
-        const minimap = document.querySelector('.react-flow__minimap')?.getBoundingClientRect()
+        const minimapElement = document.querySelector('.comfy-minimap')
+        const minimap = minimapElement?.getBoundingClientRect()
         const nodes = [...document.querySelectorAll('.react-flow__node')].map((node) =>
           node.getBoundingClientRect(),
         )
-        if (!minimap) return { hasOverlap: false }
+        if (!minimapElement || !minimap) return { hasOverlap: true, hasViewport: false, hasUsableViewport: false, hasAllNodes: false }
         const hasOverlap = nodes.some((node) => {
           const separated =
             node.right <= minimap.left ||
@@ -286,10 +287,18 @@ test('runs a canvas workflow in a browser', async ({ page }) => {
             node.top >= minimap.bottom
           return !separated
         })
-        return { hasOverlap }
+        const viewport = minimapElement.querySelector('.comfy-minimap-viewport')
+        const viewportWidth = Number.parseFloat(viewport?.getAttribute('width') ?? '0')
+        const viewportHeight = Number.parseFloat(viewport?.getAttribute('height') ?? '0')
+        return {
+          hasOverlap,
+          hasViewport: Boolean(viewport),
+          hasUsableViewport: viewportWidth > 10 && viewportHeight > 10,
+          hasAllNodes: minimapElement.querySelectorAll('.comfy-minimap-node').length === nodes.length,
+        }
       }),
     )
-    .toMatchObject({ hasOverlap: false })
+    .toMatchObject({ hasOverlap: false, hasViewport: true, hasUsableViewport: true, hasAllNodes: true })
 
   await page.screenshot({ path: 'output/playwright/mvp-smoke.png', fullPage: true })
 })
@@ -1069,8 +1078,7 @@ test('keeps manual resource-to-function connections visible after mouse up', asy
   await canvas.dblclick({ position: { x: 180, y: 500 } })
   await page.getByRole('menuitem', { name: 'Text Asset' }).click()
   const promptInput = page.getByLabel('Prompt text')
-  await promptInput.click()
-  await page.keyboard.insertText('中文，标点。！？manual connection prompt')
+  await promptInput.fill('中文，标点。！？manual connection prompt')
   await expect(promptInput).toHaveValue('中文，标点。！？manual connection prompt')
   await expect(page.locator('.react-flow__edge.input-edge')).toHaveCount(0)
   await page.waitForTimeout(250)

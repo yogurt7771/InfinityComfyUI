@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react'
+import { flushSync } from 'react-dom'
 import { createPortal } from 'react-dom'
 import { Handle, NodeResizeControl, Position, type NodeProps } from '@xyflow/react'
 import {
@@ -126,7 +127,7 @@ const activeResultStatuses = new Set(['queued', 'running', 'fetching_outputs'])
 const commitActiveTextControl = () => {
   const activeElement = document.activeElement
   if (activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement) {
-    activeElement.blur()
+    flushSync(() => activeElement.blur())
   }
 }
 
@@ -406,6 +407,7 @@ function FunctionInputSlot({
         id={inputHandleId(input.key)}
         position={Position.Left}
         type="target"
+        onPointerDown={commitActiveTextControl}
       />
       <div className="slot-copy">
         <span>{inputLabel}</span>
@@ -559,6 +561,7 @@ function FunctionOutputSlot({ output }: { output: FunctionOutputDef }) {
         id={outputHandleId(output.key)}
         position={Position.Right}
         type="source"
+        onPointerDown={commitActiveTextControl}
       />
     </div>
   )
@@ -588,6 +591,7 @@ function ResultOutputSlot({ resource }: { resource: Resource }) {
         id={resultHandleId(resource.id)}
         position={Position.Right}
         type="source"
+        onPointerDown={commitActiveTextControl}
       />
     </div>
   )
@@ -606,6 +610,7 @@ function PendingResultOutputSlot({ output }: { output: FunctionOutputDef }) {
         id={`pending:${output.key}`}
         position={Position.Right}
         type="source"
+        onPointerDown={commitActiveTextControl}
       />
     </div>
   )
@@ -1856,6 +1861,7 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
           id={resourceHandleId(resource.id)}
           position={Position.Right}
           type="source"
+          onPointerDown={commitActiveTextControl}
         />
       ) : null}
       <EditableNodeTitle
@@ -2153,6 +2159,7 @@ export const ResultGroupNodeView = memo(({ id, data, selected }: NodeProps) => {
         id="result-input"
         position={Position.Left}
         type="target"
+        onPointerDown={commitActiveTextControl}
       />
       <EditableNodeTitle
         actions={

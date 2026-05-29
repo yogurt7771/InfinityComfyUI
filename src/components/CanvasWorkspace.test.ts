@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { targetInputInitialResourceValue } from '../domain/inputInitialValue'
 import { buildNodeReferenceMap } from '../domain/nodeReferences'
 import type { ProjectState } from '../domain/types'
-import { sameFlowEdgesForSync } from './CanvasWorkspace'
+import { buildComfyMinimapLayout, minimapPointToFlowPosition, sameFlowEdgesForSync } from './CanvasWorkspace'
 
 const projectWithOptionalInput = (inputValues: Record<string, unknown> = {}): ProjectState => ({
   schemaVersion: '1.0.0',
@@ -175,5 +175,56 @@ describe('CanvasWorkspace helpers', () => {
 
     expect(targetInputInitialResourceValue(project, 'node_fn', 'negative_prompt')).toBe('low quality')
     expect(targetInputInitialResourceValue(project, 'node_fn', 'scale_by')).toBe(7)
+  })
+
+  it('fits distant nodes into the Comfy-style minimap bounds', () => {
+    const layout = buildComfyMinimapLayout(
+      [
+        { id: 'left', position: { x: -1200, y: -400 }, style: { width: 240, height: 180 } },
+        { id: 'right', position: { x: 1600, y: 900 }, style: { width: 360, height: 260 } },
+      ],
+      [],
+      { x: 0, y: 0, zoom: 1 },
+      { width: 1280, height: 720 },
+    )
+
+    expect(layout.nodeRects).toHaveLength(2)
+    for (const rect of layout.nodeRects) {
+      expect(rect.x).toBeGreaterThanOrEqual(layout.padding - 0.01)
+      expect(rect.y).toBeGreaterThanOrEqual(layout.padding - 0.01)
+      expect(rect.x + rect.width).toBeLessThanOrEqual(layout.width - layout.padding + 0.01)
+      expect(rect.y + rect.height).toBeLessThanOrEqual(layout.height - layout.padding + 0.01)
+    }
+    expect(layout.scale).toBeGreaterThan(0)
+  })
+
+  it('maps the current React Flow viewport into a minimap viewport frame', () => {
+    const layout = buildComfyMinimapLayout(
+      [{ id: 'node', position: { x: 0, y: 0 }, style: { width: 400, height: 300 } }],
+      [],
+      { x: -200, y: -100, zoom: 2 },
+      { width: 1000, height: 600 },
+    )
+
+    expect(layout.viewportRect.width).toBeCloseTo((1000 / 2) * layout.scale, 3)
+    expect(layout.viewportRect.height).toBeCloseTo((600 / 2) * layout.scale, 3)
+    expect(layout.viewportRect.x).toBeCloseTo(layout.offsetX + (100 - layout.content.x) * layout.scale, 3)
+    expect(layout.viewportRect.y).toBeCloseTo(layout.offsetY + (50 - layout.content.y) * layout.scale, 3)
+  })
+
+  it('converts minimap drag coordinates back to flow coordinates', () => {
+    const layout = buildComfyMinimapLayout(
+      [{ id: 'node', position: { x: 100, y: 200 }, style: { width: 300, height: 180 } }],
+      [],
+      { x: 0, y: 0, zoom: 1 },
+      { width: 1000, height: 600 },
+    )
+    const point = minimapPointToFlowPosition(
+      { x: layout.offsetX + 250 * layout.scale, y: layout.offsetY + 290 * layout.scale },
+      layout,
+    )
+
+    expect(point.x).toBeCloseTo(layout.content.x + 250, 3)
+    expect(point.y).toBeCloseTo(layout.content.y + 290, 3)
   })
 })
