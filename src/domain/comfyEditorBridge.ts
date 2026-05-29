@@ -11,11 +11,35 @@ export type ComfyEditorAppLike = {
   graph?: ComfyEditorGraph
   rootGraph?: ComfyEditorGraph
   rootGraphInternal?: ComfyEditorGraph
+  graphToPrompt?: (graph?: ComfyEditorGraph) => Promise<{ output?: unknown; workflow?: unknown }> | { output?: unknown; workflow?: unknown }
   handleFile?: (file: File, openSource?: unknown, options?: unknown) => Promise<unknown> | unknown
   loadApiJson?: (workflow: ComfyWorkflow) => Promise<unknown> | unknown
   canvas?: {
     draw?: (forceCanvas?: boolean, forceBgCanvas?: boolean) => void
   }
+}
+
+const plainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+
+type GraphToPromptApp = Pick<ComfyEditorAppLike, 'graphToPrompt' | 'graph' | 'rootGraph' | 'rootGraphInternal'>
+
+async function graphToPromptExport(app: GraphToPromptApp) {
+  const exported = await app.graphToPrompt?.(graphForApp(app))
+  if (!plainObject(exported)) throw new Error('ComfyUI export did not return workflow data')
+  return exported
+}
+
+export async function exportUiWorkflowFromComfyEditor(app: GraphToPromptApp) {
+  const exported = await graphToPromptExport(app)
+  if (!plainObject(exported.workflow)) throw new Error('ComfyUI Export did not return a UI workflow')
+  return exported.workflow as ComfyUiWorkflow
+}
+
+export async function exportApiWorkflowFromComfyEditor(app: GraphToPromptApp) {
+  const exported = await graphToPromptExport(app)
+  if (!plainObject(exported.output)) throw new Error('ComfyUI Export API did not return an API workflow')
+  return exported.output as ComfyWorkflow
 }
 
 export async function openWorkflowJsonFileInComfyEditor(

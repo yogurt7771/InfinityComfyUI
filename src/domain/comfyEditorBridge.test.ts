@@ -1,8 +1,42 @@
 import { describe, expect, it, vi } from 'vitest'
-import { openApiWorkflowJsonFileInComfyEditor, openWorkflowJsonFileInComfyEditor, restoreApiWorkflowLinks } from './comfyEditorBridge'
+import {
+  exportApiWorkflowFromComfyEditor,
+  exportUiWorkflowFromComfyEditor,
+  openApiWorkflowJsonFileInComfyEditor,
+  openWorkflowJsonFileInComfyEditor,
+  restoreApiWorkflowLinks,
+} from './comfyEditorBridge'
 import type { ComfyWorkflow } from './types'
 
 describe('ComfyUI editor bridge', () => {
+  it('exports UI workflow through the same graphToPrompt workflow payload as ComfyUI Export', async () => {
+    const workflow = { id: 'workflow_1', nodes: [{ id: 1, type: 'LoadImage' }], links: [] }
+    const rootGraphInternal = { _nodes: [] }
+    const app = {
+      rootGraphInternal,
+      graphToPrompt: vi.fn().mockResolvedValue({
+        workflow,
+        output: { '1': { class_type: 'LoadImage', inputs: {} } },
+      }),
+    }
+
+    await expect(exportUiWorkflowFromComfyEditor(app)).resolves.toEqual(workflow)
+    expect(app.graphToPrompt).toHaveBeenCalledWith(rootGraphInternal)
+  })
+
+  it('exports API workflow through the same graphToPrompt output payload as ComfyUI Export API', async () => {
+    const output = { '1': { class_type: 'LoadImage', inputs: { image: 'input.png' } } }
+    const app = {
+      graphToPrompt: vi.fn().mockResolvedValue({
+        workflow: { nodes: [] },
+        output,
+      }),
+    }
+
+    await expect(exportApiWorkflowFromComfyEditor(app)).resolves.toEqual(output)
+    expect(app.graphToPrompt).toHaveBeenCalledTimes(1)
+  })
+
   it('loads editable workflows through ComfyUI file open handling', async () => {
     const handleFile = vi.fn().mockResolvedValue(undefined)
     const uiWorkflow = {

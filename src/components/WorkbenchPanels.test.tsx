@@ -631,16 +631,28 @@ describe('LeftPanel', () => {
       getNodeById: vi.fn((id: unknown) => (id === 6 ? sourceNode : id === 20 ? targetNode : undefined)),
       change: vi.fn(),
     }
-    const graphToPrompt = vi.fn().mockResolvedValue({
-      output: {
-        '42': { class_type: 'SaveImage', _meta: { title: 'Edited Result' }, inputs: { filename_prefix: 'edited' } },
-      },
-      workflow: {
-        id: 'comfy_ui_workflow',
-        nodes: [{ id: 42, type: 'SaveImage', pos: [100, 120] }],
-        links: [],
-      },
-    })
+    const graphToPrompt = vi
+      .fn()
+      .mockResolvedValueOnce({
+        output: {
+          '1': { class_type: 'LoadImage', inputs: { image: 'source.png' } },
+        },
+        workflow: {
+          id: 'comfy_ui_workflow',
+          nodes: [{ id: 42, type: 'SaveImage', pos: [100, 120] }],
+          links: [],
+        },
+      })
+      .mockResolvedValueOnce({
+        output: {
+          '42': { class_type: 'SaveImage', _meta: { title: 'Edited Result' }, inputs: { filename_prefix: 'edited' } },
+        },
+        workflow: {
+          id: 'stale_ui_workflow',
+          nodes: [],
+          links: [],
+        },
+      })
     Object.defineProperty(frame, 'contentWindow', {
       configurable: true,
       value: {
@@ -673,6 +685,7 @@ describe('LeftPanel', () => {
       nodes: [{ id: 42, type: 'SaveImage', pos: [100, 120] }],
       links: [],
     })
+    expect(graphToPrompt).toHaveBeenCalledTimes(2)
     expect(projectStore.getState().project.functions.fn_render.workflow.editor).toMatchObject({
       kind: 'comfyui_embedded',
       endpointId: 'endpoint_local',

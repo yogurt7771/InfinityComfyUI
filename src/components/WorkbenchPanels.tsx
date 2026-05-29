@@ -49,6 +49,8 @@ import type {
 } from '../domain/types'
 import { comfyProxyUrl } from '../domain/comfyProxy'
 import {
+  exportApiWorkflowFromComfyEditor,
+  exportUiWorkflowFromComfyEditor,
   loadApiWorkflowIntoComfyEditor,
   openApiWorkflowJsonFileInComfyEditor,
   openWorkflowJsonFileInComfyEditor,
@@ -1001,26 +1003,27 @@ type EmbeddedComfySave = {
   editor: ComfyWorkflowEditorMetadata
 }
 
+type ComfyFrameGraph = {
+  getNodeById?: (id: unknown) => unknown
+  _nodes?: unknown[]
+  _nodes_by_id?: Record<string, unknown>
+  change?: () => void
+  serialize?: () => unknown
+}
+
 type ComfyFrameWindow = Window & {
   app?: {
-    graphToPrompt?: () => Promise<{ output?: unknown; workflow?: unknown }> | { output?: unknown; workflow?: unknown }
+    graphToPrompt?: (graph?: ComfyFrameGraph) => Promise<{ output?: unknown; workflow?: unknown }> | { output?: unknown; workflow?: unknown }
     handleFile?: (file: File, openSource?: unknown, options?: unknown) => Promise<unknown> | unknown
     loadGraphData?: (workflow: ComfyUiWorkflow) => Promise<unknown> | unknown
     loadApiJson?: (workflow: ComfyWorkflow) => Promise<unknown> | unknown
-    graph?: {
-      getNodeById?: (id: unknown) => unknown
-      _nodes?: unknown[]
-      _nodes_by_id?: Record<string, unknown>
-      change?: () => void
-      serialize?: () => unknown
-    }
+    rootGraph?: ComfyFrameGraph
+    rootGraphInternal?: ComfyFrameGraph
+    graph?: ComfyFrameGraph
   }
 }
 
 const enabledComfyEndpoint = (endpoints: ComfyEndpointConfig[]) => endpoints.find((endpoint) => endpoint.enabled) ?? endpoints[0]
-
-const plainObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value)
 
 const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
 
@@ -1083,12 +1086,11 @@ function ComfyWorkflowEditorDialog({
     setSaving(true)
     try {
       const app = await waitForComfyFrameApp(frameRef.current)
-      const exported = await app.graphToPrompt?.()
-      if (!plainObject(exported?.output)) throw new Error('ComfyUI did not return an API workflow')
-      const serialized = plainObject(exported.workflow) ? exported.workflow : app.graph?.serialize?.()
+      const uiJson = await exportUiWorkflowFromComfyEditor(app)
+      const rawJson = await exportApiWorkflowFromComfyEditor(app)
       onSave({
-        rawJson: exported.output as ComfyWorkflow,
-        uiJson: plainObject(serialized) ? (serialized as ComfyUiWorkflow) : undefined,
+        rawJson,
+        uiJson,
         editor: {
           kind: 'comfyui_embedded',
           endpointId: endpoint.id,
