@@ -37,6 +37,53 @@ describe('ComfyUI editor bridge', () => {
     expect(app.graphToPrompt).toHaveBeenCalledTimes(1)
   })
 
+  it('exports API workflow by capturing the prompt sent during ComfyUI queuePrompt', async () => {
+    const capturedOutput = { '2': { class_type: 'KSampler', inputs: { model: ['1', 0], seed: 123 } } }
+    const captureWindow = {
+      Request,
+      Response,
+      fetch: vi.fn().mockRejectedValue(new Error('real prompt submission should be blocked')),
+    }
+    const originalFetch = captureWindow.fetch
+    const app = {
+      queuePrompt: vi.fn(async () => {
+        const response = await captureWindow.fetch('/prompt', {
+          method: 'POST',
+          body: JSON.stringify({
+            prompt: capturedOutput,
+            workflow: { nodes: [] },
+            client_id: 'client_test',
+          }),
+        })
+        await response.json()
+      }),
+      graphToPrompt: vi.fn().mockResolvedValue({
+        workflow: { nodes: [] },
+        output: { '2': { class_type: 'KSampler', inputs: {} } },
+      }),
+    }
+
+    await expect(exportApiWorkflowFromComfyEditor(app, captureWindow)).resolves.toEqual(capturedOutput)
+    expect(app.queuePrompt).toHaveBeenCalledTimes(1)
+    expect(app.graphToPrompt).not.toHaveBeenCalled()
+    expect(captureWindow.fetch).toBe(originalFetch)
+  })
+
+  it('falls back to Export API output when runtime prompt capture fails', async () => {
+    const output = { '3': { class_type: 'SaveImage', inputs: { filename_prefix: 'fallback' } } }
+    const app = {
+      queuePrompt: vi.fn().mockRejectedValue(new Error('queue capture unavailable')),
+      graphToPrompt: vi.fn().mockResolvedValue({
+        workflow: { nodes: [] },
+        output,
+      }),
+    }
+
+    await expect(exportApiWorkflowFromComfyEditor(app, { Request, Response, fetch: vi.fn() })).resolves.toEqual(output)
+    expect(app.queuePrompt).toHaveBeenCalledTimes(1)
+    expect(app.graphToPrompt).toHaveBeenCalledTimes(1)
+  })
+
   it('loads editable workflows through ComfyUI file open handling', async () => {
     const handleFile = vi.fn().mockResolvedValue(undefined)
     const uiWorkflow = {

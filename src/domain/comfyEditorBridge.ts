@@ -12,11 +12,18 @@ export type ComfyEditorAppLike = {
   rootGraph?: ComfyEditorGraph
   rootGraphInternal?: ComfyEditorGraph
   graphToPrompt?: (graph?: ComfyEditorGraph) => Promise<{ output?: unknown; workflow?: unknown }> | { output?: unknown; workflow?: unknown }
+  queuePrompt?: (...args: unknown[]) => Promise<unknown> | unknown
   handleFile?: (file: File, openSource?: unknown, options?: unknown) => Promise<unknown> | unknown
   loadApiJson?: (workflow: ComfyWorkflow) => Promise<unknown> | unknown
   canvas?: {
     draw?: (forceCanvas?: boolean, forceBgCanvas?: boolean) => void
   }
+}
+
+export type ComfyPromptCaptureWindow = {
+  fetch: typeof fetch
+  Request?: typeof Request
+  Response: typeof Response
 }
 
 const plainObject = (value: unknown): value is Record<string, unknown> =>
@@ -36,7 +43,87 @@ export async function exportUiWorkflowFromComfyEditor(app: GraphToPromptApp) {
   return exported.workflow as ComfyUiWorkflow
 }
 
-export async function exportApiWorkflowFromComfyEditor(app: GraphToPromptApp) {
+type QueuePromptCaptureApp = GraphToPromptApp & Pick<ComfyEditorAppLike, 'queuePrompt'>
+
+const fetchInputUrl = (input: Parameters<typeof fetch>[0]) => {
+  if (typeof input === 'string') return input
+  if (input instanceof URL) return input.toString()
+  if (typeof input === 'object' && input !== null && 'url' in input && typeof input.url === 'string') return input.url
+  return String(input)
+}
+
+const isPromptRequest = (input: Parameters<typeof fetch>[0]) => {
+  const rawUrl = fetchInputUrl(input)
+  try {
+    const parsed = new URL(rawUrl, 'http://infinity.local')
+    return parsed.pathname === '/prompt' || parsed.pathname.endsWith('/prompt')
+  } catch {
+    return rawUrl === '/prompt' || rawUrl.endsWith('/prompt')
+  }
+}
+
+async function requestBodyText(input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) {
+  const body = init?.body
+  if (typeof body === 'string') return body
+  if (body instanceof URLSearchParams) return body.toString()
+  if (body instanceof Blob) return body.text()
+  if (body instanceof ArrayBuffer) return new TextDecoder().decode(body)
+  if (ArrayBuffer.isView(body)) return new TextDecoder().decode(body)
+
+  if (typeof input === 'object' && input !== null && 'clone' in input) {
+    const clone = input.clone
+    if (typeof clone === 'function') return clone.call(input).text()
+  }
+  return undefined
+}
+
+function workflowFromPromptBody(bodyText?: string) {
+  if (!bodyText) return undefined
+  const parsed = JSON.parse(bodyText) as unknown
+  if (!plainObject(parsed)) return undefined
+  return plainObject(parsed.prompt) ? (parsed.prompt as ComfyWorkflow) : undefined
+}
+
+async function captureApiWorkflowFromQueuePrompt(app: QueuePromptCaptureApp, captureWindow: ComfyPromptCaptureWindow) {
+  if (!app.queuePrompt) throw new Error('ComfyUI queuePrompt is not available')
+
+  let captured: ComfyWorkflow | undefined
+  let queueError: unknown
+  const originalFetch = captureWindow.fetch
+
+  captureWindow.fetch = (async (input, init) => {
+    if (isPromptRequest(input)) {
+      captured = workflowFromPromptBody(await requestBodyText(input, init))
+      return new captureWindow.Response(
+        JSON.stringify({ prompt_id: 'infinity-comfyui-capture', number: 0, node_errors: {} }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    }
+    return originalFetch.call(captureWindow, input, init)
+  }) as typeof fetch
+
+  try {
+    await app.queuePrompt()
+  } catch (err) {
+    queueError = err
+  } finally {
+    captureWindow.fetch = originalFetch
+  }
+
+  if (captured) return captured
+  if (queueError instanceof Error) throw queueError
+  throw new Error('ComfyUI queuePrompt did not submit an API prompt')
+}
+
+export async function exportApiWorkflowFromComfyEditor(app: QueuePromptCaptureApp, captureWindow?: ComfyPromptCaptureWindow) {
+  if (captureWindow && app.queuePrompt) {
+    try {
+      return await captureApiWorkflowFromQueuePrompt(app, captureWindow)
+    } catch {
+      // Fall back to ComfyUI Export (API) for servers or extensions that cannot be captured at runtime.
+    }
+  }
+
   const exported = await graphToPromptExport(app)
   if (!plainObject(exported.output)) throw new Error('ComfyUI Export API did not return an API workflow')
   return exported.output as ComfyWorkflow

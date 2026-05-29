@@ -633,7 +633,7 @@ describe('LeftPanel', () => {
     }
     const graphToPrompt = vi
       .fn()
-      .mockResolvedValueOnce({
+      .mockResolvedValue({
         output: {
           '1': { class_type: 'LoadImage', inputs: { image: 'source.png' } },
         },
@@ -643,27 +643,40 @@ describe('LeftPanel', () => {
           links: [],
         },
       })
-      .mockResolvedValueOnce({
-        output: {
-          '42': { class_type: 'SaveImage', _meta: { title: 'Edited Result' }, inputs: { filename_prefix: 'edited' } },
-        },
-        workflow: {
-          id: 'stale_ui_workflow',
-          nodes: [],
-          links: [],
-        },
+    const frameWindow = {
+      Request,
+      Response,
+      fetch: vi.fn().mockRejectedValue(new Error('real prompt submission should be blocked')),
+      app: {} as unknown,
+    }
+    const queuePrompt = vi.fn(async () => {
+      const response = await frameWindow.fetch('/prompt', {
+        method: 'POST',
+        body: JSON.stringify({
+          prompt: {
+            '42': {
+              class_type: 'SaveImage',
+              _meta: { title: 'Edited Result' },
+              inputs: { filename_prefix: 'edited', images: ['6', 0] },
+            },
+          },
+          workflow: { nodes: [] },
+          client_id: 'client_test',
+        }),
       })
+      await response.json()
+    })
+    frameWindow.app = {
+      handleFile,
+      graphToPrompt,
+      queuePrompt,
+      loadGraphData,
+      loadApiJson,
+      graph: { ...graph, serialize: vi.fn() },
+    }
     Object.defineProperty(frame, 'contentWindow', {
       configurable: true,
-      value: {
-        app: {
-          handleFile,
-          graphToPrompt,
-          loadGraphData,
-          loadApiJson,
-          graph: { ...graph, serialize: vi.fn() },
-        },
-      },
+      value: frameWindow,
     })
 
     fireEvent.load(frame)
@@ -677,7 +690,11 @@ describe('LeftPanel', () => {
 
     await waitFor(() =>
       expect(projectStore.getState().project.functions.fn_render.workflow.rawJson).toEqual({
-        '42': { class_type: 'SaveImage', _meta: { title: 'Edited Result' }, inputs: { filename_prefix: 'edited' } },
+        '42': {
+          class_type: 'SaveImage',
+          _meta: { title: 'Edited Result' },
+          inputs: { filename_prefix: 'edited', images: ['6', 0] },
+        },
       }),
     )
     expect(projectStore.getState().project.functions.fn_render.workflow.uiJson).toEqual({
@@ -685,7 +702,8 @@ describe('LeftPanel', () => {
       nodes: [{ id: 42, type: 'SaveImage', pos: [100, 120] }],
       links: [],
     })
-    expect(graphToPrompt).toHaveBeenCalledTimes(2)
+    expect(graphToPrompt).toHaveBeenCalledTimes(1)
+    expect(queuePrompt).toHaveBeenCalledTimes(1)
     expect(projectStore.getState().project.functions.fn_render.workflow.editor).toMatchObject({
       kind: 'comfyui_embedded',
       endpointId: 'endpoint_local',

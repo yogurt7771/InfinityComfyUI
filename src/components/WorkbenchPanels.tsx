@@ -1012,8 +1012,12 @@ type ComfyFrameGraph = {
 }
 
 type ComfyFrameWindow = Window & {
+  fetch: typeof fetch
+  Request?: typeof Request
+  Response: typeof Response
   app?: {
     graphToPrompt?: (graph?: ComfyFrameGraph) => Promise<{ output?: unknown; workflow?: unknown }> | { output?: unknown; workflow?: unknown }
+    queuePrompt?: (...args: unknown[]) => Promise<unknown> | unknown
     handleFile?: (file: File, openSource?: unknown, options?: unknown) => Promise<unknown> | unknown
     loadGraphData?: (workflow: ComfyUiWorkflow) => Promise<unknown> | unknown
     loadApiJson?: (workflow: ComfyWorkflow) => Promise<unknown> | unknown
@@ -1086,8 +1090,9 @@ function ComfyWorkflowEditorDialog({
     setSaving(true)
     try {
       const app = await waitForComfyFrameApp(frameRef.current)
+      const frameWindow = frameRef.current.contentWindow as ComfyFrameWindow | null
       const uiJson = await exportUiWorkflowFromComfyEditor(app)
-      const rawJson = await exportApiWorkflowFromComfyEditor(app)
+      const rawJson = await exportApiWorkflowFromComfyEditor(app, frameWindow ?? undefined)
       onSave({
         rawJson,
         uiJson,
