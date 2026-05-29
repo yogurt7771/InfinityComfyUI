@@ -94,6 +94,7 @@ type AddFunctionNodeOptions = {
   autoBindRequiredInputs?: boolean
 }
 type NodeSelectionMode = 'replace' | 'add' | 'remove' | 'toggle'
+type FunctionEditScope = 'node' | 'all'
 
 type RuntimeComfyClient = ComfyPromptClient & {
   testConnection?: () => Promise<unknown>
@@ -264,6 +265,7 @@ export type ProjectStoreState = {
   addOpenAILlmFunction: (name: string, config?: Partial<OpenAILlmConfig>) => string
   addGeminiLlmFunction: (name: string, config?: Partial<GeminiLlmConfig>) => string
   updateFunction: (functionId: string, patch: Partial<Omit<GenerationFunction, 'id' | 'createdAt'>>) => void
+  ensureEditableFunctionForNode: (nodeId: string, scope: FunctionEditScope) => string | undefined
   deleteFunction: (functionId: string) => void
   addFunctionNode: (functionId: string) => void
   addFunctionNodeAtPosition: (
@@ -4541,6 +4543,70 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           },
         }
       })
+    },
+
+    ensureEditableFunctionForNode: (nodeId, scope) => {
+      const now = runtime.now()
+      let editableFunctionId: string | undefined
+
+      set((state) => {
+        const targetNode = state.project.canvas.nodes.find((node) => node.id === nodeId && node.type === 'function')
+        const sourceFunctionId = typeof targetNode?.data.functionId === 'string' ? targetNode.data.functionId : undefined
+        const sourceFunction = sourceFunctionId ? state.project.functions[sourceFunctionId] : undefined
+        if (!targetNode || !sourceFunction) return state
+
+        if (scope === 'node' && targetNode.data.functionScope === 'node' && !isBuiltInFunction(sourceFunction)) {
+          editableFunctionId = sourceFunction.id
+          return state
+        }
+
+        if (scope === 'all' && !isBuiltInFunction(sourceFunction)) {
+          editableFunctionId = sourceFunction.id
+          return state
+        }
+
+        const clonedFunctionId = runtime.idFactory()
+        const clonedFunctionName = scope === 'node' ? `${sourceFunction.name} (this node)` : sourceFunction.name
+        const clonedFunction: GenerationFunction = {
+          ...structuredClone(sourceFunction),
+          id: clonedFunctionId,
+          name: clonedFunctionName,
+          createdAt: now,
+          updatedAt: now,
+        }
+        const shouldRetargetNode = (node: CanvasNode) =>
+          node.type === 'function' &&
+          (scope === 'node' ? node.id === nodeId : node.data.functionId === sourceFunction.id)
+
+        editableFunctionId = clonedFunctionId
+
+        return {
+          project: {
+            ...state.project,
+            project: { ...state.project.project, updatedAt: now },
+            functions: { ...state.project.functions, [clonedFunctionId]: clonedFunction },
+            canvas: {
+              ...state.project.canvas,
+              nodes: state.project.canvas.nodes.map((node) => {
+                if (!shouldRetargetNode(node)) return node
+                const shouldUpdateTitle = node.data.title === sourceFunction.name
+                return {
+                  ...node,
+                  data: {
+                    ...node.data,
+                    functionId: clonedFunctionId,
+                    title: shouldUpdateTitle ? clonedFunctionName : node.data.title,
+                    functionScope: scope,
+                    baseFunctionId: sourceFunction.id,
+                  },
+                }
+              }),
+            },
+          },
+        }
+      })
+
+      return editableFunctionId
     },
 
     deleteFunction: (functionId) => {

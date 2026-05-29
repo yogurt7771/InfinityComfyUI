@@ -26,8 +26,9 @@ import {
   useReactFlow,
   useViewport,
 } from '@xyflow/react'
-import { CaseSensitive, GitCompareArrows, Grid2X2, Image, Info, Scissors, Shrink, Video, Volume2, X } from 'lucide-react'
+import { CaseSensitive, GitCompareArrows, Grid2X2, Image, Info, Layers, Pencil, Scissors, Shrink, Video, Volume2, X } from 'lucide-react'
 import { EmptyNodeView, FunctionNodeView, GroupNodeView, ResourceNodeView, ResultGroupNodeView } from './NodeViews'
+import { FunctionManager } from './WorkbenchPanels'
 import { buildCanvasFlowEdges } from '../domain/canvasEdges'
 import { targetInputInitialResourceValue } from '../domain/inputInitialValue'
 import { buildNodeReferenceMap } from '../domain/nodeReferences'
@@ -83,6 +84,17 @@ type QuickToolbarState = {
   sourceNodeId: string
   left: number
   top: number
+}
+
+type FunctionNodeMenuState = {
+  nodeId: string
+  left: number
+  top: number
+}
+
+type FunctionEditorState = {
+  nodeId: string
+  functionId: string
 }
 
 const nodeTypes: NodeTypes = {
@@ -767,6 +779,12 @@ function CanvasSurface() {
   const updateFunctionNodeGeminiImageConfig = useProjectStore((state) => state.updateFunctionNodeGeminiImageConfig)
   const updateFunctionNodeRequestConfig = useProjectStore((state) => state.updateFunctionNodeRequestConfig)
   const updateFunctionNodeRequestOutputs = useProjectStore((state) => state.updateFunctionNodeRequestOutputs)
+  const ensureEditableFunctionForNode = useProjectStore((state) => state.ensureEditableFunctionForNode)
+  const addFunctionFromWorkflow = useProjectStore((state) => state.addFunctionFromWorkflow)
+  const addRequestFunction = useProjectStore((state) => state.addRequestFunction)
+  const addOpenAILlmFunction = useProjectStore((state) => state.addOpenAILlmFunction)
+  const addGeminiLlmFunction = useProjectStore((state) => state.addGeminiLlmFunction)
+  const updateFunction = useProjectStore((state) => state.updateFunction)
   const connectNodes = useProjectStore((state) => state.connectNodes)
   const deleteEdges = useProjectStore((state) => state.deleteEdges)
   const updateNodePosition = useProjectStore((state) => state.updateNodePosition)
@@ -782,11 +800,14 @@ function CanvasSurface() {
   const [addMenu, setAddMenu] = useState<AddNodeMenuState | null>(null)
   const [localActionDialog, setLocalActionDialog] = useState<LocalActionDialogState | null>(null)
   const [quickToolbar, setQuickToolbar] = useState<QuickToolbarState>()
+  const [functionNodeMenu, setFunctionNodeMenu] = useState<FunctionNodeMenuState>()
+  const [functionEditor, setFunctionEditor] = useState<FunctionEditorState>()
   const [comparePair, setComparePair] = useState<CompareImagePair | null>(null)
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([])
   const [addMenuQuery, setAddMenuQuery] = useState('')
   const addMenuRef = useRef<HTMLDivElement | null>(null)
   const quickToolbarRef = useRef<HTMLDivElement | null>(null)
+  const functionNodeMenuRef = useRef<HTMLDivElement | null>(null)
   const addMenuSearchRef = useRef<HTMLInputElement | null>(null)
   const canvasRef = useRef<HTMLElement | null>(null)
   const connectionStart = useRef<ConnectionStartState | null>(null)
@@ -997,6 +1018,7 @@ function CanvasSurface() {
       if (event.key === 'Escape') {
         setAddMenu(null)
         setQuickToolbar(undefined)
+        setFunctionNodeMenu(undefined)
         selectNode(undefined)
         setSelectedEdgeIds([])
       }
@@ -1130,6 +1152,13 @@ function CanvasSurface() {
   }, [activeSelectedNodeIds])
 
   useEffect(() => {
+    setFunctionNodeMenu((current) => {
+      if (!current) return current
+      return activeSelectedNodeIds.length === 1 && activeSelectedNodeIds[0] === current.nodeId ? current : undefined
+    })
+  }, [activeSelectedNodeIds])
+
+  useEffect(() => {
     if (quickToolbar && localQuickActions.length === 0) setQuickToolbar(undefined)
   }, [localQuickActions.length, quickToolbar])
 
@@ -1147,6 +1176,21 @@ function CanvasSurface() {
     toolbar.style.left = `${left}px`
     toolbar.style.top = `${top}px`
   }, [localQuickActions.length, quickToolbar])
+
+  useLayoutEffect(() => {
+    if (!functionNodeMenu) return
+
+    const menu = functionNodeMenuRef.current
+    if (!menu) return
+
+    const margin = 8
+    const rect = menu.getBoundingClientRect()
+    const left = Math.min(Math.max(functionNodeMenu.left, margin), Math.max(margin, window.innerWidth - rect.width - margin))
+    const top = Math.min(Math.max(functionNodeMenu.top, margin), Math.max(margin, window.innerHeight - rect.height - margin))
+
+    menu.style.left = `${left}px`
+    menu.style.top = `${top}px`
+  }, [functionNodeMenu])
 
   const activeLocalActionFunction = localActionDialog ? project.functions[localActionDialog.functionId] : undefined
 
@@ -1219,6 +1263,7 @@ function CanvasSurface() {
     placement?: AddNodeMenuState['placement'],
   ) => {
     setQuickToolbar(undefined)
+    setFunctionNodeMenu(undefined)
     setAddMenuQuery('')
     setAddMenu({
       screen: { x: clientX, y: clientY },
@@ -1232,6 +1277,22 @@ function CanvasSurface() {
     event.preventDefault()
     event.stopPropagation()
     setAddMenu(null)
+    setFunctionNodeMenu(undefined)
+
+    const canvasNode = project.canvas.nodes.find((item) => item.id === node.id)
+    if (canvasNode?.type === 'function') {
+      selectNode(node.id)
+      setSelectedEdgeIds([])
+      setQuickToolbar(undefined)
+      const functionId = typeof canvasNode.data.functionId === 'string' ? canvasNode.data.functionId : undefined
+      if (!functionId || !project.functions[functionId]) return
+      setFunctionNodeMenu({
+        nodeId: node.id,
+        left: event.clientX,
+        top: event.clientY,
+      })
+      return
+    }
 
     if (selectedQuickSourceNodeId !== node.id) {
       selectNode(node.id)
@@ -1250,6 +1311,17 @@ function CanvasSurface() {
       top: event.clientY,
     })
   }
+
+  const openFunctionEditorForNode = (nodeId: string, scope: 'node' | 'all') => {
+    const functionId = ensureEditableFunctionForNode(nodeId, scope)
+    if (!functionId) return
+    setFunctionNodeMenu(undefined)
+    setQuickToolbar(undefined)
+    setFunctionEditor({ nodeId, functionId })
+  }
+
+  const activeFunctionEditorFunction = functionEditor ? project.functions[functionEditor.functionId] : undefined
+  const activeFunctionEditorFunctions = activeFunctionEditorFunction ? [activeFunctionEditorFunction] : []
 
   const placedNodePosition = (newNodeWidth: number) => {
     if (!addMenu?.placement) return addMenu?.flow
@@ -1469,7 +1541,7 @@ function CanvasSurface() {
         const target = event.target as HTMLElement
         if (
           target.closest(
-            '.react-flow__node, button, input, textarea, .react-flow__controls, .comfy-minimap, .add-node-menu, .resource-quick-actions',
+            '.react-flow__node, button, input, textarea, .react-flow__controls, .comfy-minimap, .add-node-menu, .resource-quick-actions, .function-node-actions',
           )
         ) {
           return
@@ -1491,6 +1563,7 @@ function CanvasSurface() {
           selectionBoxNodeIds.current = []
           setSelectedEdgeIds([])
           setQuickToolbar(undefined)
+          setFunctionNodeMenu(undefined)
         }}
         onSelectionEnd={() => {
           selectionBoxActive.current = false
@@ -1511,6 +1584,7 @@ function CanvasSurface() {
           event.stopPropagation()
           setSelectedEdgeIds([edge.id])
           setQuickToolbar(undefined)
+          setFunctionNodeMenu(undefined)
           selectNode(undefined)
         }}
         onConnectStart={(_, params) => {
@@ -1566,6 +1640,7 @@ function CanvasSurface() {
         onNodeClick={(event, node) => {
           setSelectedEdgeIds([])
           setQuickToolbar(undefined)
+          setFunctionNodeMenu(undefined)
           if (suppressNextNodeClick.current) {
             suppressNextNodeClick.current = false
             return
@@ -1592,6 +1667,7 @@ function CanvasSurface() {
           setSelectedEdgeIds([])
           setAddMenu(null)
           setQuickToolbar(undefined)
+          setFunctionNodeMenu(undefined)
         }}
         zoomOnDoubleClick={false}
         deleteKeyCode={null}
@@ -1671,6 +1747,37 @@ function CanvasSurface() {
           ))}
         </div>
       ) : null}
+      {functionNodeMenu ? (
+        <div
+          ref={functionNodeMenuRef}
+          aria-label="Function node actions"
+          className="resource-quick-actions function-node-actions nodrag nopan"
+          style={{
+            left: functionNodeMenu.left,
+            top: functionNodeMenu.top,
+          }}
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            aria-label="Edit This Node"
+            title="Edit this node"
+            onClick={() => openFunctionEditorForNode(functionNodeMenu.nodeId, 'node')}
+          >
+            <Pencil size={16} />
+            <span>Edit This Node</span>
+          </button>
+          <button
+            type="button"
+            aria-label="Edit All Nodes"
+            title="Edit all nodes of this type"
+            onClick={() => openFunctionEditorForNode(functionNodeMenu.nodeId, 'all')}
+          >
+            <Layers size={16} />
+            <span>Edit All Nodes</span>
+          </button>
+        </div>
+      ) : null}
       {localActionDialog && activeLocalActionFunction ? (
         <LocalActionDialog
           key={activeLocalActionFunction.id}
@@ -1679,6 +1786,26 @@ function CanvasSurface() {
           onRun={(values) => {
             void runLocalFunctionForResourceNode(localActionDialog.sourceNodeId, localActionDialog.functionId, values)
           }}
+        />
+      ) : null}
+      {functionEditor && activeFunctionEditorFunction ? (
+        <FunctionManager
+          functions={activeFunctionEditorFunctions}
+          comfyEndpoints={project.comfy.endpoints}
+          selectedFunctionId={functionEditor.functionId}
+          allowCreate={false}
+          allowDelete={false}
+          onSelectFunction={(functionId) => {
+            if (!functionId) return
+            setFunctionEditor((current) => (current ? { ...current, functionId } : current))
+          }}
+          onAddWorkflow={addFunctionFromWorkflow}
+          onAddRequestFunction={addRequestFunction}
+          onAddOpenAIFunction={addOpenAILlmFunction}
+          onAddGeminiFunction={addGeminiLlmFunction}
+          onUpdateFunction={updateFunction}
+          onDeleteFunction={() => undefined}
+          onClose={() => setFunctionEditor(undefined)}
         />
       ) : null}
       {selectedComparePair ? (

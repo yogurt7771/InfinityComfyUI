@@ -483,6 +483,28 @@ test('runs local image tools from the selected resource context menu', async ({ 
   await expect(page.locator('.react-flow__edge.result-edge')).toHaveCount(1)
 })
 
+test('opens function editing actions from a function node context menu', async ({ page }) => {
+  await page.goto('/')
+
+  await addTestWorkflow(page)
+  await addFunctionNodeFromCanvasMenu(page, testWorkflowName)
+
+  const canvas = page.locator('.workspace-canvas')
+  const functionNode = canvas.locator('.react-flow__node-function').filter({ hasText: testWorkflowName })
+  await functionNode.click({ button: 'right' })
+
+  const functionActions = page.getByLabel('Function node actions')
+  await expect(functionActions.getByRole('button', { name: 'Edit This Node' })).toBeVisible()
+  await expect(functionActions.getByRole('button', { name: 'Edit All Nodes' })).toBeVisible()
+
+  await functionActions.getByRole('button', { name: 'Edit This Node' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Function Management' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByLabel('Managed function list').getByRole('button')).toHaveCount(1)
+  await expect(dialog.getByLabel('Function name')).toHaveValue(`${testWorkflowName} (this node)`)
+  await dialog.getByRole('button', { name: 'Close Function Management' }).click()
+})
+
 test('creates a custom OpenAI provider function from settings and adds it to the canvas', async ({ page }) => {
   await page.goto('/')
 

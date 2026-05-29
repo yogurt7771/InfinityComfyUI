@@ -576,6 +576,8 @@ type FunctionManagerProps = {
   functions: GenerationFunction[]
   comfyEndpoints: ComfyEndpointConfig[]
   selectedFunctionId?: string
+  allowCreate?: boolean
+  allowDelete?: boolean
   onSelectFunction: (functionId: string | undefined) => void
   onAddWorkflow: (
     name: string,
@@ -1532,10 +1534,12 @@ function NewFunctionDialog({
   )
 }
 
-function FunctionManager({
+export function FunctionManager({
   functions,
   comfyEndpoints,
   selectedFunctionId,
+  allowCreate = true,
+  allowDelete = true,
   onSelectFunction,
   onAddWorkflow,
   onAddRequestFunction,
@@ -1723,12 +1727,14 @@ function FunctionManager({
     <ModalShell label="Function Management" onClose={onClose}>
       <div className="manager-layout">
         <div className="manager-sidebar" aria-label="Managed function list">
-          <div className="manager-create-actions">
-            <button type="button" onClick={() => setCreateFunctionOpen(true)}>
-              <Plus size={14} />
-              Function
-            </button>
-          </div>
+          {allowCreate ? (
+            <div className="manager-create-actions">
+              <button type="button" onClick={() => setCreateFunctionOpen(true)}>
+                <Plus size={14} />
+                Function
+              </button>
+            </div>
+          ) : null}
           <div className="manager-list">
             {functions.length > 0 ? (
               functions.map((fn) => (
@@ -1758,15 +1764,17 @@ function FunctionManager({
                   <strong>{selectedFunction.name}</strong>
                   <span>{selectedFunction.id}</span>
                 </div>
-                <button
-                  type="button"
-                  className="danger-button"
-                  aria-label={`Delete function ${selectedFunction.name}`}
-                  onClick={deleteSelectedFunction}
-                >
-                  <Trash2 size={14} />
-                  Delete
-                </button>
+                {allowDelete ? (
+                  <button
+                    type="button"
+                    className="danger-button"
+                    aria-label={`Delete function ${selectedFunction.name}`}
+                    onClick={deleteSelectedFunction}
+                  >
+                    <Trash2 size={14} />
+                    Delete
+                  </button>
+                ) : null}
               </div>
 
               <div className="manager-grid">

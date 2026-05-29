@@ -1951,6 +1951,73 @@ describe('project store actions', () => {
     expect(slice.getState().project.canvas.edges).toEqual([])
   })
 
+  it('forks a function only for the selected node before node-scoped edits', () => {
+    const ids = ['fn_1', 'node_fn_1', 'node_fn_2', 'fn_node_scoped']
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now: () => '2026-05-08T09:00:00.000Z',
+      randomInt: () => 1,
+    })
+
+    addTestWorkflowFunction(slice)
+    slice.getState().addFunctionNode('fn_1')
+    slice.getState().addFunctionNode('fn_1')
+
+    const scopedFunctionId = slice.getState().ensureEditableFunctionForNode('node_fn_1', 'node')
+
+    expect(scopedFunctionId).toBe('fn_node_scoped')
+    expect(slice.getState().project.canvas.nodes.find((node) => node.id === 'node_fn_1')?.data).toMatchObject({
+      functionId: 'fn_node_scoped',
+      functionScope: 'node',
+      baseFunctionId: 'fn_1',
+    })
+    expect(slice.getState().project.canvas.nodes.find((node) => node.id === 'node_fn_2')?.data.functionId).toBe('fn_1')
+
+    slice.getState().updateFunction('fn_1', { name: 'Edited All Render' })
+    slice.getState().updateFunction('fn_node_scoped', { name: 'Edited This Node Render' })
+
+    expect(slice.getState().project.functions.fn_1.name).toBe('Edited All Render')
+    expect(slice.getState().project.functions.fn_node_scoped.name).toBe('Edited This Node Render')
+    expect(slice.getState().project.canvas.nodes.find((node) => node.id === 'node_fn_1')?.data.title).toBe(
+      'Edited This Node Render',
+    )
+    expect(slice.getState().project.canvas.nodes.find((node) => node.id === 'node_fn_2')?.data.title).toBe(
+      'Edited All Render',
+    )
+  })
+
+  it('turns all current built-in function nodes into an editable shared function when editing all nodes', () => {
+    const ids = ['node_openai_1', 'node_openai_2', 'fn_openai_editable']
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now: () => '2026-05-08T09:00:00.000Z',
+      randomInt: () => 1,
+    })
+
+    slice.getState().addFunctionNode(OPENAI_LLM_FUNCTION_ID)
+    slice.getState().addFunctionNode(OPENAI_LLM_FUNCTION_ID)
+
+    const editableFunctionId = slice.getState().ensureEditableFunctionForNode('node_openai_1', 'all')
+
+    expect(editableFunctionId).toBe('fn_openai_editable')
+    expect(slice.getState().project.functions[OPENAI_LLM_FUNCTION_ID]?.name).toBe('OpenAI LLM')
+    expect(slice.getState().project.canvas.nodes.find((node) => node.id === 'node_openai_1')?.data.functionId).toBe(
+      'fn_openai_editable',
+    )
+    expect(slice.getState().project.canvas.nodes.find((node) => node.id === 'node_openai_2')?.data.functionId).toBe(
+      'fn_openai_editable',
+    )
+
+    slice.getState().updateFunction('fn_openai_editable', { name: 'Editable OpenAI Group' })
+
+    expect(slice.getState().project.canvas.nodes.find((node) => node.id === 'node_openai_1')?.data.title).toBe(
+      'Editable OpenAI Group',
+    )
+    expect(slice.getState().project.canvas.nodes.find((node) => node.id === 'node_openai_2')?.data.title).toBe(
+      'Editable OpenAI Group',
+    )
+  })
+
   it('deletes managed ComfyUI endpoints', () => {
     const slice = createProjectSlice({
       idFactory: () => 'endpoint_2',
