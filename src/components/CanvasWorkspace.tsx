@@ -97,6 +97,9 @@ const resourceIdFromHandle = (handleId?: string | null) => {
   return undefined
 }
 
+const pendingOutputKeyFromHandle = (handleId?: string | null) =>
+  handleId?.startsWith('pending:') ? handleId.slice('pending:'.length) : undefined
+
 const functionAcceptsResourceType = (fn: GenerationFunction, resourceType?: ResourceType) =>
   !resourceType || fn.inputs.some((input) => input.type === resourceType)
 
@@ -1138,8 +1141,17 @@ function CanvasSurface() {
 
   const activeLocalActionFunction = localActionDialog ? project.functions[localActionDialog.functionId] : undefined
 
-  const connectionResourceType = (sourceNodeId: string | undefined, sourceHandleId?: string | null) =>
-    sourceResourceRefs(sourceNodeId, sourceHandleId)[0]?.type
+  const connectionResourceType = (sourceNodeId: string | undefined, sourceHandleId?: string | null) => {
+    const existingResourceType = sourceResourceRefs(sourceNodeId, sourceHandleId)[0]?.type
+    if (existingResourceType || !sourceNodeId) return existingResourceType
+
+    const pendingOutputKey = pendingOutputKeyFromHandle(sourceHandleId)
+    if (!pendingOutputKey) return undefined
+    const node = project.canvas.nodes.find((item) => item.id === sourceNodeId && item.type === 'result_group')
+    const functionId = typeof node?.data.functionId === 'string' ? node.data.functionId : undefined
+    const functionDef = functionId ? project.functions[functionId] : undefined
+    return functionDef?.outputs.find((output) => output.key === pendingOutputKey)?.type
+  }
 
   const inputTypeForFunctionInput = (nodeId: string | undefined, inputKey: string | undefined) => {
     if (!nodeId || !inputKey) return undefined

@@ -1851,7 +1851,8 @@ textarea[aria-invalid="true"] {
   border-top-color: var(--teal);
 }
 
-.result-node-queued {
+.result-node-queued,
+.result-node-pending {
   border-top-color: var(--amber);
 }
 
@@ -2125,7 +2126,8 @@ textarea[aria-invalid="true"] {
   background: #dff2f3;
 }
 
-.result-status-chip.queued {
+.result-status-chip.queued,
+.result-status-chip.pending {
   color: #7a5400;
   background: #fff4d6;
 }
@@ -2153,7 +2155,8 @@ textarea[aria-invalid="true"] {
   animation: result-status-pulse 1s ease-in-out infinite;
 }
 
-.result-status-chip.queued::before {
+.result-status-chip.queued::before,
+.result-status-chip.pending::before {
   content: "";
   width: 7px;
   height: 7px;
@@ -3789,9 +3792,11 @@ option {
 
 .job-status-running,
 .job-status-queued,
+.job-status-pending,
 .result-status-chip.running,
 .result-status-chip.fetching_outputs,
-.result-status-chip.queued {
+.result-status-chip.queued,
+.result-status-chip.pending {
   color: #99f6e4;
   background: rgba(20, 184, 166, 0.18);
 }
@@ -4697,9 +4702,11 @@ option {
 .app-shell[data-theme='light'] .required-slot .slot-requirement,
 .app-shell[data-theme='light'] .job-status-running,
 .app-shell[data-theme='light'] .job-status-queued,
+.app-shell[data-theme='light'] .job-status-pending,
 .app-shell[data-theme='light'] .result-status-chip.running,
 .app-shell[data-theme='light'] .result-status-chip.fetching_outputs,
-.app-shell[data-theme='light'] .result-status-chip.queued {
+.app-shell[data-theme='light'] .result-status-chip.queued,
+.app-shell[data-theme='light'] .result-status-chip.pending {
   color: #0f766e;
   background: rgba(204, 251, 241, 0.86);
 }

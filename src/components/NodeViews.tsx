@@ -122,7 +122,7 @@ const inputHandleId = (inputKey: string) => `input:${inputKey}`
 const outputHandleId = (outputKey: string) => `output:${outputKey}`
 const resourceHandleId = (resourceId: string) => `resource:${resourceId}`
 const resultHandleId = (resourceId: string) => `result:${resourceId}`
-const activeResultStatuses = new Set(['queued', 'running', 'fetching_outputs'])
+const activeResultStatuses = new Set(['pending', 'queued', 'running', 'fetching_outputs'])
 
 const commitActiveTextControl = () => {
   const activeElement = document.activeElement

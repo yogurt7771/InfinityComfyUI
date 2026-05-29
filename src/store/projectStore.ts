@@ -71,9 +71,11 @@ import type {
   GeminiImageConfig,
   GeminiLlmConfig,
   GenerationFunction,
+  InputResourceRef,
   MediaResourceValue,
   OpenAIImageConfig,
   OpenAILlmConfig,
+  PendingResourceRef,
   PrimitiveInputValue,
   ProjectState,
   RequestFunctionConfig,
@@ -82,7 +84,8 @@ import type {
   ResourceType,
 } from '../domain/types'
 
-type RuntimeInputValues = Record<string, PrimitiveInputValue | ResourceRef>
+type RuntimeInputValues = Record<string, PrimitiveInputValue | InputResourceRef>
+type ResolvedRuntimeInputValues = Record<string, PrimitiveInputValue | ResourceRef>
 type ConnectNodesOptions = {
   sourceHandleId?: string | null
   targetInputKey?: string | null
@@ -105,7 +108,7 @@ type QueuedComfyRun = {
   functionNodeId: string
   functionId: string
   functionDef: GenerationFunction
-  inputValues: RuntimeInputValues
+  inputValues: ResolvedRuntimeInputValues
   compiledWorkflowSnapshot?: ComfyWorkflow
   seedPatchLog?: ExecutionTask['seedPatchLog']
   runIndex: number
@@ -121,7 +124,7 @@ type QueuedOpenAiRun = {
   functionNodeId: string
   functionId: string
   functionDef: GenerationFunction
-  inputValues: RuntimeInputValues
+  inputValues: ResolvedRuntimeInputValues
   config: OpenAILlmConfig
   runIndex: number
   runTotal: number
@@ -133,7 +136,7 @@ type QueuedGeminiRun = {
   functionNodeId: string
   functionId: string
   functionDef: GenerationFunction
-  inputValues: RuntimeInputValues
+  inputValues: ResolvedRuntimeInputValues
   config: GeminiLlmConfig
   runIndex: number
   runTotal: number
@@ -145,7 +148,7 @@ type QueuedOpenAIImageRun = {
   functionNodeId: string
   functionId: string
   functionDef: GenerationFunction
-  inputValues: RuntimeInputValues
+  inputValues: ResolvedRuntimeInputValues
   config: OpenAIImageConfig
   runIndex: number
   runTotal: number
@@ -157,7 +160,7 @@ type QueuedGeminiImageRun = {
   functionNodeId: string
   functionId: string
   functionDef: GenerationFunction
-  inputValues: RuntimeInputValues
+  inputValues: ResolvedRuntimeInputValues
   config: GeminiImageConfig
   runIndex: number
   runTotal: number
@@ -169,7 +172,7 @@ type QueuedRequestRun = {
   functionNodeId: string
   functionId: string
   functionDef: GenerationFunction
-  inputValues: RuntimeInputValues
+  inputValues: ResolvedRuntimeInputValues
   runIndex: number
   runTotal: number
 }
@@ -180,7 +183,7 @@ type QueuedLocalRun = {
   sourceNodeId: string
   functionId: string
   functionDef: GenerationFunction
-  inputValues: RuntimeInputValues
+  inputValues: ResolvedRuntimeInputValues
   runIndex: number
   runTotal: number
 }
@@ -427,7 +430,7 @@ const activeJobs = (tasks: Record<string, ExecutionTask>) =>
     return counts
   }, {})
 
-const activeTaskStatuses = new Set<ExecutionTask['status']>(['queued', 'running', 'fetching_outputs'])
+const activeTaskStatuses = new Set<ExecutionTask['status']>(['pending', 'queued', 'running', 'fetching_outputs'])
 
 const endpointIsWorkerEligible = (endpoint: ComfyEndpointConfig) => {
   const status = endpoint.health?.status ?? 'unknown'
@@ -535,10 +538,11 @@ const defaultInputValues = (
 
 const inputValueSatisfiesDefinition = (
   input: FunctionInputDef,
-  value: PrimitiveInputValue | ResourceRef | undefined,
+  value: PrimitiveInputValue | InputResourceRef | undefined,
   resources: Record<string, Resource>,
 ) => {
   if (isResourceRef(value)) return resources[value.resourceId]?.type === input.type
+  if (isPendingResourceRef(value)) return value.type === input.type
   if (value === undefined || value === null) return false
   if (input.type === 'text') return String(value).trim().length > 0
   if (input.type === 'number') return Number.isFinite(Number(value))
@@ -591,6 +595,9 @@ const resourceIdFromHandle = (handleId?: string | null) => {
   return undefined
 }
 
+const pendingOutputKeyFromHandle = (handleId?: string | null) =>
+  handleId?.startsWith('pending:') ? handleId.slice('pending:'.length) : undefined
+
 const sourceHandleForResource = (node: CanvasNode, resourceId: string) =>
   node.type === 'result_group' ? `result:${resourceId}` : `resource:${resourceId}`
 
@@ -610,6 +617,21 @@ const nodeResourceRefs = (node: CanvasNode): ResourceRef[] => {
       return { resourceId, type: type as ResourceType }
     })
     .filter((resource): resource is ResourceRef => Boolean(resource))
+}
+
+const pendingOutputRefForNode = (
+  node: CanvasNode,
+  functions: Record<string, GenerationFunction>,
+  handleId?: string | null,
+): PendingResourceRef | undefined => {
+  if (node.type !== 'result_group') return undefined
+  const outputKey = pendingOutputKeyFromHandle(handleId)
+  const taskId = typeof node.data.taskId === 'string' ? node.data.taskId : undefined
+  const functionId = typeof node.data.functionId === 'string' ? node.data.functionId : undefined
+  const functionDef = functionId ? functions[functionId] : undefined
+  const output = outputKey ? functionDef?.outputs.find((item) => item.key === outputKey) : undefined
+  if (!taskId || !output) return undefined
+  return { pendingTaskId: taskId, outputKey: output.key, type: output.type }
 }
 
 const DEFAULT_RESOURCE_X = 80
@@ -722,13 +744,38 @@ const nodesWithRunTotal = (nodes: CanvasNode[], functionNodeId: string, runTotal
       : node,
   )
 
-const isResourceRef = (value: PrimitiveInputValue | ResourceRef | undefined): value is ResourceRef =>
+const isResourceRef = (value: PrimitiveInputValue | InputResourceRef | undefined): value is ResourceRef =>
   typeof value === 'object' && value !== null && 'resourceId' in value
+
+const isPendingResourceRef = (value: PrimitiveInputValue | InputResourceRef | undefined): value is PendingResourceRef =>
+  typeof value === 'object' &&
+  value !== null &&
+  'pendingTaskId' in value &&
+  typeof (value as { pendingTaskId?: unknown }).pendingTaskId === 'string' &&
+  'outputKey' in value &&
+  typeof (value as { outputKey?: unknown }).outputKey === 'string'
+
+const inputResourceRefs = (inputValues: RuntimeInputValues): Record<string, InputResourceRef> =>
+  Object.fromEntries(
+    Object.entries(inputValues).filter((entry): entry is [string, InputResourceRef] =>
+      isResourceRef(entry[1]) || isPendingResourceRef(entry[1]),
+    ),
+  )
 
 const resourceInputRefs = (inputValues: RuntimeInputValues): Record<string, ResourceRef> =>
   Object.fromEntries(
     Object.entries(inputValues).filter((entry): entry is [string, ResourceRef] => isResourceRef(entry[1])),
   )
+
+const pendingInputRefs = (inputValues: RuntimeInputValues): PendingResourceRef[] =>
+  Object.values(inputValues).filter((value): value is PendingResourceRef => isPendingResourceRef(value))
+
+const hasPendingInputRefs = (inputValues: RuntimeInputValues) => pendingInputRefs(inputValues).length > 0
+
+const pendingRefKey = (ref: PendingResourceRef) => `${ref.pendingTaskId}:${ref.outputKey}`
+
+const asResolvedInputValues = (inputValues: RuntimeInputValues): ResolvedRuntimeInputValues =>
+  inputValues as ResolvedRuntimeInputValues
 
 const resourceInputSnapshot = (
   inputValues: RuntimeInputValues,
@@ -766,6 +813,22 @@ const executionInputSnapshot = (
             value: valueForInputSnapshot(resource, null),
             resourceId: value.resourceId,
             resourceName: resource?.name,
+          },
+        ]
+      }
+
+      if (isPendingResourceRef(value)) {
+        return [
+          input.key,
+          {
+            key: input.key,
+            label: input.label,
+            type: input.type,
+            required: input.required,
+            source: 'pending',
+            value: null,
+            pendingTaskId: value.pendingTaskId,
+            outputKey: value.outputKey,
           },
         ]
       }
@@ -1245,6 +1308,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           },
         }
       })
+      void resolvePendingDependencyTasks()
     }
 
     const takeNextQueuedRun = (endpoint: ComfyEndpointConfig) => {
@@ -1313,7 +1377,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           const compiledWithInputs = injectWorkflowInputs(
             item.functionDef.workflow.rawJson,
             item.functionDef.inputs,
-            preparedInputValues,
+            asResolvedInputValues(preparedInputValues),
             get().project.resources,
           )
           const randomized = randomizeWorkflowSeeds(compiledWithInputs, {
@@ -1475,6 +1539,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
           },
         }))
+        void resolvePendingDependencyTasks()
       } catch (err) {
         if (taskWasCanceled(item.taskId)) return
         const failedAt = runtime.now()
@@ -1520,6 +1585,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
           },
         }))
+        void resolvePendingDependencyTasks()
       } finally {
         item.resolveCompletion()
       }
@@ -1659,6 +1725,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
           },
         }))
+        void resolvePendingDependencyTasks()
       } catch (err) {
         if (taskWasCanceled(item.taskId)) return
         const failedAt = runtime.now()
@@ -1704,6 +1771,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
           },
         }))
+        void resolvePendingDependencyTasks()
       }
     }
 
@@ -1841,6 +1909,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
           },
         }))
+        void resolvePendingDependencyTasks()
       } catch (err) {
         if (taskWasCanceled(item.taskId)) return
         const failedAt = runtime.now()
@@ -1886,6 +1955,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
           },
         }))
+        void resolvePendingDependencyTasks()
       }
     }
 
@@ -2058,6 +2128,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
           },
         }))
+        void resolvePendingDependencyTasks()
       } catch (err) {
         if (taskWasCanceled(item.taskId)) return
         const failedAt = runtime.now()
@@ -2103,6 +2174,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
           },
         }))
+        void resolvePendingDependencyTasks()
       }
     }
 
@@ -2266,6 +2338,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
           },
         }))
+        void resolvePendingDependencyTasks()
       } catch (err) {
         if (taskWasCanceled(item.taskId)) return
         const failedAt = runtime.now()
@@ -2311,6 +2384,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
           },
         }))
+        void resolvePendingDependencyTasks()
       }
     }
 
@@ -2581,6 +2655,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
           },
         }))
+        void resolvePendingDependencyTasks()
       } catch (err) {
         const failedAt = runtime.now()
         const errorMessage = err instanceof Error ? err.message : 'Local transform execution failed'
@@ -2617,6 +2692,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
           },
         }))
+        void resolvePendingDependencyTasks()
       }
     }
 
@@ -2735,6 +2811,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
           },
         }))
+        void resolvePendingDependencyTasks()
       } catch (err) {
         const failedAt = runtime.now()
         const errorMessage = err instanceof Error ? err.message : 'Request execution failed'
@@ -2771,6 +2848,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
           },
         }))
+        void resolvePendingDependencyTasks()
       }
     }
 
@@ -2779,11 +2857,408 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       for (const [key, snapshot] of Object.entries(task.inputValuesSnapshot ?? {})) {
         if (snapshot.source === 'resource' && snapshot.resourceId) {
           values[key] = { resourceId: snapshot.resourceId, type: snapshot.type }
+        } else if (snapshot.source === 'pending' && snapshot.pendingTaskId && snapshot.outputKey) {
+          values[key] = { pendingTaskId: snapshot.pendingTaskId, outputKey: snapshot.outputKey, type: snapshot.type }
         } else if (snapshot.value === null || typeof snapshot.value === 'string' || typeof snapshot.value === 'number') {
           values[key] = snapshot.value
         }
       }
       return { ...values, ...structuredClone(task.inputRefs ?? {}) }
+    }
+
+    type DependencyResolution =
+      | { status: 'waiting' }
+      | { status: 'failed'; code: string; message: string; raw?: unknown }
+      | {
+          status: 'resolved'
+          inputValues: ResolvedRuntimeInputValues
+          resolvedRefsByPendingKey: Map<string, ResourceRef>
+        }
+
+    const taskResultNode = (project: ProjectState, taskId: string) =>
+      project.canvas.nodes.find((node) => node.type === 'result_group' && node.data.taskId === taskId)
+
+    const resolveTaskInputDependencies = (task: ExecutionTask, project: ProjectState): DependencyResolution => {
+      const inputValues = inputValuesFromTaskSnapshot(task)
+      const resolvedRefsByPendingKey = new Map<string, ResourceRef>()
+
+      for (const [inputKey, value] of Object.entries(inputValues)) {
+        if (!isPendingResourceRef(value)) continue
+
+        const dependencyTask = project.tasks[value.pendingTaskId]
+        if (!dependencyTask) {
+          return {
+            status: 'failed',
+            code: 'dependency_missing',
+            message: `Dependency task ${value.pendingTaskId} is missing`,
+          }
+        }
+        if (dependencyTask.status === 'failed' || dependencyTask.status === 'canceled') {
+          return {
+            status: 'failed',
+            code: 'dependency_failed',
+            message: `Dependency task ${value.pendingTaskId} ${dependencyTask.status}`,
+            raw: dependencyTask.error,
+          }
+        }
+        if (dependencyTask.status !== 'succeeded') return { status: 'waiting' }
+
+        const outputRefs = dependencyTask.outputRefs[value.outputKey] ?? []
+        const resolvedRef = outputRefs.find((ref) => ref.type === value.type) ?? outputRefs[0]
+        if (!resolvedRef) {
+          return {
+            status: 'failed',
+            code: 'dependency_output_missing',
+            message: `Dependency task ${value.pendingTaskId} did not produce ${value.outputKey}`,
+          }
+        }
+
+        inputValues[inputKey] = resolvedRef
+        resolvedRefsByPendingKey.set(pendingRefKey(value), resolvedRef)
+      }
+
+      return {
+        status: 'resolved',
+        inputValues: asResolvedInputValues(inputValues),
+        resolvedRefsByPendingKey,
+      }
+    }
+
+    const markPendingTaskReady = (
+      task: ExecutionTask,
+      resultNodeId: string,
+      functionDef: GenerationFunction,
+      inputValues: ResolvedRuntimeInputValues,
+      resolvedRefsByPendingKey: Map<string, ResourceRef>,
+    ) => {
+      const now = runtime.now()
+      set((current) => {
+        const taskIdByResultNodeId = new Map<string, string>()
+        for (const node of current.project.canvas.nodes) {
+          if (node.type === 'result_group' && typeof node.data.taskId === 'string') {
+            taskIdByResultNodeId.set(node.id, node.data.taskId)
+          }
+        }
+
+        return {
+          project: {
+            ...current.project,
+            project: { ...current.project.project, updatedAt: now },
+            tasks: {
+              ...current.project.tasks,
+              [task.id]: {
+                ...task,
+                status: 'queued',
+                inputRefs: inputResourceRefs(inputValues),
+                inputSnapshot: resourceInputSnapshot(inputValues, current.project.resources),
+                inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, current.project.resources),
+                updatedAt: now,
+              },
+            },
+            canvas: {
+              ...current.project.canvas,
+              nodes: current.project.canvas.nodes.map((node) => {
+                if (node.id === resultNodeId) {
+                  return {
+                    ...node,
+                    data: {
+                      ...node.data,
+                      status: 'queued',
+                      error: undefined,
+                    },
+                  }
+                }
+
+                if (node.id !== task.functionNodeId || node.type !== 'function') return node
+                const nodeInputValues = { ...((node.data.inputValues ?? {}) as RuntimeInputValues) }
+                let changed = false
+                for (const [key, value] of Object.entries(nodeInputValues)) {
+                  if (!isPendingResourceRef(value)) continue
+                  const resolvedRef = resolvedRefsByPendingKey.get(pendingRefKey(value))
+                  if (!resolvedRef) continue
+                  nodeInputValues[key] = resolvedRef
+                  changed = true
+                }
+                return changed ? { ...node, data: { ...node.data, inputValues: nodeInputValues } } : node
+              }),
+              edges: current.project.canvas.edges.map((edge) => {
+                const dependencyTaskId = taskIdByResultNodeId.get(edge.source.nodeId)
+                const outputKey = edge.source.outputKey ?? pendingOutputKeyFromHandle(edge.source.handleId)
+                if (!dependencyTaskId || !outputKey) return edge
+                const resolvedRef = resolvedRefsByPendingKey.get(`${dependencyTaskId}:${outputKey}`)
+                if (!resolvedRef) return edge
+                return {
+                  ...edge,
+                  source: {
+                    ...edge.source,
+                    handleId: sourceHandleForResource(
+                      current.project.canvas.nodes.find((node) => node.id === edge.source.nodeId) ?? {
+                        id: edge.source.nodeId,
+                        type: 'result_group',
+                        position: { x: 0, y: 0 },
+                        data: {},
+                      },
+                      resolvedRef.resourceId,
+                    ),
+                    resourceId: resolvedRef.resourceId,
+                    outputKey,
+                  },
+                }
+              }),
+            },
+          },
+        }
+      })
+    }
+
+    const resolveReadyPendingInputBindings = () => {
+      const now = runtime.now()
+      let didResolve = false
+      set((current) => {
+        const taskIdByResultNodeId = new Map<string, string>()
+        for (const node of current.project.canvas.nodes) {
+          if (node.type === 'result_group' && typeof node.data.taskId === 'string') {
+            taskIdByResultNodeId.set(node.id, node.data.taskId)
+          }
+        }
+
+        const resolvedRefsByPendingKey = new Map<string, ResourceRef>()
+        const nodes = current.project.canvas.nodes.map((node) => {
+          if (node.type !== 'function') return node
+
+          const inputValues = { ...((node.data.inputValues ?? {}) as RuntimeInputValues) }
+          let changed = false
+          for (const [inputKey, value] of Object.entries(inputValues)) {
+            if (!isPendingResourceRef(value)) continue
+            const dependencyTask = current.project.tasks[value.pendingTaskId]
+            if (dependencyTask?.status !== 'succeeded') continue
+            const outputRefs = dependencyTask.outputRefs[value.outputKey] ?? []
+            const resolvedRef = outputRefs.find((ref) => ref.type === value.type) ?? outputRefs[0]
+            if (!resolvedRef) continue
+            inputValues[inputKey] = resolvedRef
+            resolvedRefsByPendingKey.set(pendingRefKey(value), resolvedRef)
+            changed = true
+            didResolve = true
+          }
+
+          return changed ? { ...node, data: { ...node.data, inputValues } } : node
+        })
+
+        if (!didResolve) return current
+
+        return {
+          project: {
+            ...current.project,
+            project: { ...current.project.project, updatedAt: now },
+            canvas: {
+              ...current.project.canvas,
+              nodes,
+              edges: current.project.canvas.edges.map((edge) => {
+                const dependencyTaskId = taskIdByResultNodeId.get(edge.source.nodeId)
+                const outputKey = edge.source.outputKey ?? pendingOutputKeyFromHandle(edge.source.handleId)
+                if (!dependencyTaskId || !outputKey) return edge
+                const resolvedRef = resolvedRefsByPendingKey.get(`${dependencyTaskId}:${outputKey}`)
+                if (!resolvedRef) return edge
+                const sourceNode = current.project.canvas.nodes.find((node) => node.id === edge.source.nodeId)
+                return {
+                  ...edge,
+                  source: {
+                    ...edge.source,
+                    handleId: sourceNode ? sourceHandleForResource(sourceNode, resolvedRef.resourceId) : edge.source.handleId,
+                    resourceId: resolvedRef.resourceId,
+                    outputKey,
+                  },
+                }
+              }),
+            },
+          },
+        }
+      })
+      return didResolve
+    }
+
+    const executeResolvedTask = async (
+      task: ExecutionTask,
+      resultNodeId: string,
+      functionDef: GenerationFunction,
+      inputValues: ResolvedRuntimeInputValues,
+    ) => {
+      if (isOpenAILlmFunction(functionDef)) {
+        const functionNode = get().project.canvas.nodes.find((node) => node.id === task.functionNodeId && node.type === 'function')
+        const nodeConfig = functionNode?.data.openaiConfig as Partial<OpenAILlmConfig> | undefined
+        await executeOpenAiQueueItem({
+          taskId: task.id,
+          resultNodeId,
+          functionNodeId: task.functionNodeId,
+          functionId: task.functionId,
+          functionDef,
+          inputValues,
+          config: mergedOpenAILlmConfig(functionDef.openai, nodeConfig),
+          runIndex: task.runIndex,
+          runTotal: task.runTotal,
+        })
+        return
+      }
+
+      if (isGeminiLlmFunction(functionDef)) {
+        const functionNode = get().project.canvas.nodes.find((node) => node.id === task.functionNodeId && node.type === 'function')
+        const nodeConfig = functionNode?.data.geminiConfig as Partial<GeminiLlmConfig> | undefined
+        await executeGeminiQueueItem({
+          taskId: task.id,
+          resultNodeId,
+          functionNodeId: task.functionNodeId,
+          functionId: task.functionId,
+          functionDef,
+          inputValues,
+          config: mergedGeminiLlmConfig(functionDef.gemini, nodeConfig),
+          runIndex: task.runIndex,
+          runTotal: task.runTotal,
+        })
+        return
+      }
+
+      if (isOpenAIImageFunction(functionDef)) {
+        const functionNode = get().project.canvas.nodes.find((node) => node.id === task.functionNodeId && node.type === 'function')
+        const nodeConfig = functionNode?.data.openaiImageConfig as Partial<OpenAIImageConfig> | undefined
+        await executeOpenAiImageQueueItem({
+          taskId: task.id,
+          resultNodeId,
+          functionNodeId: task.functionNodeId,
+          functionId: task.functionId,
+          functionDef,
+          inputValues,
+          config: mergedOpenAIImageConfig(functionDef.openaiImage, nodeConfig),
+          runIndex: task.runIndex,
+          runTotal: task.runTotal,
+        })
+        return
+      }
+
+      if (isGeminiImageFunction(functionDef)) {
+        const functionNode = get().project.canvas.nodes.find((node) => node.id === task.functionNodeId && node.type === 'function')
+        const nodeConfig = functionNode?.data.geminiImageConfig as Partial<GeminiImageConfig> | undefined
+        await executeGeminiImageQueueItem({
+          taskId: task.id,
+          resultNodeId,
+          functionNodeId: task.functionNodeId,
+          functionId: task.functionId,
+          functionDef,
+          inputValues,
+          config: mergedGeminiImageConfig(functionDef.geminiImage, nodeConfig),
+          runIndex: task.runIndex,
+          runTotal: task.runTotal,
+        })
+        return
+      }
+
+      if (isRequestFunction(functionDef)) {
+        await executeRequestQueueItem({
+          taskId: task.id,
+          resultNodeId,
+          functionNodeId: task.functionNodeId,
+          functionId: task.functionId,
+          functionDef,
+          inputValues,
+          runIndex: task.runIndex,
+          runTotal: task.runTotal,
+        })
+        return
+      }
+
+      if (isLocalTransformFunction(functionDef)) {
+        await executeLocalQueueItem({
+          taskId: task.id,
+          resultNodeId,
+          sourceNodeId: task.functionNodeId,
+          functionId: task.functionId,
+          functionDef,
+          inputValues,
+          runIndex: task.runIndex,
+          runTotal: task.runTotal,
+        })
+        return
+      }
+
+      const workerEndpoints = get().project.comfy.endpoints.filter(
+        (endpoint) => endpointIsWorkerEligible(endpoint) && endpointSupportsFunction(endpoint, task.functionId),
+      )
+      if (workerEndpoints.length === 0) {
+        failResultRunInPlace(resultNodeId, task.id, 'endpoint_unavailable', 'No eligible ComfyUI endpoint')
+        return
+      }
+
+      let resolveCompletion: () => void = () => undefined
+      const completion = new Promise<void>((resolve) => {
+        resolveCompletion = resolve
+      })
+      comfyQueue.push({
+        taskId: task.id,
+        resultNodeId,
+        functionNodeId: task.functionNodeId,
+        functionId: task.functionId,
+        functionDef,
+        inputValues,
+        seedPatchLog: structuredClone(task.seedPatchLog),
+        runIndex: task.runIndex,
+        runTotal: task.runTotal,
+        createdAt: task.createdAt,
+        completion,
+        resolveCompletion,
+      })
+      ensureComfyWorkers()
+      await completion
+    }
+
+    let resolvingPendingDependencies = false
+    const resolvePendingDependencyTasks = async () => {
+      if (resolvingPendingDependencies) return
+      resolvingPendingDependencies = true
+      try {
+        while (true) {
+          const resolvedBindings = resolveReadyPendingInputBindings()
+          const pendingTasks = Object.values(get().project.tasks).filter((task) => task.status === 'pending')
+          if (pendingTasks.length === 0) {
+            if (resolvedBindings) continue
+            return
+          }
+
+          let progressed = resolvedBindings
+          for (const pendingTask of pendingTasks) {
+            const project = get().project
+            const resultNode = taskResultNode(project, pendingTask.id)
+            const functionDef = project.functions[pendingTask.functionId]
+            if (!resultNode) continue
+            if (!functionDef) {
+              failResultRunInPlace(resultNode.id, pendingTask.id, 'function_missing', 'Function definition is missing')
+              progressed = true
+              break
+            }
+
+            const resolution = resolveTaskInputDependencies(pendingTask, project)
+            if (resolution.status === 'waiting') continue
+            if (resolution.status === 'failed') {
+              failResultRunInPlace(resultNode.id, pendingTask.id, resolution.code, resolution.message, resolution.raw)
+              progressed = true
+              break
+            }
+
+            markPendingTaskReady(
+              pendingTask,
+              resultNode.id,
+              functionDef,
+              resolution.inputValues,
+              resolution.resolvedRefsByPendingKey,
+            )
+            await executeResolvedTask(pendingTask, resultNode.id, functionDef, resolution.inputValues)
+            progressed = true
+            break
+          }
+
+          if (!progressed) return
+        }
+      } finally {
+        resolvingPendingDependencies = false
+      }
     }
 
     const runLocalFunctionNode = async (nodeId: string, requestedRunCount?: number) => {
@@ -2800,6 +3275,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       const now = runtime.now()
       const inputValues = (node.data.inputValues ?? {}) as RuntimeInputValues
       if (validateRequiredInputs(nodeId, functionDef, inputValues, state.project.resources).length > 0) return
+      const hasPendingDependencies = hasPendingInputRefs(inputValues)
 
       const queuedNodes: CanvasNode[] = []
       const queuedTasks: Record<string, ExecutionTask> = {}
@@ -2816,8 +3292,8 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           functionId,
           runIndex,
           runTotal: runRange.total,
-          status: 'queued',
-          inputRefs: resourceInputRefs(inputValues),
+          status: hasPendingDependencies ? 'pending' : 'queued',
+          inputRefs: inputResourceRefs(inputValues),
           inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
           inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
           paramsSnapshot: {
@@ -2846,7 +3322,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             title: `Run ${runIndex}`,
             endpointId: 'local',
             resources: [],
-            status: 'queued',
+            status: hasPendingDependencies ? 'pending' : 'queued',
             seedPatchLog: [],
             createdAt: now,
           },
@@ -2854,16 +3330,18 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
         queuedTasks[taskId] = task
         queuedNodes.push(resultNode)
-        queuedRuns.push({
-          taskId,
-          resultNodeId,
-          sourceNodeId: nodeId,
-          functionId,
-          functionDef,
-          inputValues,
-          runIndex,
-          runTotal: runRange.total,
-        })
+        if (!hasPendingDependencies) {
+          queuedRuns.push({
+            taskId,
+            resultNodeId,
+            sourceNodeId: nodeId,
+            functionId,
+            functionDef,
+            inputValues: asResolvedInputValues(inputValues),
+            runIndex,
+            runTotal: runRange.total,
+          })
+        }
       }
 
       set((current) => ({
@@ -2877,6 +3355,11 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           },
         },
       }))
+
+      if (hasPendingDependencies) {
+        void resolvePendingDependencyTasks()
+        return
+      }
 
       await Promise.all(queuedRuns.map((item) => executeLocalQueueItem(item)))
     }
@@ -2910,6 +3393,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       const now = runtime.now()
       const inputValues = (node.data.inputValues ?? {}) as RuntimeInputValues
       if (validateRequiredInputs(nodeId, runtimeFunctionDef, inputValues, state.project.resources).length > 0) return
+      const hasPendingDependencies = hasPendingInputRefs(inputValues)
       const queuedNodes: CanvasNode[] = []
       const queuedTasks: Record<string, ExecutionTask> = {}
       const queuedRuns: QueuedRequestRun[] = []
@@ -2925,8 +3409,8 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           functionId,
           runIndex,
           runTotal: runRange.total,
-          status: 'queued',
-          inputRefs: resourceInputRefs(inputValues),
+          status: hasPendingDependencies ? 'pending' : 'queued',
+          inputRefs: inputResourceRefs(inputValues),
           inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
           inputValuesSnapshot: executionInputSnapshot(runtimeFunctionDef, inputValues, state.project.resources),
           paramsSnapshot: {
@@ -2955,7 +3439,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             title: `Run ${runIndex}`,
             endpointId: 'request',
             resources: [],
-            status: 'queued',
+            status: hasPendingDependencies ? 'pending' : 'queued',
             seedPatchLog: [],
             createdAt: now,
           },
@@ -2963,16 +3447,18 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
         queuedTasks[taskId] = task
         queuedNodes.push(resultNode)
-        queuedRuns.push({
-          taskId,
-          resultNodeId,
-          functionNodeId: nodeId,
-          functionId,
-          functionDef: runtimeFunctionDef,
-          inputValues,
-          runIndex,
-          runTotal: runRange.total,
-        })
+        if (!hasPendingDependencies) {
+          queuedRuns.push({
+            taskId,
+            resultNodeId,
+            functionNodeId: nodeId,
+            functionId,
+            functionDef: runtimeFunctionDef,
+            inputValues: asResolvedInputValues(inputValues),
+            runIndex,
+            runTotal: runRange.total,
+          })
+        }
       }
 
       set((current) => ({
@@ -2986,6 +3472,11 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           },
         },
       }))
+
+      if (hasPendingDependencies) {
+        void resolvePendingDependencyTasks()
+        return
+      }
 
       await Promise.all(queuedRuns.map((item) => executeRequestQueueItem(item)))
     }
@@ -3004,6 +3495,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       const now = runtime.now()
       const inputValues = (node.data.inputValues ?? {}) as RuntimeInputValues
       if (validateRequiredInputs(nodeId, functionDef, inputValues, state.project.resources).length > 0) return
+      const hasPendingDependencies = hasPendingInputRefs(inputValues)
       const nodeConfig = node.data.openaiConfig as Partial<OpenAILlmConfig> | undefined
       const config = mergedOpenAILlmConfig(functionDef.openai, nodeConfig)
       const queuedNodes: CanvasNode[] = []
@@ -3021,8 +3513,8 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           functionId,
           runIndex,
           runTotal: runRange.total,
-          status: 'queued',
-          inputRefs: resourceInputRefs(inputValues),
+          status: hasPendingDependencies ? 'pending' : 'queued',
+          inputRefs: inputResourceRefs(inputValues),
           inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
           inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
           paramsSnapshot: {
@@ -3052,7 +3544,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             title: `Run ${runIndex}`,
             endpointId: 'openai',
             resources: [],
-            status: 'queued',
+            status: hasPendingDependencies ? 'pending' : 'queued',
             seedPatchLog: [],
             createdAt: now,
           },
@@ -3060,17 +3552,19 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
         queuedTasks[taskId] = task
         queuedNodes.push(resultNode)
-        queuedRuns.push({
-          taskId,
-          resultNodeId,
-          functionNodeId: nodeId,
-          functionId,
-          functionDef,
-          inputValues,
-          config,
-          runIndex,
-          runTotal: runRange.total,
-        })
+        if (!hasPendingDependencies) {
+          queuedRuns.push({
+            taskId,
+            resultNodeId,
+            functionNodeId: nodeId,
+            functionId,
+            functionDef,
+            inputValues: asResolvedInputValues(inputValues),
+            config,
+            runIndex,
+            runTotal: runRange.total,
+          })
+        }
       }
 
       set((current) => ({
@@ -3084,6 +3578,11 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           },
         },
       }))
+
+      if (hasPendingDependencies) {
+        void resolvePendingDependencyTasks()
+        return
+      }
 
       await Promise.all(queuedRuns.map((item) => executeOpenAiQueueItem(item)))
     }
@@ -3102,6 +3601,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       const now = runtime.now()
       const inputValues = (node.data.inputValues ?? {}) as RuntimeInputValues
       if (validateRequiredInputs(nodeId, functionDef, inputValues, state.project.resources).length > 0) return
+      const hasPendingDependencies = hasPendingInputRefs(inputValues)
       const nodeConfig = node.data.geminiConfig as Partial<GeminiLlmConfig> | undefined
       const config = mergedGeminiLlmConfig(functionDef.gemini, nodeConfig)
       const queuedNodes: CanvasNode[] = []
@@ -3119,8 +3619,8 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           functionId,
           runIndex,
           runTotal: runRange.total,
-          status: 'queued',
-          inputRefs: resourceInputRefs(inputValues),
+          status: hasPendingDependencies ? 'pending' : 'queued',
+          inputRefs: inputResourceRefs(inputValues),
           inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
           inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
           paramsSnapshot: {
@@ -3150,7 +3650,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             title: `Run ${runIndex}`,
             endpointId: 'gemini',
             resources: [],
-            status: 'queued',
+            status: hasPendingDependencies ? 'pending' : 'queued',
             seedPatchLog: [],
             createdAt: now,
           },
@@ -3158,17 +3658,19 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
         queuedTasks[taskId] = task
         queuedNodes.push(resultNode)
-        queuedRuns.push({
-          taskId,
-          resultNodeId,
-          functionNodeId: nodeId,
-          functionId,
-          functionDef,
-          inputValues,
-          config,
-          runIndex,
-          runTotal: runRange.total,
-        })
+        if (!hasPendingDependencies) {
+          queuedRuns.push({
+            taskId,
+            resultNodeId,
+            functionNodeId: nodeId,
+            functionId,
+            functionDef,
+            inputValues: asResolvedInputValues(inputValues),
+            config,
+            runIndex,
+            runTotal: runRange.total,
+          })
+        }
       }
 
       set((current) => ({
@@ -3182,6 +3684,11 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           },
         },
       }))
+
+      if (hasPendingDependencies) {
+        void resolvePendingDependencyTasks()
+        return
+      }
 
       await Promise.all(queuedRuns.map((item) => executeGeminiQueueItem(item)))
     }
@@ -3200,6 +3707,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       const now = runtime.now()
       const inputValues = (node.data.inputValues ?? {}) as RuntimeInputValues
       if (validateRequiredInputs(nodeId, functionDef, inputValues, state.project.resources).length > 0) return
+      const hasPendingDependencies = hasPendingInputRefs(inputValues)
       const nodeConfig = node.data.openaiImageConfig as Partial<OpenAIImageConfig> | undefined
       const config = mergedOpenAIImageConfig(functionDef.openaiImage, nodeConfig)
       const queuedNodes: CanvasNode[] = []
@@ -3217,8 +3725,8 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           functionId,
           runIndex,
           runTotal: runRange.total,
-          status: 'queued',
-          inputRefs: resourceInputRefs(inputValues),
+          status: hasPendingDependencies ? 'pending' : 'queued',
+          inputRefs: inputResourceRefs(inputValues),
           inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
           inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
           paramsSnapshot: {
@@ -3251,7 +3759,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             title: `Run ${runIndex}`,
             endpointId: 'openai_image',
             resources: [],
-            status: 'queued',
+            status: hasPendingDependencies ? 'pending' : 'queued',
             seedPatchLog: [],
             createdAt: now,
           },
@@ -3259,17 +3767,19 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
         queuedTasks[taskId] = task
         queuedNodes.push(resultNode)
-        queuedRuns.push({
-          taskId,
-          resultNodeId,
-          functionNodeId: nodeId,
-          functionId,
-          functionDef,
-          inputValues,
-          config,
-          runIndex,
-          runTotal: runRange.total,
-        })
+        if (!hasPendingDependencies) {
+          queuedRuns.push({
+            taskId,
+            resultNodeId,
+            functionNodeId: nodeId,
+            functionId,
+            functionDef,
+            inputValues: asResolvedInputValues(inputValues),
+            config,
+            runIndex,
+            runTotal: runRange.total,
+          })
+        }
       }
 
       set((current) => ({
@@ -3283,6 +3793,11 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           },
         },
       }))
+
+      if (hasPendingDependencies) {
+        void resolvePendingDependencyTasks()
+        return
+      }
 
       await Promise.all(queuedRuns.map((item) => executeOpenAiImageQueueItem(item)))
     }
@@ -3301,6 +3816,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       const now = runtime.now()
       const inputValues = (node.data.inputValues ?? {}) as RuntimeInputValues
       if (validateRequiredInputs(nodeId, functionDef, inputValues, state.project.resources).length > 0) return
+      const hasPendingDependencies = hasPendingInputRefs(inputValues)
       const nodeConfig = node.data.geminiImageConfig as Partial<GeminiImageConfig> | undefined
       const config = mergedGeminiImageConfig(functionDef.geminiImage, nodeConfig)
       const queuedNodes: CanvasNode[] = []
@@ -3318,8 +3834,8 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           functionId,
           runIndex,
           runTotal: runRange.total,
-          status: 'queued',
-          inputRefs: resourceInputRefs(inputValues),
+          status: hasPendingDependencies ? 'pending' : 'queued',
+          inputRefs: inputResourceRefs(inputValues),
           inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
           inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
           paramsSnapshot: {
@@ -3351,7 +3867,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             title: `Run ${runIndex}`,
             endpointId: 'gemini_image',
             resources: [],
-            status: 'queued',
+            status: hasPendingDependencies ? 'pending' : 'queued',
             seedPatchLog: [],
             createdAt: now,
           },
@@ -3359,17 +3875,19 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
         queuedTasks[taskId] = task
         queuedNodes.push(resultNode)
-        queuedRuns.push({
-          taskId,
-          resultNodeId,
-          functionNodeId: nodeId,
-          functionId,
-          functionDef,
-          inputValues,
-          config,
-          runIndex,
-          runTotal: runRange.total,
-        })
+        if (!hasPendingDependencies) {
+          queuedRuns.push({
+            taskId,
+            resultNodeId,
+            functionNodeId: nodeId,
+            functionId,
+            functionDef,
+            inputValues: asResolvedInputValues(inputValues),
+            config,
+            runIndex,
+            runTotal: runRange.total,
+          })
+        }
       }
 
       set((current) => ({
@@ -3383,6 +3901,11 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           },
         },
       }))
+
+      if (hasPendingDependencies) {
+        void resolvePendingDependencyTasks()
+        return
+      }
 
       await Promise.all(queuedRuns.map((item) => executeGeminiImageQueueItem(item)))
     }
@@ -3495,6 +4018,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
           for (const [key, value] of Object.entries(inputValues)) {
             if (isResourceRef(value) && resourceIdsToDelete.has(value.resourceId)) delete inputValues[key]
+            if (isPendingResourceRef(value) && taskIdsToDelete.has(value.pendingTaskId)) delete inputValues[key]
           }
 
           return {
@@ -3995,6 +4519,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
                     if (isResourceRef(value)) {
                       return state.project.resources[value.resourceId]?.type === input.type
                     }
+                    if (isPendingResourceRef(value)) return value.type === input.type
 
                     if (input.type === 'text') return typeof value === 'string'
                     if (input.type === 'number') return typeof value === 'number'
@@ -4394,6 +4919,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       const endpoint = selectEndpoint(state.project.comfy.endpoints, activeJobs(state.project.tasks), functionId)
 
       if (validateRequiredInputs(nodeId, functionDef, inputValues, state.project.resources).length > 0) return
+      const hasPendingDependencies = hasPendingInputRefs(inputValues)
 
       const nextNodes: CanvasNode[] = []
       const nextResources: Record<string, Resource> = {}
@@ -4404,44 +4930,52 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         const runIndex = runRange.start + index - 1
         const taskId = runtime.idFactory()
         const outputKey = functionDef.outputs[0]?.key ?? 'result'
-        const compiledWithInputs = injectWorkflowInputs(
-          functionDef.workflow.rawJson,
-          functionDef.inputs,
-          inputValues,
-          state.project.resources,
-        )
-        const randomized = randomizeWorkflowSeeds(compiledWithInputs, {
-          now: runtime.now,
-          randomInt: runtime.randomInt,
-        })
-        const outputResourceId = runtime.idFactory()
+        const outputResourceId = hasPendingDependencies ? undefined : runtime.idFactory()
         const resultNodeId = runtime.idFactory()
-        const resource: Resource = {
-          id: outputResourceId,
-          type: 'text',
-          name: `${functionDef.name} Run ${runIndex}`,
-          value: `Simulated ComfyUI result for ${functionDef.name} run ${runIndex}`,
-          source: {
-            kind: 'function_output',
-            functionNodeId: nodeId,
-            resultGroupNodeId: resultNodeId,
-            taskId,
-            outputKey,
-          },
-          metadata: {
-            workflowFunctionId: functionId,
-            endpointId: endpoint?.id,
-            createdAt: now,
-          },
-        }
+        const compiledWithInputs = hasPendingDependencies
+          ? functionDef.workflow.rawJson
+          : injectWorkflowInputs(
+              functionDef.workflow.rawJson,
+              functionDef.inputs,
+              asResolvedInputValues(inputValues),
+              state.project.resources,
+            )
+        const randomized = hasPendingDependencies
+          ? { workflow: functionDef.workflow.rawJson, patchLog: [] }
+          : randomizeWorkflowSeeds(compiledWithInputs, {
+              now: runtime.now,
+              randomInt: runtime.randomInt,
+            })
+        const outputRef = outputResourceId ? { resourceId: outputResourceId, type: 'text' as const } : undefined
+        const resource: Resource | undefined = outputResourceId
+          ? {
+              id: outputResourceId,
+              type: 'text',
+              name: `${functionDef.name} Run ${runIndex}`,
+              value: `Simulated ComfyUI result for ${functionDef.name} run ${runIndex}`,
+              source: {
+                kind: 'function_output',
+                functionNodeId: nodeId,
+                resultGroupNodeId: resultNodeId,
+                taskId,
+                outputKey,
+              },
+              metadata: {
+                workflowFunctionId: functionId,
+                endpointId: endpoint?.id,
+                createdAt: now,
+              },
+            }
+          : undefined
+        const status = hasPendingDependencies ? 'pending' : endpoint ? 'succeeded' : 'failed'
         const task: ExecutionTask = {
           id: taskId,
           functionNodeId: nodeId,
           functionId,
           runIndex,
           runTotal: runRange.total,
-          status: endpoint ? 'succeeded' : 'failed',
-          inputRefs: resourceInputRefs(inputValues),
+          status,
+          inputRefs: inputResourceRefs(inputValues),
           inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
           inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
           paramsSnapshot: { runCount },
@@ -4449,12 +4983,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           compiledWorkflowSnapshot: randomized.workflow,
           seedPatchLog: randomized.patchLog,
           endpointId: endpoint?.id,
-          outputRefs: { [outputKey]: [{ resourceId: outputResourceId, type: 'text' }] },
-          error: endpoint ? undefined : { code: 'endpoint_unavailable', message: 'No eligible ComfyUI endpoint' },
+          outputRefs: outputRef ? { [outputKey]: [outputRef] } : {},
+          error: !hasPendingDependencies && !endpoint ? { code: 'endpoint_unavailable', message: 'No eligible ComfyUI endpoint' } : undefined,
           createdAt: now,
-          startedAt: now,
+          startedAt: hasPendingDependencies ? undefined : now,
           updatedAt: now,
-          completedAt: now,
+          completedAt: hasPendingDependencies ? undefined : now,
         }
         const resultNode: CanvasNode = {
           id: resultNodeId,
@@ -4468,16 +5002,16 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             runTotal: runRange.total,
             title: `Run ${runIndex}`,
             endpointId: endpoint?.id ?? 'unassigned',
-            resources: [{ resourceId: outputResourceId, type: 'text' }],
+            resources: outputRef ? [outputRef] : [],
             status: task.status,
             seedPatchLog: randomized.patchLog,
             createdAt: now,
-            startedAt: now,
-            completedAt: now,
+            startedAt: hasPendingDependencies ? undefined : now,
+            completedAt: hasPendingDependencies ? undefined : now,
           },
         }
 
-        nextResources[outputResourceId] = resource
+        if (resource) nextResources[resource.id] = resource
         nextTasks[taskId] = task
         nextNodes.push(resultNode)
       }
@@ -4494,6 +5028,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           },
         },
       }))
+      if (hasPendingDependencies) void resolvePendingDependencyTasks()
     },
 
     runFunctionNodeWithComfy: async (nodeId, requestedRunCount) => {
@@ -4538,8 +5073,9 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       )
 
       if (validateRequiredInputs(nodeId, functionDef, inputValues, state.project.resources).length > 0) return
+      const hasPendingDependencies = hasPendingInputRefs(inputValues)
 
-      if (workerEndpoints.length === 0) {
+      if (workerEndpoints.length === 0 && !hasPendingDependencies) {
         get().runFunctionNode(nodeId, requestedRunCount)
         return
       }
@@ -4560,8 +5096,8 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           functionId,
           runIndex,
           runTotal: runRange.total,
-          status: 'queued',
-          inputRefs: resourceInputRefs(inputValues),
+          status: hasPendingDependencies ? 'pending' : 'queued',
+          inputRefs: inputResourceRefs(inputValues),
           inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
           inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
           paramsSnapshot: { runCount, mode: 'comfy' },
@@ -4584,32 +5120,34 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             runTotal: runRange.total,
             title: `Run ${runIndex}`,
             resources: [],
-            status: 'queued',
+            status: hasPendingDependencies ? 'pending' : 'queued',
             seedPatchLog: [],
             createdAt: now,
           },
         }
-        let resolveCompletion: () => void = () => undefined
-        const completion = new Promise<void>((resolve) => {
-          resolveCompletion = resolve
-        })
 
         queuedTasks[taskId] = task
         queuedNodes.push(resultNode)
-        queuedRuns.push({
-          taskId,
-          resultNodeId,
-          functionNodeId: nodeId,
-          functionId,
-          functionDef,
-          inputValues,
-          runIndex,
-          runTotal: runRange.total,
-          createdAt: now,
-          completion,
-          resolveCompletion,
-        })
-        completionPromises.push(completion)
+        if (!hasPendingDependencies) {
+          let resolveCompletion: () => void = () => undefined
+          const completion = new Promise<void>((resolve) => {
+            resolveCompletion = resolve
+          })
+          queuedRuns.push({
+            taskId,
+            resultNodeId,
+            functionNodeId: nodeId,
+            functionId,
+            functionDef,
+            inputValues: asResolvedInputValues(inputValues),
+            runIndex,
+            runTotal: runRange.total,
+            createdAt: now,
+            completion,
+            resolveCompletion,
+          })
+          completionPromises.push(completion)
+        }
       }
 
       set((current) => ({
@@ -4623,6 +5161,11 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           },
         },
       }))
+
+      if (hasPendingDependencies) {
+        void resolvePendingDependencyTasks()
+        return
+      }
 
       comfyQueue.push(...queuedRuns)
       ensureComfyWorkers()
@@ -4660,7 +5203,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         runIndex,
         runTotal: runRange.total,
         status: 'queued',
-        inputRefs: resourceInputRefs(inputValues),
+        inputRefs: inputResourceRefs(inputValues),
         inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
         inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
         paramsSnapshot: {
@@ -4700,7 +5243,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         sourceNodeId,
         functionId,
         functionDef,
-        inputValues,
+        inputValues: asResolvedInputValues(inputValues),
         runIndex,
         runTotal: runRange.total,
       }
@@ -4738,6 +5281,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
       const now = runtime.now()
       const inputValues = structuredClone(task.inputRefs ?? {}) as RuntimeInputValues
+      const resolvedInputValues = asResolvedInputValues(inputValues)
       resetResultNodeForRetry(resultNodeId, taskId, now)
 
       if (isOpenAILlmFunction(functionDef)) {
@@ -4749,7 +5293,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           functionNodeId: task.functionNodeId,
           functionId: task.functionId,
           functionDef,
-          inputValues,
+          inputValues: resolvedInputValues,
           config: mergedOpenAILlmConfig(functionDef.openai, nodeConfig),
           runIndex: task.runIndex,
           runTotal: task.runTotal,
@@ -4766,7 +5310,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           functionNodeId: task.functionNodeId,
           functionId: task.functionId,
           functionDef,
-          inputValues,
+          inputValues: resolvedInputValues,
           config: mergedGeminiLlmConfig(functionDef.gemini, nodeConfig),
           runIndex: task.runIndex,
           runTotal: task.runTotal,
@@ -4783,7 +5327,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           functionNodeId: task.functionNodeId,
           functionId: task.functionId,
           functionDef,
-          inputValues,
+          inputValues: resolvedInputValues,
           config: mergedOpenAIImageConfig(functionDef.openaiImage, nodeConfig),
           runIndex: task.runIndex,
           runTotal: task.runTotal,
@@ -4800,7 +5344,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           functionNodeId: task.functionNodeId,
           functionId: task.functionId,
           functionDef,
-          inputValues,
+          inputValues: resolvedInputValues,
           config: mergedGeminiImageConfig(functionDef.geminiImage, nodeConfig),
           runIndex: task.runIndex,
           runTotal: task.runTotal,
@@ -4815,7 +5359,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           functionNodeId: task.functionNodeId,
           functionId: task.functionId,
           functionDef,
-          inputValues,
+          inputValues: resolvedInputValues,
           runIndex: task.runIndex,
           runTotal: task.runTotal,
         })
@@ -4829,7 +5373,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           sourceNodeId: task.functionNodeId,
           functionId: task.functionId,
           functionDef,
-          inputValues: inputValuesFromTaskSnapshot(task),
+          inputValues: asResolvedInputValues(inputValuesFromTaskSnapshot(task)),
           runIndex: task.runIndex,
           runTotal: task.runTotal,
         })
@@ -4856,7 +5400,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         functionNodeId: task.functionNodeId,
         functionId: task.functionId,
         functionDef,
-        inputValues,
+        inputValues: resolvedInputValues,
         compiledWorkflowSnapshot,
         seedPatchLog: structuredClone(task.seedPatchLog),
         runIndex: task.runIndex,
@@ -4925,6 +5469,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           },
         },
       }))
+      void resolvePendingDependencyTasks()
     },
 
     undoLastProjectChange: () => {
@@ -4956,6 +5501,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
       const currentInputValues = (targetNode.data.inputValues ?? {}) as RuntimeInputValues
       const preferredResourceId = resourceIdFromHandle(options?.sourceHandleId)
+      const pendingRef = pendingOutputRefForNode(sourceNode, state.project.functions, options?.sourceHandleId)
       const sourceRefs = nodeResourceRefs(sourceNode).filter((ref) =>
         preferredResourceId ? ref.resourceId === preferredResourceId : true,
       )
@@ -4966,20 +5512,22 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             ? inputKeyForConnection(functionDef.inputs, resource.type, currentInputValues, options?.targetInputKey)
             : false,
         )
-      if (!sourceResource) return
+      if (!sourceResource && !pendingRef) return
 
-      const resourceId = sourceResource.id
-      const resource = sourceResource
-      const inputKey = inputKeyForConnection(functionDef.inputs, resource.type, currentInputValues, options?.targetInputKey)
+      const resourceType = pendingRef?.type ?? sourceResource?.type
+      if (!resourceType) return
+      const inputKey = inputKeyForConnection(functionDef.inputs, resourceType, currentInputValues, options?.targetInputKey)
       if (!inputKey) return
+      const inputValue: InputResourceRef = pendingRef ?? { resourceId: sourceResource!.id, type: sourceResource!.type }
 
       const now = runtime.now()
       const edge: CanvasEdge = {
         id: `edge_${sourceNodeId}_${targetNodeId}_${inputKey}`,
         source: {
           nodeId: sourceNodeId,
-          handleId: options?.sourceHandleId ?? sourceHandleForResource(sourceNode, resourceId),
-          resourceId,
+          handleId: options?.sourceHandleId ?? (sourceResource ? sourceHandleForResource(sourceNode, sourceResource.id) : `pending:${pendingRef!.outputKey}`),
+          resourceId: sourceResource?.id,
+          outputKey: pendingRef?.outputKey,
         },
         target: { nodeId: targetNodeId, inputKey },
         type: 'resource_to_input',
@@ -5008,7 +5556,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
                           : node.data.status,
                       inputValues: {
                         ...((node.data.inputValues ?? {}) as RuntimeInputValues),
-                        [inputKey]: { resourceId, type: resource.type },
+                        [inputKey]: inputValue,
                       },
                     },
                   }

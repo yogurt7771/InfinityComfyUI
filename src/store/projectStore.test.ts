@@ -15,6 +15,17 @@ describe('project store actions', () => {
     await Promise.resolve()
   }
 
+  const waitForState = async (
+    slice: ReturnType<typeof createProjectSlice>,
+    predicate: (state: ReturnType<ReturnType<typeof createProjectSlice>['getState']>) => boolean,
+  ) => {
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      if (predicate(slice.getState())) return
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    throw new Error('Timed out waiting for project store state')
+  }
+
   const testComfyWorkflow = () => ({
     '6': {
       class_type: 'CLIPTextEncode',
@@ -2208,6 +2219,243 @@ describe('project store actions', () => {
     expect(state.project.tasks.task_1.outputRefs).toEqual({
       image: [{ resourceId: 'res_img_1', type: 'image' }],
     })
+  })
+
+  it('waits on running result assets and resumes chained dependent runs', async () => {
+    const ids = [
+      'res_prompt',
+      'fn_upstream',
+      'node_upstream',
+      'fn_middle',
+      'node_middle',
+      'fn_leaf',
+      'node_leaf',
+      'task_upstream',
+      'node_result_upstream',
+      'task_middle',
+      'node_result_middle',
+      'task_leaf',
+      'node_result_leaf',
+      'asset_upstream',
+      'res_img_upstream',
+      'asset_middle',
+      'res_img_middle',
+      'asset_leaf',
+      'res_img_leaf',
+    ]
+    let queuedCount = 0
+    const historyResolvers: Record<string, (history: unknown) => void> = {}
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now: () => '2026-05-08T09:00:00.000Z',
+      randomInt: () => 42,
+      createComfyClient: () => ({
+        queuePrompt: async () => {
+          queuedCount += 1
+          return { prompt_id: `prompt_${queuedCount}`, number: queuedCount }
+        },
+        getHistory: async (promptId) =>
+          new Promise<unknown>((resolve) => {
+            historyResolvers[promptId] = resolve
+          }),
+        viewFile: async () => new Blob(['image'], { type: 'image/png' }),
+      }),
+      comfyRunOptions: {
+        maxPollAttempts: 1,
+        pollIntervalMs: 1,
+      },
+    })
+
+    const pendingImageInput = {
+      key: 'image',
+      label: 'Image',
+      type: 'image' as const,
+      required: true,
+      bind: { nodeId: '6', nodeTitle: 'Positive Prompt', path: 'inputs.image' },
+      upload: { strategy: 'none' as const },
+    }
+    const imageOutput = {
+      key: 'image',
+      label: 'Image',
+      type: 'image' as const,
+      bind: { nodeTitle: 'Result_Image' },
+      extract: { source: 'history' as const, multiple: true },
+    }
+    const imageHistory = (promptId: string, filename: string) => ({
+      [promptId]: {
+        outputs: {
+          '20': {
+            images: [{ filename, subfolder: 'renders', type: 'output' }],
+          },
+        },
+      },
+    })
+
+    slice.getState().addTextResource('Prompt', 'warm kitchen')
+    addTestWorkflowFunction(slice)
+    slice.getState().addFunctionNode('fn_upstream')
+    addTestWorkflowFunction(slice)
+    slice.getState().addFunctionNode('fn_middle')
+    addTestWorkflowFunction(slice)
+    slice.getState().addFunctionNode('fn_leaf')
+    slice.setState((state) => ({
+      project: {
+        ...state.project,
+        functions: {
+          ...state.project.functions,
+          fn_upstream: {
+            ...state.project.functions.fn_upstream!,
+            outputs: [imageOutput],
+          },
+          fn_middle: {
+            ...state.project.functions.fn_middle!,
+            inputs: [pendingImageInput],
+            outputs: [imageOutput],
+          },
+          fn_leaf: {
+            ...state.project.functions.fn_leaf!,
+            inputs: [pendingImageInput],
+            outputs: [imageOutput],
+          },
+        },
+      },
+    }))
+
+    slice.getState().connectNodes('node_res_prompt', 'node_upstream')
+    const upstreamRun = slice.getState().runFunctionNodeWithComfy('node_upstream', 1)
+    await waitForState(slice, () => queuedCount === 1)
+
+    slice.getState().connectNodes('node_result_upstream', 'node_middle', {
+      sourceHandleId: 'pending:image',
+      targetInputKey: 'image',
+    })
+    await slice.getState().runFunctionNodeWithComfy('node_middle', 1)
+    slice.getState().connectNodes('node_result_middle', 'node_leaf', {
+      sourceHandleId: 'pending:image',
+      targetInputKey: 'image',
+    })
+    await slice.getState().runFunctionNodeWithComfy('node_leaf', 1)
+
+    expect(slice.getState().project.tasks.task_middle.status).toBe('pending')
+    expect(slice.getState().project.tasks.task_leaf.status).toBe('pending')
+    expect(queuedCount).toBe(1)
+
+    historyResolvers.prompt_1?.(imageHistory('prompt_1', 'upstream.png'))
+    await upstreamRun
+    await waitForState(slice, (state) => state.project.tasks.task_middle?.status === 'running')
+    expect(queuedCount).toBe(2)
+    expect(slice.getState().project.tasks.task_middle.inputRefs).toEqual({
+      image: { resourceId: 'res_img_upstream', type: 'image' },
+    })
+    expect(slice.getState().project.tasks.task_leaf.status).toBe('pending')
+
+    historyResolvers.prompt_2?.(imageHistory('prompt_2', 'middle.png'))
+    await waitForState(slice, (state) => state.project.tasks.task_leaf?.status === 'running')
+    expect(queuedCount).toBe(3)
+    expect(slice.getState().project.tasks.task_leaf.inputRefs).toEqual({
+      image: { resourceId: 'res_img_middle', type: 'image' },
+    })
+
+    historyResolvers.prompt_3?.(imageHistory('prompt_3', 'leaf.png'))
+    await waitForState(slice, (state) => state.project.tasks.task_leaf?.status === 'succeeded')
+    expect(slice.getState().project.tasks.task_leaf.outputRefs).toEqual({
+      image: [{ resourceId: 'res_img_leaf', type: 'image' }],
+    })
+  })
+
+  it('fails pending dependent runs immediately when an upstream asset task fails', async () => {
+    const ids = [
+      'res_prompt',
+      'fn_upstream',
+      'node_upstream',
+      'fn_downstream',
+      'node_downstream',
+      'task_upstream',
+      'node_result_upstream',
+      'task_downstream',
+      'node_result_downstream',
+    ]
+    let queuedCount = 0
+    let rejectHistory: (error: Error) => void = () => undefined
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now: () => '2026-05-08T09:00:00.000Z',
+      randomInt: () => 42,
+      createComfyClient: () => ({
+        queuePrompt: async () => {
+          queuedCount += 1
+          return { prompt_id: `prompt_${queuedCount}`, number: queuedCount }
+        },
+        getHistory: async () =>
+          new Promise<unknown>((_, reject) => {
+            rejectHistory = reject
+          }),
+      }),
+      comfyRunOptions: {
+        maxPollAttempts: 1,
+        pollIntervalMs: 1,
+      },
+    })
+
+    const pendingImageInput = {
+      key: 'image',
+      label: 'Image',
+      type: 'image' as const,
+      required: true,
+      bind: { nodeId: '6', nodeTitle: 'Positive Prompt', path: 'inputs.image' },
+      upload: { strategy: 'none' as const },
+    }
+    const imageOutput = {
+      key: 'image',
+      label: 'Image',
+      type: 'image' as const,
+      bind: { nodeTitle: 'Result_Image' },
+      extract: { source: 'history' as const, multiple: true },
+    }
+
+    slice.getState().addTextResource('Prompt', 'warm kitchen')
+    addTestWorkflowFunction(slice)
+    slice.getState().addFunctionNode('fn_upstream')
+    addTestWorkflowFunction(slice)
+    slice.getState().addFunctionNode('fn_downstream')
+    slice.setState((state) => ({
+      project: {
+        ...state.project,
+        functions: {
+          ...state.project.functions,
+          fn_upstream: {
+            ...state.project.functions.fn_upstream!,
+            outputs: [imageOutput],
+          },
+          fn_downstream: {
+            ...state.project.functions.fn_downstream!,
+            inputs: [pendingImageInput],
+            outputs: [imageOutput],
+          },
+        },
+      },
+    }))
+
+    slice.getState().connectNodes('node_res_prompt', 'node_upstream')
+    const upstreamRun = slice.getState().runFunctionNodeWithComfy('node_upstream', 1)
+    await waitForState(slice, () => queuedCount === 1)
+    slice.getState().connectNodes('node_result_upstream', 'node_downstream', {
+      sourceHandleId: 'pending:image',
+      targetInputKey: 'image',
+    })
+    await slice.getState().runFunctionNodeWithComfy('node_downstream', 1)
+
+    expect(slice.getState().project.tasks.task_downstream.status).toBe('pending')
+
+    rejectHistory(new Error('upstream failed'))
+    await upstreamRun
+    await waitForState(slice, (state) => state.project.tasks.task_downstream?.status === 'failed')
+
+    expect(slice.getState().project.tasks.task_downstream.error).toMatchObject({
+      code: 'dependency_failed',
+      message: expect.stringContaining('task_upstream'),
+    })
+    expect(queuedCount).toBe(1)
   })
 
   it('creates all Comfy result nodes immediately and selects the least busy endpoint per run', async () => {

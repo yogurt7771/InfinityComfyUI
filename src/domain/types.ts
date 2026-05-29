@@ -65,6 +65,14 @@ export type ResourceRef = {
   type: ResourceType
 }
 
+export type PendingResourceRef = {
+  pendingTaskId: string
+  outputKey: string
+  type: ResourceType
+}
+
+export type InputResourceRef = ResourceRef | PendingResourceRef
+
 export type PrimitiveInputValue = string | number | null
 
 export type ExecutionInputSnapshot = {
@@ -72,10 +80,12 @@ export type ExecutionInputSnapshot = {
   label: string
   type: ResourceType
   required: boolean
-  source: 'resource' | 'inline' | 'default' | 'missing'
+  source: 'resource' | 'pending' | 'inline' | 'default' | 'missing'
   value: Resource['value'] | PrimitiveInputValue
   resourceId?: string
   resourceName?: string
+  pendingTaskId?: string
+  outputKey?: string
 }
 
 export type WorkflowNode = {
@@ -385,13 +395,14 @@ export type ExecutionTask = {
     | 'compiling_workflow'
     | 'uploading_assets'
     | 'randomizing_seeds'
+    | 'pending'
     | 'queued'
     | 'running'
     | 'fetching_outputs'
     | 'succeeded'
     | 'failed'
     | 'canceled'
-  inputRefs: Record<string, ResourceRef>
+  inputRefs: Record<string, InputResourceRef>
   inputSnapshot: Record<string, Resource>
   inputValuesSnapshot?: Record<string, ExecutionInputSnapshot>
   paramsSnapshot: Record<string, unknown>

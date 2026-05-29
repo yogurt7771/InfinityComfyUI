@@ -69,7 +69,7 @@ const outputSources: FunctionOutputDef['extract']['source'][] = [
 ]
 const requestInputTargets: NonNullable<FunctionInputDef['bind']['requestTarget']>[] = ['url_param', 'header', 'body']
 
-const activeTaskStatuses = new Set<ExecutionTask['status']>(['queued', 'running', 'fetching_outputs'])
+const activeTaskStatuses = new Set<ExecutionTask['status']>(['pending', 'queued', 'running', 'fetching_outputs'])
 
 const commitActiveTextControl = () => {
   const activeElement = document.activeElement

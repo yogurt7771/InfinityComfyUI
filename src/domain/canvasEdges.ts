@@ -86,7 +86,7 @@ const sourceHandleForResult = (project: ProjectState, node: CanvasNode) => {
   if (sourceNode?.type === 'resource' || sourceNode?.type === 'result_group') {
     const taskId = typeof node.data.taskId === 'string' ? node.data.taskId : undefined
     const firstInputRef = taskId ? Object.values(project.tasks[taskId]?.inputRefs ?? {})[0] : undefined
-    if (firstInputRef) {
+    if (isResourceRef(firstInputRef)) {
       return sourceNode.type === 'result_group'
         ? resultHandleId(firstInputRef.resourceId)
         : resourceHandleId(firstInputRef.resourceId)
