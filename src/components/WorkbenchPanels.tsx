@@ -483,7 +483,7 @@ const taskServerName = (project: ProjectState, task: ExecutionTask) => {
 }
 
 const taskTypeName = (project: ProjectState, task: ExecutionTask) => {
-  const outputTypes = Object.values(task.outputRefs)
+  const outputTypes = Object.values(task.outputRefs ?? {})
     .flat()
     .map((ref) => ref.type)
   const functionOutputTypes = project.functions[task.functionId]?.outputs.map((output) => output.type) ?? []

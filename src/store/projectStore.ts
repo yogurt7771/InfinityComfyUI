@@ -2783,7 +2783,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           values[key] = snapshot.value
         }
       }
-      return { ...values, ...structuredClone(task.inputRefs) }
+      return { ...values, ...structuredClone(task.inputRefs ?? {}) }
     }
 
     const runLocalFunctionNode = async (nodeId: string, requestedRunCount?: number) => {
@@ -4737,7 +4737,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       }
 
       const now = runtime.now()
-      const inputValues = structuredClone(task.inputRefs) as RuntimeInputValues
+      const inputValues = structuredClone(task.inputRefs ?? {}) as RuntimeInputValues
       resetResultNodeForRetry(resultNodeId, taskId, now)
 
       if (isOpenAILlmFunction(functionDef)) {

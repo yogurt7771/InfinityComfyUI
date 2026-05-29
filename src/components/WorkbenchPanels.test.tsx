@@ -959,6 +959,18 @@ describe('LeftPanel', () => {
     expect(screen.getByText(/CLIPTextEncode/)).toBeVisible()
   })
 
+  it('keeps legacy task cards renderable when output refs are missing', () => {
+    const state = panelProject()
+    delete (state.tasks.task_running as { outputRefs?: unknown }).outputRefs
+    projectStore.setState({ project: state, selectedNodeId: undefined })
+
+    render(<RightPanel />)
+
+    const taskCard = screen.getByRole('button', { name: /Flux Render/ })
+    expect(within(taskCard).getByText('Flux Render')).toBeVisible()
+    expect(within(taskCard).getByText('image')).toBeVisible()
+  })
+
   it('shows project tasks only when no node is selected', () => {
     const state = panelProject()
     projectStore.setState({ project: state, selectedNodeId: undefined })
