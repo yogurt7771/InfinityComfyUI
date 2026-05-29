@@ -48,6 +48,7 @@ import type {
   ResourceType,
 } from '../domain/types'
 import { comfyProxyUrl } from '../domain/comfyProxy'
+import { loadApiWorkflowIntoComfyEditor } from '../domain/comfyEditorBridge'
 import { projectStore, useProjectStore } from '../store/projectStore'
 import { FullResourcePreviewModal } from './ResourcePreviewModal'
 
@@ -1002,6 +1003,10 @@ type ComfyFrameWindow = Window & {
     loadGraphData?: (workflow: ComfyUiWorkflow) => Promise<unknown> | unknown
     loadApiJson?: (workflow: ComfyWorkflow) => Promise<unknown> | unknown
     graph?: {
+      getNodeById?: (id: unknown) => unknown
+      _nodes?: unknown[]
+      _nodes_by_id?: Record<string, unknown>
+      change?: () => void
       serialize?: () => unknown
     }
   }
@@ -1051,7 +1056,7 @@ function ComfyWorkflowEditorDialog({
         await app.loadGraphData(initialUiJson)
         setStatus('Loaded editable ComfyUI workflow')
       } else if (initialApiJson && app.loadApiJson) {
-        await app.loadApiJson(initialApiJson)
+        await loadApiWorkflowIntoComfyEditor(app, initialApiJson)
         setStatus('Loaded API workflow into ComfyUI editor')
       } else {
         setStatus(initialUiJson ? 'ComfyUI editor ready' : 'ComfyUI editor ready. No editable UI workflow is stored yet.')

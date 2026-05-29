@@ -602,6 +602,18 @@ describe('LeftPanel', () => {
   })
 
   it('saves the selected workflow from an embedded ComfyUI editor with API and UI JSON', async () => {
+    const state = panelProject()
+    state.functions.fn_render.workflow.rawJson['20']!.inputs = {
+      ...state.functions.fn_render.workflow.rawJson['20']!.inputs,
+      images: ['6', 0],
+    }
+    projectStore.setState({
+      project: state,
+      projectLibrary: { [state.project.id]: state },
+      selectedNodeId: undefined,
+      selectedNodeIds: [],
+    } as unknown as Partial<ReturnType<typeof projectStore.getState>>)
+
     render(<SettingsPage onClose={() => undefined} />)
 
     fireEvent.click(screen.getByRole('button', { name: 'Function Management' }))
@@ -612,6 +624,12 @@ describe('LeftPanel', () => {
     const frame = within(editor).getByTitle('ComfyUI editor Local ComfyUI') as HTMLIFrameElement
     const loadGraphData = vi.fn().mockResolvedValue(undefined)
     const loadApiJson = vi.fn().mockResolvedValue(undefined)
+    const sourceNode = { id: 6, connect: vi.fn() }
+    const targetNode = { id: 20, inputs: [{ name: 'images' }] }
+    const graph = {
+      getNodeById: vi.fn((id: unknown) => (id === 6 ? sourceNode : id === 20 ? targetNode : undefined)),
+      change: vi.fn(),
+    }
     const graphToPrompt = vi.fn().mockResolvedValue({
       output: {
         '42': { class_type: 'SaveImage', _meta: { title: 'Edited Result' }, inputs: { filename_prefix: 'edited' } },
@@ -629,13 +647,14 @@ describe('LeftPanel', () => {
           graphToPrompt,
           loadGraphData,
           loadApiJson,
-          graph: { serialize: vi.fn() },
+          graph: { ...graph, serialize: vi.fn() },
         },
       },
     })
 
     fireEvent.load(frame)
     await waitFor(() => expect(loadApiJson).toHaveBeenCalledWith(projectStore.getState().project.functions.fn_render.workflow.rawJson))
+    expect(sourceNode.connect).toHaveBeenCalledWith(0, targetNode, 0)
     expect(loadGraphData).not.toHaveBeenCalled()
     fireEvent.click(within(editor).getByRole('button', { name: 'Save from ComfyUI' }))
 
