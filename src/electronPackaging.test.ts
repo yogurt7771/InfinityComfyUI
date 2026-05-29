@@ -26,6 +26,15 @@ describe('Electron packaging configuration', () => {
     expect(main).toContain("ipcMain.handle('infinity-storage:save'")
   })
 
+  it('serves the packaged app over a local HTTP origin so embedded ComfyUI can be proxied same-origin', () => {
+    const main = readFileSync(resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
+
+    expect(main).toContain("require('node:http')")
+    expect(main).toContain("'__comfy_proxy'")
+    expect(main).toContain('startAppServer')
+    expect(main).toContain('win.loadURL')
+  })
+
   it('uses the custom generated icon for browser, portable, and installer builds', () => {
     const packageJson = JSON.parse(readFileSync(resolve(__dirname, '..', 'package.json'), 'utf8')) as {
       build?: {

@@ -89,6 +89,27 @@ export type WorkflowNode = {
 
 export type ComfyWorkflow = Record<string, WorkflowNode>
 
+export type ComfyUiWorkflow = {
+  id?: string
+  revision?: number
+  last_node_id?: number
+  last_link_id?: number
+  nodes?: unknown[]
+  links?: unknown[]
+  groups?: unknown[]
+  config?: Record<string, unknown>
+  extra?: Record<string, unknown>
+  version?: string | number
+  [key: string]: unknown
+}
+
+export type ComfyWorkflowEditorMetadata = {
+  kind: 'comfyui_embedded'
+  endpointId?: string
+  baseUrl?: string
+  savedAt: string
+}
+
 export type SeedPatchRecord = {
   nodeId: string
   nodeTitle?: string
@@ -259,6 +280,8 @@ export type GenerationFunction = {
       | 'local_transform'
     version?: string
     rawJson: ComfyWorkflow
+    uiJson?: ComfyUiWorkflow
+    editor?: ComfyWorkflowEditorMetadata
   }
   openai?: OpenAILlmConfig
   gemini?: GeminiLlmConfig

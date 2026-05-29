@@ -1,5 +1,7 @@
 import type {
   ComfyWorkflow,
+  ComfyUiWorkflow,
+  ComfyWorkflowEditorMetadata,
   FunctionInputDef,
   FunctionOutputDef,
   GenerationFunction,
@@ -241,6 +243,10 @@ export function createGenerationFunctionFromWorkflow(
   name: string,
   workflow: ComfyWorkflow,
   now: string,
+  options: {
+    uiJson?: ComfyUiWorkflow
+    editor?: ComfyWorkflowEditorMetadata
+  } = {},
 ): GenerationFunction {
   const inputs = [...promptInputsForWorkflow(workflow), ...imageInputsForWorkflow(workflow)]
   const hasImageInput = inputs.some((input) => input.type === 'image')
@@ -253,6 +259,8 @@ export function createGenerationFunctionFromWorkflow(
     workflow: {
       format: 'comfyui_api_json',
       rawJson: workflow,
+      ...(options.uiJson !== undefined ? { uiJson: options.uiJson } : {}),
+      ...(options.editor !== undefined ? { editor: options.editor } : {}),
     },
     inputs,
     outputs: outputsForWorkflow(workflow),

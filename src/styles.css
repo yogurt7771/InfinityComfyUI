@@ -899,6 +899,102 @@ div.server-list-item {
   margin-top: 12px;
 }
 
+.workflow-authoring-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.workflow-authoring-actions,
+.comfy-editor-toolbar,
+.comfy-editor-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.workflow-authoring-actions {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.03);
+}
+
+.workflow-authoring-actions span,
+.comfy-editor-toolbar span,
+.comfy-editor-status {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.comfy-editor-modal {
+  width: min(1540px, calc(100vw - 28px));
+  max-height: min(940px, calc(100dvh - 28px));
+}
+
+.comfy-editor-shell {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px;
+}
+
+.comfy-editor-toolbar {
+  min-height: 54px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.comfy-editor-toolbar > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.comfy-editor-toolbar strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comfy-editor-actions {
+  justify-content: flex-end;
+  min-width: min(520px, 50%);
+}
+
+.comfy-editor-actions .field-error,
+.comfy-editor-status {
+  overflow: hidden;
+  max-width: 320px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comfy-editor-frame {
+  width: 100%;
+  height: min(760px, calc(100dvh - 160px));
+  min-height: 520px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: #f8fbfc;
+}
+
+.comfy-editor-empty {
+  display: grid;
+  place-items: center;
+  min-height: 420px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--panel);
+}
+
 .primary-action {
   border-color: var(--dark-action);
   color: #fff;

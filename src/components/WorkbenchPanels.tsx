@@ -32,6 +32,8 @@ import { getNodeRunHistory } from '../domain/runHistory'
 import { collectProjectAssetFiles, hydrateProjectAssetFiles, type ProjectAssetFileEntry } from '../domain/projectAssets'
 import type {
   ComfyEndpointConfig,
+  ComfyUiWorkflow,
+  ComfyWorkflowEditorMetadata,
   ComfyWorkflow,
   ExecutionInputSnapshot,
   ExecutionTask,
@@ -45,6 +47,7 @@ import type {
   Resource,
   ResourceType,
 } from '../domain/types'
+import { comfyProxyUrl } from '../domain/comfyProxy'
 import { projectStore, useProjectStore } from '../store/projectStore'
 import { FullResourcePreviewModal } from './ResourcePreviewModal'
 
@@ -564,9 +567,14 @@ function ModalShell({
 
 type FunctionManagerProps = {
   functions: GenerationFunction[]
+  comfyEndpoints: ComfyEndpointConfig[]
   selectedFunctionId?: string
   onSelectFunction: (functionId: string | undefined) => void
-  onAddWorkflow: (name: string, workflow: ComfyWorkflow) => string | undefined
+  onAddWorkflow: (
+    name: string,
+    workflow: ComfyWorkflow,
+    options?: { uiJson?: ComfyUiWorkflow; editor?: ComfyWorkflowEditorMetadata },
+  ) => string | undefined
   onAddRequestFunction: (name: string, config: Partial<RequestFunctionConfig>) => string | undefined
   onAddOpenAIFunction: (name: string, config: Partial<OpenAILlmConfig>) => string | undefined
   onAddGeminiFunction: (name: string, config: Partial<GeminiLlmConfig>) => string | undefined
@@ -982,22 +990,163 @@ const parseHeaderJson = (value: string) => {
   return Object.fromEntries(Object.entries(parsed).map(([key, headerValue]) => [key, String(headerValue)]))
 }
 
+type EmbeddedComfySave = {
+  rawJson: ComfyWorkflow
+  uiJson?: ComfyUiWorkflow
+  editor: ComfyWorkflowEditorMetadata
+}
+
+type ComfyFrameWindow = Window & {
+  app?: {
+    graphToPrompt?: () => Promise<{ output?: unknown; workflow?: unknown }> | { output?: unknown; workflow?: unknown }
+    loadGraphData?: (workflow: ComfyUiWorkflow) => Promise<unknown> | unknown
+    loadApiJson?: (workflow: ComfyWorkflow) => Promise<unknown> | unknown
+    graph?: {
+      serialize?: () => unknown
+    }
+  }
+}
+
+const enabledComfyEndpoint = (endpoints: ComfyEndpointConfig[]) => endpoints.find((endpoint) => endpoint.enabled) ?? endpoints[0]
+
+const plainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+
+const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
+
+async function waitForComfyFrameApp(frame: HTMLIFrameElement) {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const frameWindow = frame.contentWindow as ComfyFrameWindow | null
+    const app = frameWindow?.app
+    if (app?.graphToPrompt) return app
+    await wait(150)
+  }
+  throw new Error('ComfyUI editor is not ready yet')
+}
+
+function ComfyWorkflowEditorDialog({
+  endpoint,
+  initialUiJson,
+  initialApiJson,
+  onSave,
+  onClose,
+}: {
+  endpoint?: ComfyEndpointConfig
+  initialUiJson?: ComfyUiWorkflow
+  initialApiJson?: ComfyWorkflow
+  onSave: (value: EmbeddedComfySave) => void
+  onClose: () => void
+}) {
+  const frameRef = useRef<HTMLIFrameElement>(null)
+  const [status, setStatus] = useState(endpoint ? 'Loading ComfyUI editor' : 'No ComfyUI endpoint configured')
+  const [error, setError] = useState<string>()
+  const [saving, setSaving] = useState(false)
+  const proxyUrl = endpoint ? comfyProxyUrl(endpoint.baseUrl) : undefined
+
+  const initializeFrame = async () => {
+    if (!frameRef.current || !endpoint) return
+    try {
+      const app = await waitForComfyFrameApp(frameRef.current)
+      if (initialUiJson && app.loadGraphData) {
+        await app.loadGraphData(initialUiJson)
+        setStatus('Loaded editable ComfyUI workflow')
+      } else if (initialApiJson && app.loadApiJson) {
+        await app.loadApiJson(initialApiJson)
+        setStatus('Loaded API workflow into ComfyUI editor')
+      } else {
+        setStatus(initialUiJson ? 'ComfyUI editor ready' : 'ComfyUI editor ready. No editable UI workflow is stored yet.')
+      }
+      setError(undefined)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to initialize ComfyUI editor')
+    }
+  }
+
+  const saveFromComfy = async () => {
+    if (!frameRef.current || !endpoint) return
+    setSaving(true)
+    try {
+      const app = await waitForComfyFrameApp(frameRef.current)
+      const exported = await app.graphToPrompt?.()
+      if (!plainObject(exported?.output)) throw new Error('ComfyUI did not return an API workflow')
+      const serialized = plainObject(exported.workflow) ? exported.workflow : app.graph?.serialize?.()
+      onSave({
+        rawJson: exported.output as ComfyWorkflow,
+        uiJson: plainObject(serialized) ? (serialized as ComfyUiWorkflow) : undefined,
+        editor: {
+          kind: 'comfyui_embedded',
+          endpointId: endpoint.id,
+          baseUrl: endpoint.baseUrl,
+          savedAt: new Date().toISOString(),
+        },
+      })
+      setError(undefined)
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to export workflow from ComfyUI')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <ModalShell label="ComfyUI Workflow Editor" modalClassName="comfy-editor-modal" onClose={onClose}>
+      <div className="comfy-editor-shell">
+        <div className="comfy-editor-toolbar">
+          <div>
+            <strong>{endpoint?.name ?? 'ComfyUI'}</strong>
+            <span>{endpoint?.baseUrl ?? 'Configure a ComfyUI server first'}</span>
+          </div>
+          <div className="comfy-editor-actions">
+            <span className={error ? 'field-error' : 'comfy-editor-status'}>{error ?? status}</span>
+            <button type="button" onClick={saveFromComfy} disabled={!endpoint || saving}>
+              {saving ? 'Saving...' : 'Save from ComfyUI'}
+            </button>
+          </div>
+        </div>
+        {proxyUrl ? (
+          <iframe
+            ref={frameRef}
+            title={`ComfyUI editor ${endpoint?.name ?? ''}`.trim()}
+            className="comfy-editor-frame"
+            src={proxyUrl}
+            onLoad={() => {
+              void initializeFrame()
+            }}
+          />
+        ) : (
+          <div className="comfy-editor-empty">No ComfyUI endpoint is available.</div>
+        )}
+      </div>
+    </ModalShell>
+  )
+}
+
 function NewFunctionDialog({
   onSaveComfy,
   onSaveRequest,
   onSaveOpenAI,
   onSaveGemini,
+  comfyEndpoints,
   onClose,
 }: {
-  onSaveComfy: (name: string, workflow: ComfyWorkflow) => string | undefined
+  onSaveComfy: (
+    name: string,
+    workflow: ComfyWorkflow,
+    options?: { uiJson?: ComfyUiWorkflow; editor?: ComfyWorkflowEditorMetadata },
+  ) => string | undefined
   onSaveRequest: (name: string, config: Partial<RequestFunctionConfig>) => string | undefined
   onSaveOpenAI: (name: string, config: Partial<OpenAILlmConfig>) => string | undefined
   onSaveGemini: (name: string, config: Partial<GeminiLlmConfig>) => string | undefined
+  comfyEndpoints: ComfyEndpointConfig[]
   onClose: () => void
 }) {
   const [functionType, setFunctionType] = useState<NewFunctionType>('comfyui')
   const [functionName, setFunctionName] = useState('')
   const [workflowJson, setWorkflowJson] = useState('')
+  const [workflowUiJson, setWorkflowUiJson] = useState<ComfyUiWorkflow>()
+  const [workflowEditor, setWorkflowEditor] = useState<ComfyWorkflowEditorMetadata>()
+  const [comfyEditorOpen, setComfyEditorOpen] = useState(false)
   const [requestUrl, setRequestUrl] = useState('https://example.com/api')
   const [requestMethod, setRequestMethod] = useState('GET')
   const [requestHeaders, setRequestHeaders] = useState('{\n}')
@@ -1015,6 +1164,7 @@ function NewFunctionDialog({
   const [geminiModel, setGeminiModel] = useState(defaultGeminiConfig.model)
   const [geminiMessagesJson, setGeminiMessagesJson] = useState(JSON.stringify(defaultGeminiConfig.messages, null, 2))
   const [error, setError] = useState<string>()
+  const selectedComfyEndpoint = enabledComfyEndpoint(comfyEndpoints)
 
   const formatWorkflowJson = () => {
     if (functionType === 'request') {
@@ -1084,7 +1234,10 @@ function NewFunctionDialog({
           messages: JSON.parse(geminiMessagesJson) as GeminiLlmConfig['messages'],
         })
       } else {
-        functionId = onSaveComfy(name, JSON.parse(workflowJson) as ComfyWorkflow)
+        functionId = onSaveComfy(name, JSON.parse(workflowJson) as ComfyWorkflow, {
+          ...(workflowUiJson !== undefined ? { uiJson: workflowUiJson } : {}),
+          ...(workflowEditor !== undefined ? { editor: workflowEditor } : {}),
+        })
       }
       if (functionId) onClose()
       setError(undefined)
@@ -1093,7 +1246,23 @@ function NewFunctionDialog({
     }
   }
 
+  const saveEmbeddedWorkflow = (value: EmbeddedComfySave) => {
+    setWorkflowJson(JSON.stringify(value.rawJson, null, 2))
+    setWorkflowUiJson(value.uiJson)
+    setWorkflowEditor(value.editor)
+    setError(undefined)
+  }
+  const embeddedInitialApiJson = useMemo(() => {
+    if (!workflowJson.trim()) return undefined
+    try {
+      return JSON.parse(workflowJson) as ComfyWorkflow
+    } catch {
+      return undefined
+    }
+  }, [workflowJson])
+
   return (
+    <Fragment>
     <ModalShell label="New Function" modalClassName="new-workflow-modal" onClose={onClose}>
       <div className="new-workflow-dialog">
         <label className="field">
@@ -1119,19 +1288,30 @@ function NewFunctionDialog({
           />
         </label>
         {functionType === 'comfyui' ? (
-          <label className="field">
-            <span>Workflow JSON</span>
-            <textarea
-              aria-invalid={error ? true : undefined}
-              aria-label="Workflow JSON"
-              value={workflowJson}
-              onChange={(event) => {
-                setWorkflowJson(event.target.value)
-                setError(undefined)
-              }}
-              rows={12}
-            />
-          </label>
+          <div className="workflow-authoring-stack">
+            <div className="workflow-authoring-actions">
+              <button type="button" onClick={() => setComfyEditorOpen(true)} disabled={!selectedComfyEndpoint}>
+                <Network size={14} />
+                Edit in ComfyUI
+              </button>
+              <span>{workflowUiJson ? 'Editable ComfyUI graph saved' : 'Paste API JSON or edit in ComfyUI'}</span>
+            </div>
+            <label className="field">
+              <span>Workflow JSON</span>
+              <textarea
+                aria-invalid={error ? true : undefined}
+                aria-label="Workflow JSON"
+                value={workflowJson}
+                onChange={(event) => {
+                  setWorkflowJson(event.target.value)
+                  setWorkflowUiJson(undefined)
+                  setWorkflowEditor(undefined)
+                  setError(undefined)
+                }}
+                rows={12}
+              />
+            </label>
+          </div>
         ) : functionType === 'request' ? (
           <>
             <div className="manager-grid">
@@ -1316,11 +1496,22 @@ function NewFunctionDialog({
         </div>
       </div>
     </ModalShell>
+    {comfyEditorOpen ? (
+      <ComfyWorkflowEditorDialog
+        endpoint={selectedComfyEndpoint}
+        initialUiJson={workflowUiJson}
+        initialApiJson={embeddedInitialApiJson}
+        onSave={saveEmbeddedWorkflow}
+        onClose={() => setComfyEditorOpen(false)}
+      />
+    ) : null}
+    </Fragment>
   )
 }
 
 function FunctionManager({
   functions,
+  comfyEndpoints,
   selectedFunctionId,
   onSelectFunction,
   onAddWorkflow,
@@ -1333,6 +1524,7 @@ function FunctionManager({
 }: FunctionManagerProps) {
   const selectedFunction = functions.find((fn) => fn.id === selectedFunctionId) ?? functions[0]
   const [createFunctionOpen, setCreateFunctionOpen] = useState(false)
+  const [comfyEditorOpen, setComfyEditorOpen] = useState(false)
   const [selectedWorkflowDraft, setSelectedWorkflowDraft] = useState<WorkflowJsonDraft>({ value: '' })
   const [requestHeaderError, setRequestHeaderError] = useState<string>()
   const selectedWorkflowSource = selectedFunction ? JSON.stringify(selectedFunction.workflow.rawJson, null, 2) : ''
@@ -1353,6 +1545,7 @@ function FunctionManager({
     : undefined
   const [openAiMessagesError, setOpenAiMessagesError] = useState<string>()
   const [geminiMessagesError, setGeminiMessagesError] = useState<string>()
+  const selectedComfyEndpoint = enabledComfyEndpoint(comfyEndpoints)
 
   const deleteSelectedFunction = () => {
     if (!selectedFunction) return
@@ -1462,6 +1655,20 @@ function FunctionManager({
         error: `Invalid workflow JSON: ${err instanceof Error ? err.message : 'Invalid JSON'}`,
       })
     }
+  }
+
+  const saveSelectedEmbeddedWorkflow = (value: EmbeddedComfySave) => {
+    if (!selectedFunction) return
+    const formatted = JSON.stringify(value.rawJson, null, 2)
+    onUpdateFunction(selectedFunction.id, {
+      workflow: {
+        ...selectedFunction.workflow,
+        rawJson: value.rawJson,
+        uiJson: value.uiJson,
+        editor: value.editor,
+      },
+    })
+    setSelectedWorkflowDraft({ functionId: selectedFunction.id, value: formatted })
   }
 
   const updateRequestConfig = (patch: Partial<RequestFunctionConfig>) => {
@@ -1773,6 +1980,10 @@ function FunctionManager({
                     <h4>Workflow JSON</h4>
                     <div className="json-toolbar compact-json-toolbar">
                       {selectedWorkflowJsonError ? <span className="field-error">{selectedWorkflowJsonError}</span> : null}
+                      <button type="button" onClick={() => setComfyEditorOpen(true)} disabled={!selectedComfyEndpoint}>
+                        <Network size={14} />
+                        Edit in ComfyUI
+                      </button>
                       <button type="button" onClick={formatSelectedWorkflowJson}>
                         Format selected JSON
                       </button>
@@ -2094,9 +2305,10 @@ function FunctionManager({
       </div>
       {createFunctionOpen ? (
         <NewFunctionDialog
+          comfyEndpoints={comfyEndpoints}
           onClose={() => setCreateFunctionOpen(false)}
-          onSaveComfy={(name, workflow) => {
-            const functionId = onAddWorkflow(name, workflow)
+          onSaveComfy={(name, workflow, options) => {
+            const functionId = onAddWorkflow(name, workflow, options)
             if (functionId) onSelectFunction(functionId)
             return functionId
           }}
@@ -2115,6 +2327,15 @@ function FunctionManager({
             if (functionId) onSelectFunction(functionId)
             return functionId
           }}
+        />
+      ) : null}
+      {comfyEditorOpen && selectedFunction && !selectedIsRequest && !selectedIsProvider ? (
+        <ComfyWorkflowEditorDialog
+          endpoint={selectedComfyEndpoint}
+          initialUiJson={selectedFunction.workflow.uiJson}
+          initialApiJson={selectedFunction.workflow.rawJson}
+          onSave={saveSelectedEmbeddedWorkflow}
+          onClose={() => setComfyEditorOpen(false)}
         />
       ) : null}
     </ModalShell>
@@ -2360,9 +2581,13 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
     return Object.values(projects).sort((left, right) => left.project.name.localeCompare(right.project.name))
   }, [project, projectLibrary])
 
-  const handleWorkflowAdd = (name: string, workflow: ComfyWorkflow) => {
+  const handleWorkflowAdd = (
+    name: string,
+    workflow: ComfyWorkflow,
+    options?: { uiJson?: ComfyUiWorkflow; editor?: ComfyWorkflowEditorMetadata },
+  ) => {
     try {
-      const functionId = addFunctionFromWorkflow(name.trim() || 'ComfyUI Workflow', workflow)
+      const functionId = addFunctionFromWorkflow(name.trim() || 'ComfyUI Workflow', workflow, options)
       setError(undefined)
       return functionId
     } catch (err) {
@@ -2565,6 +2790,7 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
       {functionManagerOpen ? (
         <FunctionManager
           functions={managedFunctions}
+          comfyEndpoints={project.comfy.endpoints}
           selectedFunctionId={selectedFunctionId}
           onSelectFunction={setSelectedFunctionId}
           onAddWorkflow={handleWorkflowAdd}

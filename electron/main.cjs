@@ -1,4 +1,5 @@
 const { app, BrowserWindow, ipcMain, shell } = require('electron')
+const http = require('node:http')
 const fs = require('node:fs/promises')
 const path = require('node:path')
 const { hydrateProjectAssets } = require('./projectAssetStorage.cjs')
@@ -6,6 +7,10 @@ const { hydrateProjectAssets } = require('./projectAssetStorage.cjs')
 const PROJECTS_FOLDER = 'projects'
 const CONFIG_FOLDER = 'config'
 const ASSETS_FOLDER = 'assets'
+const COMFY_PROXY_SEGMENT = '__comfy_proxy'
+const COMFY_PROXY_PREFIX = `/${COMFY_PROXY_SEGMENT}/`
+let localAppServer
+let localAppServerUrl
 
 const safeSegment = (value, fallback) => {
   const cleaned = String(value ?? '')
@@ -90,6 +95,203 @@ const fileExtension = (filename, mimeType) => path.extname(filename || '') || ex
 
 const appIconPath = () =>
   app.isPackaged ? path.join(process.resourcesPath, 'icon.ico') : path.join(__dirname, '..', 'build', 'icon.ico')
+
+const normalizedComfyBaseUrl = (baseUrl) => {
+  const parsed = new URL(baseUrl)
+  parsed.hash = ''
+  parsed.search = ''
+  return parsed.toString().replace(/\/+$/, '')
+}
+
+const blockedProxyHeaders = new Set([
+  'connection',
+  'content-encoding',
+  'content-length',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+])
+
+const readRequestBody = (request) =>
+  new Promise((resolve, reject) => {
+    const chunks = []
+    request.on('data', (chunk) => chunks.push(Buffer.from(chunk)))
+    request.on('end', () => resolve(Buffer.concat(chunks)))
+    request.on('error', reject)
+  })
+
+const proxyRequestHeaders = (request) => {
+  const headers = new Headers()
+  for (const [key, value] of Object.entries(request.headers)) {
+    if (blockedProxyHeaders.has(key.toLowerCase())) continue
+    if (Array.isArray(value)) {
+      for (const item of value) headers.append(key, item)
+    } else if (value !== undefined) {
+      headers.set(key, value)
+    }
+  }
+  return headers
+}
+
+const comfyProxyBridge = (proxyBase, targetBase) => `<script>
+(() => {
+  const proxyBase = ${JSON.stringify(proxyBase)};
+  const targetBase = ${JSON.stringify(targetBase)};
+  const route = (value) => {
+    const raw = String(value);
+    if (raw.startsWith(proxyBase) || raw.startsWith('data:') || raw.startsWith('blob:')) return raw;
+    if (raw.startsWith('/')) return proxyBase + raw.slice(1);
+    try {
+      const parsed = new URL(raw, location.href);
+      if (parsed.origin === location.origin && !parsed.pathname.startsWith(proxyBase)) {
+        return proxyBase + parsed.pathname.replace(/^\\//, '') + parsed.search + parsed.hash;
+      }
+    } catch {}
+    return raw;
+  };
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    if (typeof input === 'string' || input instanceof URL) return nativeFetch(route(input), init);
+    if (input instanceof Request) {
+      const next = route(input.url);
+      return nativeFetch(next === input.url ? input : new Request(next, input), init);
+    }
+    return nativeFetch(input, init);
+  };
+  const NativeXHR = window.XMLHttpRequest;
+  window.XMLHttpRequest = function XMLHttpRequest() {
+    const xhr = new NativeXHR();
+    const open = xhr.open;
+    xhr.open = function(method, url, ...rest) {
+      return open.call(xhr, method, route(url), ...rest);
+    };
+    return xhr;
+  };
+  const NativeWebSocket = window.WebSocket;
+  window.WebSocket = function WebSocket(url, protocols) {
+    let next = String(url);
+    try {
+      const parsed = new URL(next, location.href);
+      if ((parsed.protocol === 'ws:' || parsed.protocol === 'wss:') && parsed.host === location.host) {
+        const target = new URL(targetBase);
+        target.protocol = target.protocol === 'https:' ? 'wss:' : 'ws:';
+        target.pathname = parsed.pathname;
+        target.search = parsed.search;
+        next = target.toString();
+      }
+    } catch {}
+    return protocols === undefined ? new NativeWebSocket(next) : new NativeWebSocket(next, protocols);
+  };
+  window.WebSocket.prototype = NativeWebSocket.prototype;
+})();
+</script>`
+
+const injectComfyProxyBridge = (html, proxyBase, targetBase) => {
+  const bridge = comfyProxyBridge(proxyBase, targetBase)
+  return html.includes('</head>') ? html.replace('</head>', `${bridge}</head>`) : `${bridge}${html}`
+}
+
+const serveComfyProxy = async (request, response, requestUrl) => {
+  const pathAfterPrefix = requestUrl.pathname.slice(COMFY_PROXY_PREFIX.length)
+  const slashIndex = pathAfterPrefix.indexOf('/')
+  const encodedBaseUrl = slashIndex === -1 ? pathAfterPrefix : pathAfterPrefix.slice(0, slashIndex)
+  const targetPath = slashIndex === -1 ? '/' : pathAfterPrefix.slice(slashIndex) || '/'
+  const targetBase = normalizedComfyBaseUrl(decodeURIComponent(encodedBaseUrl))
+  const targetUrl = new URL(targetPath, `${targetBase}/`)
+  targetUrl.search = requestUrl.search
+  const hasBody = request.method !== 'GET' && request.method !== 'HEAD'
+  const proxied = await fetch(targetUrl, {
+    method: request.method,
+    headers: proxyRequestHeaders(request),
+    body: hasBody ? await readRequestBody(request) : undefined,
+    redirect: 'manual',
+  })
+  const contentType = proxied.headers.get('content-type') ?? ''
+
+  response.statusCode = proxied.status
+  proxied.headers.forEach((value, key) => {
+    if (!blockedProxyHeaders.has(key.toLowerCase())) response.setHeader(key, value)
+  })
+  response.setHeader('Access-Control-Allow-Origin', '*')
+
+  if (contentType.includes('text/html')) {
+    response.setHeader('content-type', 'text/html; charset=utf-8')
+    response.end(injectComfyProxyBridge(await proxied.text(), `${COMFY_PROXY_PREFIX}${encodedBaseUrl}/`, targetBase))
+    return
+  }
+
+  response.end(Buffer.from(await proxied.arrayBuffer()))
+}
+
+const mimeTypeFor = (filePath) => {
+  const extension = path.extname(filePath).toLowerCase()
+  if (extension === '.html') return 'text/html; charset=utf-8'
+  if (extension === '.js' || extension === '.mjs') return 'text/javascript; charset=utf-8'
+  if (extension === '.css') return 'text/css; charset=utf-8'
+  if (extension === '.json') return 'application/json; charset=utf-8'
+  if (extension === '.svg') return 'image/svg+xml'
+  if (extension === '.png') return 'image/png'
+  if (extension === '.ico') return 'image/x-icon'
+  if (extension === '.webp') return 'image/webp'
+  if (extension === '.woff2') return 'font/woff2'
+  return 'application/octet-stream'
+}
+
+const serveStaticApp = async (response, requestPath) => {
+  const distDir = path.join(__dirname, '..', 'dist')
+  const decodedPath = decodeURIComponent(requestPath)
+  const relativePath = decodedPath === '/' ? 'index.html' : decodedPath.replace(/^\/+/, '')
+  const candidatePath = path.normalize(path.join(distDir, relativePath))
+  const safePath = candidatePath.startsWith(distDir) ? candidatePath : path.join(distDir, 'index.html')
+
+  try {
+    const content = await fs.readFile(safePath)
+    response.setHeader('content-type', mimeTypeFor(safePath))
+    response.end(content)
+  } catch {
+    const html = await fs.readFile(path.join(distDir, 'index.html'))
+    response.setHeader('content-type', 'text/html; charset=utf-8')
+    response.end(html)
+  }
+}
+
+const startAppServer = () =>
+  new Promise((resolve, reject) => {
+    if (localAppServerUrl) {
+      resolve(localAppServerUrl)
+      return
+    }
+    localAppServer = http.createServer((request, response) => {
+      void (async () => {
+        try {
+          const requestUrl = new URL(request.url || '/', 'http://127.0.0.1')
+          if (requestUrl.pathname.startsWith(COMFY_PROXY_PREFIX)) {
+            await serveComfyProxy(request, response, requestUrl)
+            return
+          }
+          await serveStaticApp(response, requestUrl.pathname)
+        } catch (err) {
+          response.statusCode = 502
+          response.setHeader('content-type', 'text/plain; charset=utf-8')
+          response.end(err instanceof Error ? err.message : 'Infinity app server failed')
+        }
+      })()
+    })
+    localAppServer.on('error', reject)
+    localAppServer.listen(0, '127.0.0.1', () => {
+      const address = localAppServer.address()
+      if (!address || typeof address === 'string') {
+        reject(new Error('Unable to start local app server'))
+        return
+      }
+      localAppServerUrl = `http://127.0.0.1:${address.port}/`
+      resolve(localAppServerUrl)
+    })
+  })
 
 const mediaValue = (resource) => {
   const value = resource?.value
@@ -266,7 +468,8 @@ const loadProjectLibrary = async () => {
 ipcMain.handle('infinity-storage:load', loadProjectLibrary)
 ipcMain.handle('infinity-storage:save', (_event, payload) => saveProjectLibrary(payload))
 
-function createWindow() {
+async function createWindow() {
+  const appUrl = await startAppServer()
   const win = new BrowserWindow({
     width: 1440,
     height: 920,
@@ -288,17 +491,22 @@ function createWindow() {
     return { action: 'deny' }
   })
 
-  win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
+  win.loadURL(appUrl)
 }
 
 app.whenReady().then(() => {
-  createWindow()
+  void createWindow()
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (BrowserWindow.getAllWindows().length === 0) void createWindow()
   })
 })
 
 app.on('window-all-closed', () => {
+  if (localAppServer) {
+    localAppServer.close()
+    localAppServer = undefined
+    localAppServerUrl = undefined
+  }
   if (process.platform !== 'darwin') app.quit()
 })

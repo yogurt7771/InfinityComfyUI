@@ -61,6 +61,8 @@ import type {
   CanvasEdge,
   CanvasNode,
   ComfyEndpointConfig,
+  ComfyUiWorkflow,
+  ComfyWorkflowEditorMetadata,
   ComfyWorkflow,
   ExecutionInputSnapshot,
   ExecutionTask,
@@ -250,7 +252,11 @@ export type ProjectStoreState = {
   updateTextResourceValue: (resourceId: string, value: string) => void
   updateNumberResourceValue: (resourceId: string, value: number) => void
   replaceResourceMedia: (resourceId: string, type: MediaResourceKind, media: MediaResourcePayload) => void
-  addFunctionFromWorkflow: (name: string, workflow: ComfyWorkflow) => string
+  addFunctionFromWorkflow: (
+    name: string,
+    workflow: ComfyWorkflow,
+    options?: { uiJson?: ComfyUiWorkflow; editor?: ComfyWorkflowEditorMetadata },
+  ) => string
   addRequestFunction: (name: string, config?: Partial<RequestFunctionConfig>) => string
   addOpenAILlmFunction: (name: string, config?: Partial<OpenAILlmConfig>) => string
   addGeminiLlmFunction: (name: string, config?: Partial<GeminiLlmConfig>) => string
@@ -3881,10 +3887,10 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       })
     },
 
-    addFunctionFromWorkflow: (name, workflow) => {
+    addFunctionFromWorkflow: (name, workflow, options) => {
       const id = runtime.idFactory()
       const now = runtime.now()
-      const generationFunction = createGenerationFunctionFromWorkflow(id, name, workflow, now)
+      const generationFunction = createGenerationFunctionFromWorkflow(id, name, workflow, now, options)
 
       set((state) => ({
         project: {

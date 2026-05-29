@@ -282,6 +282,41 @@ describe('workflow helpers', () => {
     expect(fn.category).toBe('Edit')
   })
 
+  it('stores ComfyUI UI workflow metadata alongside the runnable API workflow', () => {
+    const apiWorkflow = {
+      '9': {
+        class_type: 'SaveImage',
+        _meta: { title: 'Save Image' },
+        inputs: { filename_prefix: 'flux' },
+      },
+    }
+    const uiWorkflow = {
+      id: 'ui_workflow_1',
+      nodes: [{ id: 9, type: 'SaveImage', pos: [120, 80] }],
+      links: [],
+      version: 0.4,
+    }
+
+    const fn = createGenerationFunctionFromWorkflow('fn_1', 'Embedded Comfy', apiWorkflow, '2026-05-08T09:00:00.000Z', {
+      uiJson: uiWorkflow,
+      editor: {
+        kind: 'comfyui_embedded',
+        endpointId: 'endpoint_local',
+        baseUrl: 'http://127.0.0.1:27707',
+        savedAt: '2026-05-08T09:01:00.000Z',
+      },
+    })
+
+    expect(fn.workflow.rawJson).toEqual(apiWorkflow)
+    expect(fn.workflow.uiJson).toEqual(uiWorkflow)
+    expect(fn.workflow.editor).toEqual({
+      kind: 'comfyui_embedded',
+      endpointId: 'endpoint_local',
+      baseUrl: 'http://127.0.0.1:27707',
+      savedAt: '2026-05-08T09:01:00.000Z',
+    })
+  })
+
   it('infers image, video, audio, and text output bindings from common output nodes', () => {
     const fn = createGenerationFunctionFromWorkflow('fn_1', 'Mixed Outputs', {
       '9': { class_type: 'SaveImage', _meta: { title: 'Save Image' }, inputs: {} },

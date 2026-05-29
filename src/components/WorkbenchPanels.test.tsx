@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LeftPanel, RightPanel, SettingsPage, highlightedJson } from './WorkbenchPanels'
 import { projectStore } from '../store/projectStore'
@@ -599,6 +599,61 @@ describe('LeftPanel', () => {
 
     expect(selectedWorkflowJson).toHaveAttribute('aria-invalid', 'true')
     expect(within(dialog).getByText(/Invalid workflow JSON/)).toBeVisible()
+  })
+
+  it('saves the selected workflow from an embedded ComfyUI editor with API and UI JSON', async () => {
+    render(<SettingsPage onClose={() => undefined} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Function Management' }))
+    const dialog = screen.getByRole('dialog', { name: 'Function Management' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Edit in ComfyUI' }))
+
+    const editor = await screen.findByRole('dialog', { name: 'ComfyUI Workflow Editor' })
+    const frame = within(editor).getByTitle('ComfyUI editor Local ComfyUI') as HTMLIFrameElement
+    const loadGraphData = vi.fn().mockResolvedValue(undefined)
+    const loadApiJson = vi.fn().mockResolvedValue(undefined)
+    const graphToPrompt = vi.fn().mockResolvedValue({
+      output: {
+        '42': { class_type: 'SaveImage', _meta: { title: 'Edited Result' }, inputs: { filename_prefix: 'edited' } },
+      },
+      workflow: {
+        id: 'comfy_ui_workflow',
+        nodes: [{ id: 42, type: 'SaveImage', pos: [100, 120] }],
+        links: [],
+      },
+    })
+    Object.defineProperty(frame, 'contentWindow', {
+      configurable: true,
+      value: {
+        app: {
+          graphToPrompt,
+          loadGraphData,
+          loadApiJson,
+          graph: { serialize: vi.fn() },
+        },
+      },
+    })
+
+    fireEvent.load(frame)
+    await waitFor(() => expect(loadApiJson).toHaveBeenCalledWith(projectStore.getState().project.functions.fn_render.workflow.rawJson))
+    expect(loadGraphData).not.toHaveBeenCalled()
+    fireEvent.click(within(editor).getByRole('button', { name: 'Save from ComfyUI' }))
+
+    await waitFor(() =>
+      expect(projectStore.getState().project.functions.fn_render.workflow.rawJson).toEqual({
+        '42': { class_type: 'SaveImage', _meta: { title: 'Edited Result' }, inputs: { filename_prefix: 'edited' } },
+      }),
+    )
+    expect(projectStore.getState().project.functions.fn_render.workflow.uiJson).toEqual({
+      id: 'comfy_ui_workflow',
+      nodes: [{ id: 42, type: 'SaveImage', pos: [100, 120] }],
+      links: [],
+    })
+    expect(projectStore.getState().project.functions.fn_render.workflow.editor).toMatchObject({
+      kind: 'comfyui_embedded',
+      endpointId: 'endpoint_local',
+      baseUrl: 'http://127.0.0.1:27707',
+    })
   })
 
   it('shows ComfyUI server status on the right panel and edits servers in management', () => {
