@@ -80,10 +80,11 @@ npm run export:dist
 - `docker-compose.yaml`
 - `.env`
 - `start.ps1` / `start.bat` / `stop.ps1`
+- `start.sh` / `stop.sh`
 - `images/*.tar` Docker 镜像包
 - `manifest.json`
 
-默认会导出 `packaging/release.env` 中 `RELEASE_IMAGE_REFS` 指定的两个镜像。目标机器进入 `dist/` 后运行 `start.ps1` 即可加载镜像并启动发布版 Compose 里的所有服务。
+默认会先重建 `INFINITY_COMFYUI_IMAGE`，再导出 `packaging/release.env` 中 `RELEASE_IMAGE_REFS` 指定的两个镜像。目标机器进入 `dist/` 后运行 `start.ps1` 或 `start.sh` 即可加载镜像并启动发布版 Compose 里的所有服务。
 
 ### Windows 桌面版本
 
@@ -355,6 +356,8 @@ Settings 中提供：
 git tag v0.1.0
 git push origin v0.1.0
 ```
+
+Docker 发布目录通过本地 `npm run export:dist` 生成，因为它会打包 `packaging/release.env` 指定的本机 Docker 镜像；如果其中的外部镜像没有公开 registry 地址，GitHub Actions runner 无法自动生成同等的离线镜像包。
 
 ## 常见问题
 
