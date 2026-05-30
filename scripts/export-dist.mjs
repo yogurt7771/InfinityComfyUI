@@ -83,11 +83,6 @@ function writeReleaseCompose() {
       COMFY_PROXY_LOOPBACK_HOST: \${COMFY_PROXY_LOOPBACK_HOST:-host.docker.internal}
     extra_hosts:
       - "host.docker.internal:host-gateway"
-  comfyui-ui-to-api-server:
-    image: \${COMFYUI_UI_TO_API_IMAGE:-comfyui-ui-to-api-server:latest}
-    container_name: comfyui-ui-to-api-server
-    ports:
-      - "\${COMFYUI_UI_TO_API_PORT:-28188}:28188"
 `,
     'utf8',
   )

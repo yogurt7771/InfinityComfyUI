@@ -85,7 +85,7 @@ npm run export:dist
 - `images/*.tar` Docker 镜像包
 - `manifest.json`
 
-默认会先重建 `INFINITY_COMFYUI_IMAGE`，再导出 `packaging/release.env` 中 `RELEASE_IMAGE_REFS` 指定的两个镜像。目标机器进入 `dist/` 后运行 `start.ps1` 或 `start.sh` 即可加载镜像并启动发布版 Compose 里的所有服务。
+默认会先重建 `INFINITY_COMFYUI_IMAGE`，再导出 `packaging/release.env` 中 `RELEASE_IMAGE_REFS` 指定的镜像。目标机器进入 `dist/` 后运行 `start.ps1` 或 `start.sh` 即可加载镜像并启动发布版 Compose 服务。
 
 ### Windows 桌面版本
 
@@ -358,7 +358,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-Docker 发布目录通过本地 `npm run export:dist` 生成，因为它会打包 `packaging/release.env` 指定的本机 Docker 镜像；如果其中的外部镜像没有公开 registry 地址，GitHub Actions runner 无法自动生成同等的离线镜像包。
+Docker 发布目录通过本地 `npm run export:dist` 生成，因为它会打包 `packaging/release.env` 指定的本机 Docker 镜像；如果你在 `RELEASE_IMAGE_REFS` 中额外加入未公开的外部镜像，GitHub Actions runner 无法自动生成同等的离线镜像包。
 
 ## 常见问题
 
