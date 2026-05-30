@@ -17,12 +17,12 @@ WORKDIR /app
 
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
-    PORT=5173 \
+    PORT=7930 \
     COMFY_PROXY_LOOPBACK_HOST=host.docker.internal
 
 COPY --from=build /app/dist ./dist
 COPY server ./server
 
-EXPOSE 5173
+EXPOSE 7930
 
 CMD ["node", "server/serve.mjs"]

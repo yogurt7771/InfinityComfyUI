@@ -30,13 +30,13 @@ start.bat
 
 ```powershell
 npm install
-npm run dev -- --host 127.0.0.1 --port 5173
+npm run dev -- --host 127.0.0.1 --port 7930
 ```
 
 启动后打开：
 
 ```text
-http://127.0.0.1:5173
+http://127.0.0.1:7930
 ```
 
 ### Docker 版本
@@ -50,7 +50,7 @@ docker build -t infinity-comfyui:local .
 启动容器：
 
 ```powershell
-docker run --rm -p 5173:5173 --name infinity-comfyui infinity-comfyui:local
+docker run --rm -p 7930:7930 --name infinity-comfyui infinity-comfyui:local
 ```
 
 或者使用 Compose：
@@ -62,7 +62,7 @@ docker compose up -d --build
 启动后打开：
 
 ```text
-http://127.0.0.1:5173
+http://127.0.0.1:7930
 ```
 
 如果 ComfyUI 跑在宿主机本地，容器内的嵌入式 ComfyUI 代理会默认把 `127.0.0.1` / `localhost` 转到 `host.docker.internal`。在不支持该主机名的 Linux Docker 环境里，请保留 `docker-compose.yml` 里的 `extra_hosts`，或手动添加 `--add-host host.docker.internal:host-gateway`。

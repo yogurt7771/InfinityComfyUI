@@ -153,6 +153,12 @@ const comfyProxyPlugin = (): Plugin => ({
 export default defineConfig({
   base: './',
   plugins: [react(), comfyProxyPlugin()],
+  server: {
+    port: 7930,
+  },
+  preview: {
+    port: 7930,
+  },
   test: {
     environment: 'jsdom',
     include: ['src/**/*.{test,spec}.{ts,tsx}'],

@@ -1166,7 +1166,7 @@ test('creates and connects an asset from a dangling function input without movin
 })
 
 test('pastes clipboard text as an asset and copies selected nodes without edges', async ({ page, browserName }) => {
-  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: 'http://127.0.0.1:5173' })
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: 'http://127.0.0.1:7930' })
   await page.goto('/')
   await page.evaluate(() => navigator.clipboard.writeText('Clipboard prompt text'))
 
