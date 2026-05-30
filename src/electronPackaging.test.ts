@@ -20,6 +20,7 @@ describe('Electron packaging configuration', () => {
     }
     const main = readFileSync(resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
 
+    expect(packageJson.build?.files).toContain('app-dist/**/*')
     expect(packageJson.build?.files).toContain('electron/**/*')
     expect(main).toContain("preload: path.join(__dirname, 'preload.cjs')")
     expect(main).toContain("ipcMain.handle('infinity-storage:load'")
@@ -30,6 +31,7 @@ describe('Electron packaging configuration', () => {
     const main = readFileSync(resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
 
     expect(main).toContain("require('node:http')")
+    expect(main).toContain("'app-dist'")
     expect(main).toContain("'__comfy_proxy'")
     expect(main).toContain('startAppServer')
     expect(main).toContain('win.loadURL')

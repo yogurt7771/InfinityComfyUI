@@ -67,6 +67,24 @@ http://127.0.0.1:7930
 
 如果 ComfyUI 跑在宿主机本地，容器内的嵌入式 ComfyUI 代理会默认把 `127.0.0.1` / `localhost` 转到 `host.docker.internal`。在不支持该主机名的 Linux Docker 环境里，请保留 `docker-compose.yml` 里的 `extra_hosts`，或手动添加 `--add-host host.docker.internal:host-gateway`。
 
+### 发布目录
+
+导出可拷走的 Docker 发布目录：
+
+```powershell
+npm run export:dist
+```
+
+导出后 `dist/` 就是发布目录，包含：
+
+- `docker-compose.yaml`
+- `.env`
+- `start.ps1` / `start.bat` / `stop.ps1`
+- `images/*.tar` Docker 镜像包
+- `manifest.json`
+
+默认会导出 `packaging/release.env` 中 `RELEASE_IMAGE_REFS` 指定的两个镜像。目标机器进入 `dist/` 后运行 `start.ps1` 即可加载镜像并启动发布版 Compose 里的所有服务。
+
 ### Windows 桌面版本
 
 ```powershell
@@ -83,8 +101,9 @@ npm run dev            # 启动浏览器开发服务
 npm test               # 运行单元测试
 npm run typecheck      # TypeScript 类型检查
 npm run lint           # ESLint 检查
-npm run build          # 构建前端产物
-npm run serve          # 服务 dist/ 生产产物
+npm run build          # 构建前端产物到 app-dist/
+npm run export:dist    # 导出 Docker 发布目录 dist/
+npm run serve          # 服务 app-dist/ 生产产物
 npm run browser:smoke  # 浏览器端冒烟测试
 npm run electron       # 构建后启动 Electron
 npm run package:win    # 打包 Windows exe

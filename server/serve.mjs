@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 
 const COMFY_PROXY_PREFIX = '/__comfy_proxy/'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const distRoot = path.resolve(process.env.DIST_DIR ?? path.join(__dirname, '..', 'dist'))
+const distRoot = path.resolve(process.env.DIST_DIR ?? path.join(__dirname, '..', 'app-dist'))
 const host = process.env.HOST ?? '0.0.0.0'
 const port = Number(process.env.PORT ?? 7930)
 const loopbackProxyHost = process.env.COMFY_PROXY_LOOPBACK_HOST

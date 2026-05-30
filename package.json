@@ -10,6 +10,7 @@
     "test:watch": "vitest",
     "browser:smoke": "playwright test",
     "build": "tsc -b && vite build",
+    "export:dist": "node scripts/export-dist.mjs",
     "serve": "node server/serve.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
@@ -21,7 +22,7 @@
     "appId": "com.infinitycomfyui.workstation",
     "productName": "Infinity ComfyUI",
     "files": [
-      "dist/**/*",
+      "app-dist/**/*",
       "electron/**/*",
       "package.json"
     ],

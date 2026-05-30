@@ -20,7 +20,7 @@ ENV NODE_ENV=production \
     PORT=7930 \
     COMFY_PROXY_LOOPBACK_HOST=host.docker.internal
 
-COPY --from=build /app/dist ./dist
+COPY --from=build /app/app-dist ./app-dist
 COPY server ./server
 
 EXPOSE 7930

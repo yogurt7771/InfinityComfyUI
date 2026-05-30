@@ -242,7 +242,7 @@ const mimeTypeFor = (filePath) => {
 }
 
 const serveStaticApp = async (response, requestPath) => {
-  const distDir = path.join(__dirname, '..', 'dist')
+  const distDir = path.join(__dirname, '..', 'app-dist')
   const decodedPath = decodeURIComponent(requestPath)
   const relativePath = decodedPath === '/' ? 'index.html' : decodedPath.replace(/^\/+/, '')
   const candidatePath = path.normalize(path.join(distDir, relativePath))

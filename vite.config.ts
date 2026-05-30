@@ -153,6 +153,9 @@ const comfyProxyPlugin = (): Plugin => ({
 export default defineConfig({
   base: './',
   plugins: [react(), comfyProxyPlugin()],
+  build: {
+    outDir: 'app-dist',
+  },
   server: {
     port: 7930,
   },
