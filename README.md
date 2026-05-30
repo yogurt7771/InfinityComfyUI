@@ -151,6 +151,8 @@ npm run package:win    # 打包 Windows exe
 
 ### 3. 编辑画布上的功能节点
 
+![功能节点右键菜单](docs/images/readme-function-node-menu.png)
+
 选中或直接右键功能节点，会弹出功能节点菜单：
 
 - `Edit This Node`：只编辑当前节点。程序会复制当前函数定义，给当前节点切换到新的独立函数，其它同类型节点不受影响。
@@ -227,6 +229,8 @@ npm run package:win    # 打包 Windows exe
 
 选中资源节点或结果节点后右键，会打开本地功能菜单。可用工具会根据资源类型自动筛选，例如图片资源会显示 Resize、Blur、Split Grid、Image Info，文本资源会显示 Trim、Text Case。
 
+![资源右键本地工具菜单](docs/images/readme-resource-quick-actions.png)
+
 选中两个 run 节点时会出现 `Compare` 操作，可以打开对比视图，用鼠标横向移动做纵向切片对比，适合比较两张生成图的差异。
 
 ### 7. 查看任务详情和排错
@@ -251,6 +255,8 @@ npm run package:win    # 打包 Windows exe
 每个 run 节点也会保存自己的完整运行信息，因此即使节点运行失败，也可以在 Inspector 或任务详情里看到失败原因。
 
 ## 画布导航
+
+![ComfyUI 风格 minimap](docs/images/readme-minimap.png)
 
 画布右下角有 ComfyUI 风格的 minimap：
 
