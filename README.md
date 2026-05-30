@@ -81,6 +81,7 @@ npm run export:dist
 - `.env`
 - `start.ps1` / `start.bat` / `stop.ps1`
 - `start.sh` / `stop.sh`
+- `load-images.ps1` / `load-images.sh`
 - `images/*.tar` Docker 镜像包
 - `manifest.json`
 

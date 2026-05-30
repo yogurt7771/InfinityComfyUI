@@ -94,15 +94,18 @@ function writeReleaseCompose() {
 }
 
 function writeStartScripts() {
+  writeReleaseStartScripts(distDir)
+}
+
+export function writeReleaseStartScripts(targetDir) {
   writeFileSync(
-    join(distDir, 'load-images.ps1'),
+    join(targetDir, 'load-images.ps1'),
     `$ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 function Invoke-Docker {
-  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$DockerArgs)
-  & docker @DockerArgs
+  & docker @args
   if ($LASTEXITCODE -ne 0) {
-    throw "docker $($DockerArgs -join ' ') failed with exit code $LASTEXITCODE"
+    throw "docker $($args -join ' ') failed with exit code $LASTEXITCODE"
   }
 }
 Get-ChildItem -LiteralPath (Join-Path $root "images") -Filter "*.tar" | Sort-Object Name | ForEach-Object {
@@ -113,14 +116,13 @@ Get-ChildItem -LiteralPath (Join-Path $root "images") -Filter "*.tar" | Sort-Obj
     'utf8',
   )
   writeFileSync(
-    join(distDir, 'start.ps1'),
+    join(targetDir, 'start.ps1'),
     `$ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 function Invoke-Docker {
-  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$DockerArgs)
-  & docker @DockerArgs
+  & docker @args
   if ($LASTEXITCODE -ne 0) {
-    throw "docker $($DockerArgs -join ' ') failed with exit code $LASTEXITCODE"
+    throw "docker $($args -join ' ') failed with exit code $LASTEXITCODE"
   }
 }
 & (Join-Path $root "load-images.ps1")
@@ -131,14 +133,13 @@ Write-Host "[Infinity ComfyUI] Started at http://127.0.0.1:$port"
     'utf8',
   )
   writeFileSync(
-    join(distDir, 'stop.ps1'),
+    join(targetDir, 'stop.ps1'),
     `$ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 function Invoke-Docker {
-  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$DockerArgs)
-  & docker @DockerArgs
+  & docker @args
   if ($LASTEXITCODE -ne 0) {
-    throw "docker $($DockerArgs -join ' ') failed with exit code $LASTEXITCODE"
+    throw "docker $($args -join ' ') failed with exit code $LASTEXITCODE"
   }
 }
 Invoke-Docker compose --env-file (Join-Path $root ".env") -f (Join-Path $root "docker-compose.yaml") down
@@ -146,17 +147,19 @@ Invoke-Docker compose --env-file (Join-Path $root ".env") -f (Join-Path $root "d
     'utf8',
   )
   writeFileSync(
-    join(distDir, 'start.bat'),
+    join(targetDir, 'start.bat'),
     `@echo off
 setlocal
 cd /d "%~dp0"
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0start.ps1"
+set "exitCode=%ERRORLEVEL%"
 pause
+exit /b %exitCode%
 `,
     'utf8',
   )
   writeFileSync(
-    join(distDir, 'load-images.sh'),
+    join(targetDir, 'load-images.sh'),
     `#!/usr/bin/env sh
 set -eu
 root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -169,7 +172,7 @@ done
     'utf8',
   )
   writeFileSync(
-    join(distDir, 'start.sh'),
+    join(targetDir, 'start.sh'),
     `#!/usr/bin/env sh
 set -eu
 root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -181,7 +184,7 @@ echo "[Infinity ComfyUI] Started at http://127.0.0.1:$port"
     'utf8',
   )
   writeFileSync(
-    join(distDir, 'stop.sh'),
+    join(targetDir, 'stop.sh'),
     `#!/usr/bin/env sh
 set -eu
 root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -290,4 +293,6 @@ function main() {
   console.log(`[Infinity ComfyUI] Exported release package to ${distDir}`)
 }
 
-main()
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main()
+}
