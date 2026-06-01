@@ -775,6 +775,76 @@ describe('LeftPanel', () => {
     })
   })
 
+  it('binds a workflow function to specific ComfyUI servers from function management', () => {
+    const state = panelProject()
+    state.comfy.endpoints = [
+      state.comfy.endpoints[0]!,
+      {
+        ...state.comfy.endpoints[0]!,
+        id: 'endpoint_remote',
+        name: 'Remote ComfyUI',
+        baseUrl: 'http://127.0.0.1:8188',
+        capabilities: { supportedFunctions: [] },
+      },
+    ]
+    projectStore.setState({
+      project: state,
+      projectLibrary: { [state.project.id]: state },
+      selectedNodeId: undefined,
+      selectedNodeIds: [],
+    } as unknown as Partial<ReturnType<typeof projectStore.getState>>)
+
+    render(<SettingsPage onClose={() => undefined} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Function Management' }))
+    const dialog = screen.getByRole('dialog', { name: 'Function Management' })
+    const localToggle = within(dialog).getByLabelText('Function Flux Render available on Local ComfyUI')
+    const remoteToggle = within(dialog).getByLabelText('Function Flux Render available on Remote ComfyUI')
+
+    expect(localToggle).toBeChecked()
+    expect(remoteToggle).not.toBeChecked()
+
+    fireEvent.click(localToggle)
+    fireEvent.click(remoteToggle)
+
+    expect(projectStore.getState().project.comfy.endpoints).toEqual([
+      expect.objectContaining({
+        id: 'endpoint_local',
+        capabilities: { supportedFunctions: [] },
+      }),
+      expect.objectContaining({
+        id: 'endpoint_remote',
+        capabilities: { supportedFunctions: ['fn_render'] },
+      }),
+    ])
+  })
+
+  it('chooses supported workflow functions when editing or adding ComfyUI servers', () => {
+    render(<SettingsPage onClose={() => undefined} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'ComfyUI Server Management' }))
+    const dialog = screen.getByRole('dialog', { name: 'ComfyUI Server Management' })
+
+    const allLocal = within(dialog).getByLabelText('Endpoint supports all functions Local ComfyUI')
+    const localFunction = within(dialog).getByLabelText('Endpoint supports Flux Render Local ComfyUI')
+    expect(allLocal).toBeChecked()
+    expect(localFunction).toBeChecked()
+    expect(localFunction).toBeDisabled()
+
+    fireEvent.click(allLocal)
+    expect(projectStore.getState().project.comfy.endpoints[0]?.capabilities?.supportedFunctions).toEqual(['fn_render'])
+    expect(localFunction).not.toBeDisabled()
+
+    fireEvent.click(localFunction)
+    expect(projectStore.getState().project.comfy.endpoints[0]?.capabilities?.supportedFunctions).toEqual([])
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Server' }))
+    const newEndpointFunction = within(dialog).getByLabelText('Endpoint supports Flux Render ComfyUI 2')
+    expect(within(dialog).getByLabelText('Endpoint supports all functions ComfyUI 2')).not.toBeChecked()
+    expect(newEndpointFunction).toBeChecked()
+    expect(projectStore.getState().project.comfy.endpoints[1]?.capabilities?.supportedFunctions).toEqual(['fn_render'])
+  })
+
   it('edits per-server custom headers in ComfyUI server management', () => {
     render(<SettingsPage onClose={() => undefined} />)
 

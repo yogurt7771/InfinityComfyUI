@@ -589,6 +589,7 @@ type FunctionManagerProps = {
   onAddGeminiFunction: (name: string, config: Partial<GeminiLlmConfig>) => string | undefined
   onUpdateFunction: (functionId: string, patch: Partial<Omit<GenerationFunction, 'id' | 'createdAt'>>) => void
   onDeleteFunction: (functionId: string) => void
+  onUpdateEndpoint?: (endpointId: string, patch: Partial<ComfyEndpointConfig>) => void
   onClose: () => void
 }
 
@@ -1030,6 +1031,47 @@ type ComfyFrameWindow = Window & {
 }
 
 const enabledComfyEndpoint = (endpoints: ComfyEndpointConfig[]) => endpoints.find((endpoint) => endpoint.enabled) ?? endpoints[0]
+
+const isComfyWorkflowFunction = (fn: GenerationFunction) => fn.workflow.format === 'comfyui_api_json'
+
+const endpointSupportsWorkflowFunction = (endpoint: ComfyEndpointConfig, functionId: string) => {
+  const supportedFunctions = endpoint.capabilities?.supportedFunctions
+  return supportedFunctions === undefined || supportedFunctions.includes(functionId)
+}
+
+const endpointFunctionScopeLabel = (endpoint: ComfyEndpointConfig, workflowFunctionIds: string[]) => {
+  const supportedFunctions = endpoint.capabilities?.supportedFunctions
+  if (supportedFunctions === undefined) return 'all functions'
+  const visibleIds = new Set(workflowFunctionIds)
+  const visibleFunctionCount = supportedFunctions.filter((id) => visibleIds.has(id)).length
+  if (visibleFunctionCount === 0) return 'no functions'
+  return `${visibleFunctionCount}/${workflowFunctionIds.length} functions`
+}
+
+const endpointCapabilitiesPatch = (
+  endpoint: ComfyEndpointConfig,
+  supportedFunctions: string[] | undefined,
+): Partial<ComfyEndpointConfig> => {
+  const capabilities: NonNullable<ComfyEndpointConfig['capabilities']> = { ...(endpoint.capabilities ?? {}) }
+  if (supportedFunctions === undefined) delete capabilities.supportedFunctions
+  else capabilities.supportedFunctions = Array.from(new Set(supportedFunctions))
+  return { capabilities: Object.keys(capabilities).length > 0 ? capabilities : undefined }
+}
+
+const setEndpointFunctionAvailability = (
+  endpoint: ComfyEndpointConfig,
+  functionId: string,
+  enabled: boolean,
+  workflowFunctionIds: string[],
+  onUpdateEndpoint: NonNullable<FunctionManagerProps['onUpdateEndpoint']>,
+) => {
+  const supportedFunctions = endpoint.capabilities?.supportedFunctions
+  const explicitFunctions = supportedFunctions === undefined ? workflowFunctionIds : supportedFunctions
+  const nextFunctions = enabled
+    ? [...explicitFunctions, functionId]
+    : explicitFunctions.filter((id) => id !== functionId)
+  onUpdateEndpoint(endpoint.id, endpointCapabilitiesPatch(endpoint, nextFunctions))
+}
 
 const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
 
@@ -1542,6 +1584,7 @@ export function FunctionManager({
   onAddGeminiFunction,
   onUpdateFunction,
   onDeleteFunction,
+  onUpdateEndpoint,
   onClose,
 }: FunctionManagerProps) {
   const selectedFunction = functions.find((fn) => fn.id === selectedFunctionId) ?? functions[0]
@@ -1568,6 +1611,9 @@ export function FunctionManager({
   const [openAiMessagesError, setOpenAiMessagesError] = useState<string>()
   const [geminiMessagesError, setGeminiMessagesError] = useState<string>()
   const selectedComfyEndpoint = enabledComfyEndpoint(comfyEndpoints)
+  const workflowFunctions = functions.filter(isComfyWorkflowFunction)
+  const workflowFunctionIds = workflowFunctions.map((fn) => fn.id)
+  const selectedIsComfyWorkflow = selectedFunction ? isComfyWorkflowFunction(selectedFunction) : false
 
   const deleteSelectedFunction = () => {
     if (!selectedFunction) return
@@ -1799,6 +1845,43 @@ export function FunctionManager({
                   rows={2}
                 />
               </label>
+
+              {selectedIsComfyWorkflow && onUpdateEndpoint ? (
+                <div className="binding-section function-endpoint-section">
+                  <div className="binding-header">
+                    <h4>ComfyUI Servers</h4>
+                    <span>{comfyEndpoints.filter((endpoint) => endpointSupportsWorkflowFunction(endpoint, selectedFunction.id)).length} available</span>
+                  </div>
+                  <div className="function-endpoint-list">
+                    {comfyEndpoints.length > 0 ? (
+                      comfyEndpoints.map((endpoint) => (
+                        <label className="function-endpoint-item" key={`${selectedFunction.id}_${endpoint.id}`}>
+                          <input
+                            aria-label={`Function ${selectedFunction.name} available on ${endpoint.name}`}
+                            type="checkbox"
+                            checked={endpointSupportsWorkflowFunction(endpoint, selectedFunction.id)}
+                            onChange={(event) =>
+                              setEndpointFunctionAvailability(
+                                endpoint,
+                                selectedFunction.id,
+                                event.target.checked,
+                                workflowFunctionIds,
+                                onUpdateEndpoint,
+                              )
+                            }
+                          />
+                          <span>
+                            <strong>{endpoint.name}</strong>
+                            <small>{endpoint.enabled ? 'enabled' : 'disabled'} · {endpointFunctionScopeLabel(endpoint, workflowFunctionIds)}</small>
+                          </span>
+                        </label>
+                      ))
+                    ) : (
+                      <div className="empty-list">No ComfyUI servers</div>
+                    )}
+                  </div>
+                </div>
+              ) : null}
 
               {selectedIsRequest ? (
                 <div className="workflow-editor-section">
@@ -2328,6 +2411,7 @@ export function FunctionManager({
 
 type EndpointManagerProps = {
   endpoints: ComfyEndpointConfig[]
+  functions: GenerationFunction[]
   queueCounts: Record<string, number>
   onAddEndpoint: () => void
   onUpdateEndpoint: (endpointId: string, patch: Partial<ComfyEndpointConfig>) => void
@@ -2371,6 +2455,7 @@ function deleteEndpointHeader(
 
 function EndpointManager({
   endpoints,
+  functions,
   queueCounts,
   onAddEndpoint,
   onUpdateEndpoint,
@@ -2378,6 +2463,15 @@ function EndpointManager({
   onTestEndpoint,
   onClose,
 }: EndpointManagerProps) {
+  const workflowFunctions = functions.filter(isComfyWorkflowFunction)
+  const workflowFunctionIds = workflowFunctions.map((fn) => fn.id)
+  const setEndpointAllFunctions = (endpoint: ComfyEndpointConfig, enabled: boolean) => {
+    onUpdateEndpoint(endpoint.id, endpointCapabilitiesPatch(endpoint, enabled ? undefined : workflowFunctionIds))
+  }
+  const setEndpointFunction = (endpoint: ComfyEndpointConfig, functionId: string, enabled: boolean) => {
+    setEndpointFunctionAvailability(endpoint, functionId, enabled, workflowFunctionIds, onUpdateEndpoint)
+  }
+
   return (
     <ModalShell label="ComfyUI Server Management" onClose={onClose}>
       <div className="endpoint-manager-toolbar">
@@ -2476,6 +2570,42 @@ function EndpointManager({
                   Test
                 </button>
                 {endpoint.health?.message ? <span className="endpoint-message">{endpoint.health.message}</span> : null}
+              </div>
+              <div className="endpoint-function-editor">
+                <div className="binding-header">
+                  <h4>Available Functions</h4>
+                  <span>{endpointFunctionScopeLabel(endpoint, workflowFunctionIds)}</span>
+                </div>
+                <label className="inline-check endpoint-all-functions">
+                  <input
+                    aria-label={`Endpoint supports all functions ${endpoint.name}`}
+                    type="checkbox"
+                    checked={endpoint.capabilities?.supportedFunctions === undefined}
+                    onChange={(event) => setEndpointAllFunctions(endpoint, event.target.checked)}
+                  />
+                  All workflow functions
+                </label>
+                <div className="endpoint-function-list">
+                  {workflowFunctions.length > 0 ? (
+                    workflowFunctions.map((fn) => {
+                      const allFunctions = endpoint.capabilities?.supportedFunctions === undefined
+                      return (
+                        <label className="endpoint-function-item" key={`${endpoint.id}_${fn.id}`}>
+                          <input
+                            aria-label={`Endpoint supports ${fn.name} ${endpoint.name}`}
+                            type="checkbox"
+                            disabled={allFunctions}
+                            checked={endpointSupportsWorkflowFunction(endpoint, fn.id)}
+                            onChange={(event) => setEndpointFunction(endpoint, fn.id, event.target.checked)}
+                          />
+                          <span>{fn.name}</span>
+                        </label>
+                      )
+                    })
+                  ) : (
+                    <div className="empty-list">No ComfyUI workflow functions</div>
+                  )}
+                </div>
               </div>
               <div className="header-editor">
                 <div className="binding-header">
@@ -2783,6 +2913,7 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
           onAddGeminiFunction={handleGeminiFunctionAdd}
           onUpdateFunction={updateFunction}
           onDeleteFunction={deleteFunction}
+          onUpdateEndpoint={updateEndpoint}
           onClose={() => setFunctionManagerOpen(false)}
         />
       ) : null}
@@ -2790,6 +2921,7 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
       {endpointManagerOpen ? (
         <EndpointManager
           endpoints={project.comfy.endpoints}
+          functions={managedFunctions}
           queueCounts={queueCounts}
           onAddEndpoint={addEndpoint}
           onUpdateEndpoint={updateEndpoint}

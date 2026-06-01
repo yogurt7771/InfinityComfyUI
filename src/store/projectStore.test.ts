@@ -1923,6 +1923,9 @@ describe('project store actions', () => {
     addTestWorkflowFunction(slice)
     slice.getState().addFunctionNode('fn_1')
     slice.getState().connectNodes('node_res_1', 'node_fn_1')
+    slice.getState().updateEndpoint(slice.getState().project.comfy.endpoints[0]!.id, {
+      capabilities: { supportedFunctions: ['fn_1', 'fn_missing'] },
+    })
 
     slice.getState().updateFunction('fn_1', {
       name: 'Edited Render',
@@ -1949,6 +1952,7 @@ describe('project store actions', () => {
     expect(slice.getState().project.functions.fn_1).toBeUndefined()
     expect(slice.getState().project.canvas.nodes.some((node) => node.id === 'node_fn_1')).toBe(false)
     expect(slice.getState().project.canvas.edges).toEqual([])
+    expect(slice.getState().project.comfy.endpoints[0]?.capabilities?.supportedFunctions).toEqual(['fn_missing'])
   })
 
   it('forks a function only for the selected node before node-scoped edits', () => {
@@ -2657,6 +2661,70 @@ describe('project store actions', () => {
         }),
       }),
     ])
+  })
+
+  it('fails queued ComfyUI jobs if endpoint capability changes leave no eligible worker', async () => {
+    const ids = ['res_prompt', 'fn_1', 'node_fn_1', 'task_1', 'node_result_1']
+    let queuedCount = 0
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now: () => '2026-05-08T09:00:00.000Z',
+      randomInt: () => 42,
+      createComfyClient: () => ({
+        queuePrompt: async () => {
+          queuedCount += 1
+          return { prompt_id: `prompt_${queuedCount}`, number: queuedCount }
+        },
+        getHistory: async () =>
+          new Promise<unknown>(() => {
+            // Keep the first worker occupied so queued work must be revalidated after capability changes.
+          }),
+      }),
+      comfyRunOptions: {
+        maxPollAttempts: 1,
+        pollIntervalMs: 1,
+      },
+    })
+
+    slice.getState().addTextResource('Prompt', 'warm kitchen')
+    addTestWorkflowFunction(slice)
+    slice.setState((state) => ({
+      project: {
+        ...state.project,
+        comfy: {
+          ...state.project.comfy,
+          endpoints: [
+            {
+              ...state.project.comfy.endpoints[0]!,
+              id: 'endpoint_local',
+              name: 'Local',
+              maxConcurrentJobs: 1,
+              capabilities: { supportedFunctions: ['fn_1'] },
+            },
+          ],
+        },
+      },
+    }))
+    slice.getState().addFunctionNode('fn_1')
+    slice.getState().connectNodes('node_res_prompt', 'node_fn_1')
+
+    const running = slice.getState().runFunctionNodeWithComfy('node_fn_1', 2)
+    void running
+    await waitForState(slice, () => queuedCount === 1)
+
+    slice.getState().updateEndpoint('endpoint_local', { capabilities: { supportedFunctions: [] } })
+
+    await waitForState(slice, (state) => state.project.tasks.fallback?.status === 'failed')
+    const state = slice.getState()
+    expect(state.project.tasks.task_1).toMatchObject({ status: 'running', endpointId: 'endpoint_local' })
+    expect(state.project.tasks.fallback).toMatchObject({
+      status: 'failed',
+      error: { code: 'endpoint_unavailable', message: 'No eligible ComfyUI endpoint' },
+    })
+    expect(state.project.canvas.nodes.find((node) => node.id === 'fallback')?.data).toMatchObject({
+      status: 'failed',
+      error: { code: 'endpoint_unavailable', message: 'No eligible ComfyUI endpoint' },
+    })
   })
 
   it('uploads selected image resources before running image-edit ComfyUI workflows', async () => {

@@ -39,5 +39,17 @@ describe('selectEndpoint', () => {
 
     expect(selected?.id).toBe('b')
   })
-})
 
+  it('treats an explicit empty supported function list as no supported functions', () => {
+    const selected = selectEndpoint(
+      [
+        endpoint({ id: 'a', priority: 20, capabilities: { supportedFunctions: [] } }),
+        endpoint({ id: 'b', priority: 1, capabilities: { supportedFunctions: ['render'] } }),
+      ],
+      { a: 0, b: 0 },
+      'render',
+    )
+
+    expect(selected?.id).toBe('b')
+  })
+})

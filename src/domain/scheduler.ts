@@ -8,7 +8,7 @@ const isHealthyEnough = (endpoint: ComfyEndpointConfig) => {
 const supportsFunction = (endpoint: ComfyEndpointConfig, functionId?: string) => {
   if (!functionId) return true
   const supported = endpoint.capabilities?.supportedFunctions
-  return !supported || supported.length === 0 || supported.includes(functionId)
+  return supported === undefined || supported.includes(functionId)
 }
 
 export function selectEndpoint(
@@ -31,4 +31,3 @@ export function selectEndpoint(
     return right.priority - left.priority
   })[0]
 }
-

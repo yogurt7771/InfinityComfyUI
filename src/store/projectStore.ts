@@ -441,8 +441,20 @@ const endpointIsWorkerEligible = (endpoint: ComfyEndpointConfig) => {
 
 const endpointSupportsFunction = (endpoint: ComfyEndpointConfig, functionId: string) => {
   const supportedFunctions = endpoint.capabilities?.supportedFunctions
-  return !supportedFunctions || supportedFunctions.length === 0 || supportedFunctions.includes(functionId)
+  return supportedFunctions === undefined || supportedFunctions.includes(functionId)
 }
+
+const endpointCapabilitySupportedFunctionsPatch = (
+  endpoint: ComfyEndpointConfig,
+  supportedFunctions: string[],
+): Pick<ComfyEndpointConfig, 'capabilities'> => ({
+  capabilities: { ...(endpoint.capabilities ?? {}), supportedFunctions },
+})
+
+const comfyWorkflowFunctionIds = (functions: Record<string, GenerationFunction>) =>
+  Object.values(functions)
+    .filter((fn) => fn.workflow.format === 'comfyui_api_json')
+    .map((fn) => fn.id)
 
 const resourceNameForType = (type: ResourceType) => {
   if (type === 'text') return 'Prompt'
@@ -3914,6 +3926,14 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
     const ensureComfyWorkers = () => {
       const endpoints = get().project.comfy.endpoints.filter(endpointIsWorkerEligible)
+      for (let index = comfyQueue.length - 1; index >= 0; index -= 1) {
+        const queuedRun = comfyQueue[index]!
+        if (endpoints.some((endpoint) => endpointSupportsFunction(endpoint, queuedRun.functionId))) continue
+        comfyQueue.splice(index, 1)
+        failResultRunInPlace(queuedRun.resultNodeId, queuedRun.taskId, 'endpoint_unavailable', 'No eligible ComfyUI endpoint')
+        queuedRun.resolveCompletion()
+      }
+
       for (const endpoint of endpoints) {
         if (activeComfyWorkerEndpointIds.has(endpoint.id)) continue
         if (!comfyQueue.some((item) => endpointSupportsFunction(endpoint, item.functionId))) continue
@@ -4632,6 +4652,20 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             ...state.project,
             project: { ...state.project.project, updatedAt: now },
             functions,
+            comfy: {
+              ...state.project.comfy,
+              endpoints: state.project.comfy.endpoints.map((endpoint) =>
+                endpoint.capabilities?.supportedFunctions === undefined
+                  ? endpoint
+                  : {
+                      ...endpoint,
+                      ...endpointCapabilitySupportedFunctionsPatch(
+                        endpoint,
+                        endpoint.capabilities.supportedFunctions.filter((id) => id !== functionId),
+                      ),
+                    },
+              ),
+            },
             canvas: {
               ...state.project.canvas,
               nodes: state.project.canvas.nodes.filter((node) => !removedNodeIds.has(node.id)),
@@ -6018,6 +6052,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         priority: 1,
         timeoutMs: 600000,
         auth: { type: 'none' },
+        capabilities: { supportedFunctions: comfyWorkflowFunctionIds(get().project.functions) },
         health: { status: 'unknown' },
       }
 
@@ -6047,6 +6082,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           },
         },
       }))
+      ensureComfyWorkers()
     },
 
     deleteEndpoint: (endpointId) => {
@@ -6061,6 +6097,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           },
         },
       }))
+      ensureComfyWorkers()
     },
 
     markEndpoint: (endpointId, status, message) => {

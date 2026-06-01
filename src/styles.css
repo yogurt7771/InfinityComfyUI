@@ -1098,6 +1098,50 @@ div.server-list-item {
   gap: 7px;
 }
 
+.function-endpoint-list,
+.endpoint-function-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.function-endpoint-item,
+.endpoint-function-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(248, 252, 254, 0.82);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.function-endpoint-item input,
+.endpoint-function-item input {
+  width: 15px;
+  height: 15px;
+  padding: 0;
+}
+
+.function-endpoint-item > span {
+  display: grid;
+  min-width: 0;
+}
+
+.function-endpoint-item small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.endpoint-function-item:has(input:disabled) {
+  opacity: 0.62;
+}
+
 .binding-row {
   display: grid;
   grid-template-columns:
@@ -1348,6 +1392,17 @@ textarea[aria-invalid="true"] {
   gap: 8px;
   padding-top: 4px;
   border-top: 1px solid #eef2f3;
+}
+
+.endpoint-function-editor {
+  display: grid;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid #eef2f3;
+}
+
+.endpoint-all-functions {
+  justify-self: start;
 }
 
 .header-list {
