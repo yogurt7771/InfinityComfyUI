@@ -1966,6 +1966,9 @@ describe('project store actions', () => {
     addTestWorkflowFunction(slice)
     slice.getState().addFunctionNode('fn_1')
     slice.getState().addFunctionNode('fn_1')
+    slice.getState().updateEndpoint(slice.getState().project.comfy.endpoints[0]!.id, {
+      capabilities: { supportedFunctions: ['fn_1'] },
+    })
 
     const scopedFunctionId = slice.getState().ensureEditableFunctionForNode('node_fn_1', 'node')
 
@@ -1976,6 +1979,10 @@ describe('project store actions', () => {
       baseFunctionId: 'fn_1',
     })
     expect(slice.getState().project.canvas.nodes.find((node) => node.id === 'node_fn_2')?.data.functionId).toBe('fn_1')
+    expect(slice.getState().project.comfy.endpoints[0]?.capabilities?.supportedFunctions).toEqual([
+      'fn_1',
+      'fn_node_scoped',
+    ])
 
     slice.getState().updateFunction('fn_1', { name: 'Edited All Render' })
     slice.getState().updateFunction('fn_node_scoped', { name: 'Edited This Node Render' })

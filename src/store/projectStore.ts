@@ -4605,6 +4605,19 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             ...state.project,
             project: { ...state.project.project, updatedAt: now },
             functions: { ...state.project.functions, [clonedFunctionId]: clonedFunction },
+            comfy: {
+              ...state.project.comfy,
+              endpoints: state.project.comfy.endpoints.map((endpoint) => {
+                const supportedFunctions = endpoint.capabilities?.supportedFunctions
+                if (!sourceFunctionId || supportedFunctions === undefined || !supportedFunctions.includes(sourceFunctionId)) {
+                  return endpoint
+                }
+                return {
+                  ...endpoint,
+                  ...endpointCapabilitySupportedFunctionsPatch(endpoint, [...supportedFunctions, clonedFunctionId]),
+                }
+              }),
+            },
             canvas: {
               ...state.project.canvas,
               nodes: state.project.canvas.nodes.map((node) => {

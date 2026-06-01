@@ -1030,8 +1030,6 @@ type ComfyFrameWindow = Window & {
   }
 }
 
-const enabledComfyEndpoint = (endpoints: ComfyEndpointConfig[]) => endpoints.find((endpoint) => endpoint.enabled) ?? endpoints[0]
-
 const isComfyWorkflowFunction = (fn: GenerationFunction) => fn.workflow.format === 'comfyui_api_json'
 
 const endpointSupportsWorkflowFunction = (endpoint: ComfyEndpointConfig, functionId: string) => {
@@ -1194,6 +1192,7 @@ function NewFunctionDialog({
   onSaveRequest,
   onSaveOpenAI,
   onSaveGemini,
+  onBindComfyEndpoint,
   comfyEndpoints,
   onClose,
 }: {
@@ -1205,6 +1204,7 @@ function NewFunctionDialog({
   onSaveRequest: (name: string, config: Partial<RequestFunctionConfig>) => string | undefined
   onSaveOpenAI: (name: string, config: Partial<OpenAILlmConfig>) => string | undefined
   onSaveGemini: (name: string, config: Partial<GeminiLlmConfig>) => string | undefined
+  onBindComfyEndpoint?: (functionId: string, endpointId: string) => void
   comfyEndpoints: ComfyEndpointConfig[]
   onClose: () => void
 }) {
@@ -1231,7 +1231,24 @@ function NewFunctionDialog({
   const [geminiModel, setGeminiModel] = useState(defaultGeminiConfig.model)
   const [geminiMessagesJson, setGeminiMessagesJson] = useState(JSON.stringify(defaultGeminiConfig.messages, null, 2))
   const [error, setError] = useState<string>()
-  const selectedComfyEndpoint = enabledComfyEndpoint(comfyEndpoints)
+  const selectableComfyEndpoints = useMemo(() => comfyEndpoints.filter((endpoint) => endpoint.enabled), [comfyEndpoints])
+  const [selectedComfyEndpointId, setSelectedComfyEndpointId] = useState('')
+  const selectedComfyEndpoint =
+    selectableComfyEndpoints.find((endpoint) => endpoint.id === selectedComfyEndpointId) ?? selectableComfyEndpoints[0]
+
+  useEffect(() => {
+    if (functionType !== 'comfyui') return
+    const nextEndpointId = selectedComfyEndpoint?.id ?? ''
+    if (selectedComfyEndpointId !== nextEndpointId) setSelectedComfyEndpointId(nextEndpointId)
+  }, [functionType, selectedComfyEndpoint?.id, selectedComfyEndpointId])
+
+  const changeSelectedComfyEndpoint = (endpointId: string) => {
+    setSelectedComfyEndpointId(endpointId)
+    setWorkflowRawJson(undefined)
+    setWorkflowUiJson(undefined)
+    setWorkflowEditor(undefined)
+    setError(undefined)
+  }
 
   const formatWorkflowJson = () => {
     if (functionType === 'request') {
@@ -1304,6 +1321,7 @@ function NewFunctionDialog({
           ...(workflowUiJson !== undefined ? { uiJson: workflowUiJson } : {}),
           ...(workflowEditor !== undefined ? { editor: workflowEditor } : {}),
         })
+        if (functionId && selectedComfyEndpoint) onBindComfyEndpoint?.(functionId, selectedComfyEndpoint.id)
       }
       if (functionId) onClose()
       setError(undefined)
@@ -1349,6 +1367,21 @@ function NewFunctionDialog({
         </label>
         {functionType === 'comfyui' ? (
           <div className="workflow-authoring-stack">
+            <label className="field">
+              <span>ComfyUI server</span>
+              <select
+                aria-label="New function ComfyUI server"
+                disabled={selectableComfyEndpoints.length === 0}
+                value={selectedComfyEndpoint?.id ?? ''}
+                onChange={(event) => changeSelectedComfyEndpoint(event.target.value)}
+              >
+                {selectableComfyEndpoints.map((endpoint) => (
+                  <option key={endpoint.id} value={endpoint.id}>
+                    {endpoint.name}
+                  </option>
+                ))}
+              </select>
+            </label>
             <div className="workflow-authoring-actions">
               <button type="button" onClick={() => setComfyEditorOpen(true)} disabled={!selectedComfyEndpoint}>
                 <Network size={14} />
@@ -1610,10 +1643,50 @@ export function FunctionManager({
     : undefined
   const [openAiMessagesError, setOpenAiMessagesError] = useState<string>()
   const [geminiMessagesError, setGeminiMessagesError] = useState<string>()
-  const selectedComfyEndpoint = enabledComfyEndpoint(comfyEndpoints)
   const workflowFunctions = functions.filter(isComfyWorkflowFunction)
   const workflowFunctionIds = workflowFunctions.map((fn) => fn.id)
   const selectedIsComfyWorkflow = selectedFunction ? isComfyWorkflowFunction(selectedFunction) : false
+  const selectableEditorComfyEndpoints =
+    selectedFunction && selectedIsComfyWorkflow
+      ? comfyEndpoints.filter((endpoint) => endpoint.enabled && endpointSupportsWorkflowFunction(endpoint, selectedFunction.id))
+      : []
+  const [selectedEditorComfySelection, setSelectedEditorComfySelection] = useState<{ functionId: string; endpointId: string }>()
+  const selectedEditorComfyEndpoint =
+    (selectedEditorComfySelection?.functionId === selectedFunction?.id
+      ? selectableEditorComfyEndpoints.find((endpoint) => endpoint.id === selectedEditorComfySelection.endpointId)
+      : undefined) ??
+    selectableEditorComfyEndpoints.find((endpoint) => endpoint.id === selectedFunction?.workflow.editor?.endpointId) ??
+    selectableEditorComfyEndpoints[0]
+
+  useEffect(() => {
+    if (!selectedFunction?.id || !selectedIsComfyWorkflow) {
+      if (selectedEditorComfySelection) setSelectedEditorComfySelection(undefined)
+      return
+    }
+    const nextEndpointId = selectedEditorComfyEndpoint?.id ?? ''
+    if (
+      nextEndpointId &&
+      (selectedEditorComfySelection?.functionId !== selectedFunction.id ||
+        selectedEditorComfySelection.endpointId !== nextEndpointId)
+    ) {
+      setSelectedEditorComfySelection({ functionId: selectedFunction.id, endpointId: nextEndpointId })
+    }
+  }, [selectedFunction?.id, selectedIsComfyWorkflow, selectedEditorComfyEndpoint?.id, selectedEditorComfySelection])
+
+  const bindNewWorkflowFunctionToEndpoint = (functionId: string, endpointId: string) => {
+    if (!onUpdateEndpoint) return
+    const nextWorkflowFunctionIds = [...workflowFunctionIds, functionId]
+    for (const endpoint of comfyEndpoints) {
+      const supportedFunctions = endpoint.capabilities?.supportedFunctions
+      const nextSupportedFunctions =
+        endpoint.id === endpointId
+          ? [...(supportedFunctions ?? workflowFunctionIds), functionId]
+          : supportedFunctions === undefined
+            ? workflowFunctionIds
+            : supportedFunctions.filter((id) => id !== functionId)
+      onUpdateEndpoint(endpoint.id, endpointCapabilitiesPatch(endpoint, nextSupportedFunctions.filter((id) => nextWorkflowFunctionIds.includes(id))))
+    }
+  }
 
   const deleteSelectedFunction = () => {
     if (!selectedFunction) return
@@ -2050,11 +2123,30 @@ export function FunctionManager({
                 </div>
               ) : (
                 <div className="workflow-editor-section">
+                  <label className="field workflow-editor-endpoint-field">
+                    <span>ComfyUI server</span>
+                    <select
+                      aria-label={`Workflow editor ComfyUI server ${selectedFunction.name}`}
+                      disabled={selectableEditorComfyEndpoints.length === 0}
+                      value={selectedEditorComfyEndpoint?.id ?? ''}
+                      onChange={(event) =>
+                        selectedFunction
+                          ? setSelectedEditorComfySelection({ functionId: selectedFunction.id, endpointId: event.target.value })
+                          : undefined
+                      }
+                    >
+                      {selectableEditorComfyEndpoints.map((endpoint) => (
+                        <option key={endpoint.id} value={endpoint.id}>
+                          {endpoint.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   <div className="binding-header">
                     <h4>Workflow JSON</h4>
                     <div className="json-toolbar compact-json-toolbar">
                       {selectedWorkflowJsonError ? <span className="field-error">{selectedWorkflowJsonError}</span> : null}
-                      <button type="button" onClick={() => setComfyEditorOpen(true)} disabled={!selectedComfyEndpoint}>
+                      <button type="button" onClick={() => setComfyEditorOpen(true)} disabled={!selectedEditorComfyEndpoint}>
                         <Network size={14} />
                         Edit in ComfyUI
                       </button>
@@ -2394,11 +2486,12 @@ export function FunctionManager({
             if (functionId) onSelectFunction(functionId)
             return functionId
           }}
+          onBindComfyEndpoint={bindNewWorkflowFunctionToEndpoint}
         />
       ) : null}
       {comfyEditorOpen && selectedFunction && !selectedIsRequest && !selectedIsProvider ? (
         <ComfyWorkflowEditorDialog
-          endpoint={selectedComfyEndpoint}
+          endpoint={selectedEditorComfyEndpoint}
           initialUiJson={selectedFunction.workflow.uiJson}
           initialApiJson={selectedFunction.workflow.rawJson}
           onSave={saveSelectedEmbeddedWorkflow}

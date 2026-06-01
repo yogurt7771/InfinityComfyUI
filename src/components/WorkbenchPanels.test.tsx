@@ -306,6 +306,24 @@ describe('LeftPanel', () => {
   })
 
   it('creates a workflow function from the embedded ComfyUI editor and selects it after saving', async () => {
+    const state = panelProject()
+    state.comfy.endpoints = [
+      state.comfy.endpoints[0]!,
+      {
+        ...state.comfy.endpoints[0]!,
+        id: 'endpoint_remote',
+        name: 'Remote ComfyUI',
+        baseUrl: 'http://127.0.0.1:8188',
+        capabilities: { supportedFunctions: [] },
+      },
+    ]
+    projectStore.setState({
+      project: state,
+      projectLibrary: { [state.project.id]: state },
+      selectedNodeId: undefined,
+      selectedNodeIds: [],
+    } as unknown as Partial<ReturnType<typeof projectStore.getState>>)
+
     render(<SettingsPage onClose={() => undefined} />)
 
     fireEvent.click(screen.getByRole('button', { name: 'Function Management' }))
@@ -315,13 +333,16 @@ describe('LeftPanel', () => {
     const createDialog = screen.getByRole('dialog', { name: 'New Function' })
 
     fireEvent.change(within(createDialog).getByLabelText('Function name'), { target: { value: 'Kitchen Batch Render' } })
+    fireEvent.change(within(createDialog).getByLabelText('New function ComfyUI server'), {
+      target: { value: 'endpoint_remote' },
+    })
     expect(within(createDialog).queryByLabelText('Workflow JSON')).not.toBeInTheDocument()
     expect(within(createDialog).queryByLabelText('New workflow JSON preview')).not.toBeInTheDocument()
     expect(within(createDialog).getByRole('button', { name: 'Save function' })).toBeDisabled()
 
     fireEvent.click(within(createDialog).getByRole('button', { name: 'Edit in ComfyUI' }))
     const editor = await screen.findByRole('dialog', { name: 'ComfyUI Workflow Editor' })
-    const frame = within(editor).getByTitle('ComfyUI editor Local ComfyUI') as HTMLIFrameElement
+    const frame = within(editor).getByTitle('ComfyUI editor Remote ComfyUI') as HTMLIFrameElement
     const graphToPrompt = vi.fn().mockResolvedValue({
       output: {
         '20': {
@@ -397,6 +418,16 @@ describe('LeftPanel', () => {
         },
       },
     })
+    expect(projectStore.getState().project.comfy.endpoints).toEqual([
+      expect.objectContaining({
+        id: 'endpoint_local',
+        capabilities: { supportedFunctions: ['fn_render'] },
+      }),
+      expect.objectContaining({
+        id: 'endpoint_remote',
+        capabilities: { supportedFunctions: [createdFunction?.id] },
+      }),
+    ])
   })
 
   it('creates a request function in the new function dialog and edits request bindings', () => {
@@ -640,6 +671,19 @@ describe('LeftPanel', () => {
 
   it('saves the selected workflow from an embedded ComfyUI editor with API and UI JSON', async () => {
     const state = panelProject()
+    state.comfy.endpoints = [
+      {
+        ...state.comfy.endpoints[0]!,
+        capabilities: { supportedFunctions: [] },
+      },
+      {
+        ...state.comfy.endpoints[0]!,
+        id: 'endpoint_remote',
+        name: 'Remote ComfyUI',
+        baseUrl: 'http://127.0.0.1:8188',
+        capabilities: { supportedFunctions: ['fn_render'] },
+      },
+    ]
     state.functions.fn_render.workflow.rawJson['20']!.inputs = {
       ...state.functions.fn_render.workflow.rawJson['20']!.inputs,
       images: ['6', 0],
@@ -655,10 +699,11 @@ describe('LeftPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Function Management' }))
     const dialog = screen.getByRole('dialog', { name: 'Function Management' })
+    expect(within(dialog).getByLabelText('Workflow editor ComfyUI server Flux Render')).toHaveValue('endpoint_remote')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Edit in ComfyUI' }))
 
     const editor = await screen.findByRole('dialog', { name: 'ComfyUI Workflow Editor' })
-    const frame = within(editor).getByTitle('ComfyUI editor Local ComfyUI') as HTMLIFrameElement
+    const frame = within(editor).getByTitle('ComfyUI editor Remote ComfyUI') as HTMLIFrameElement
     const handleFile = vi.fn().mockResolvedValue(undefined)
     const loadGraphData = vi.fn().mockResolvedValue(undefined)
     const loadApiJson = vi.fn().mockResolvedValue(undefined)
@@ -743,9 +788,65 @@ describe('LeftPanel', () => {
     expect(queuePrompt).toHaveBeenCalledTimes(1)
     expect(projectStore.getState().project.functions.fn_render.workflow.editor).toMatchObject({
       kind: 'comfyui_embedded',
+      endpointId: 'endpoint_remote',
+      baseUrl: 'http://127.0.0.1:8188',
+    })
+  })
+
+  it('resets the workflow editor ComfyUI selection when switching functions', () => {
+    const state = panelProject()
+    state.comfy.endpoints = [
+      state.comfy.endpoints[0]!,
+      {
+        ...state.comfy.endpoints[0]!,
+        id: 'endpoint_remote',
+        name: 'Remote ComfyUI',
+        baseUrl: 'http://127.0.0.1:8188',
+      },
+    ]
+    state.functions.fn_render.workflow.editor = {
+      kind: 'comfyui_embedded',
       endpointId: 'endpoint_local',
       baseUrl: 'http://127.0.0.1:27707',
-    })
+      savedAt: '2026-05-09T00:00:00.000Z',
+    }
+    state.functions.fn_second = {
+      ...structuredClone(state.functions.fn_render),
+      id: 'fn_second',
+      name: 'Second Render',
+      workflow: {
+        ...structuredClone(state.functions.fn_render.workflow),
+        editor: {
+          kind: 'comfyui_embedded',
+          endpointId: 'endpoint_remote',
+          baseUrl: 'http://127.0.0.1:8188',
+          savedAt: '2026-05-09T00:00:00.000Z',
+        },
+      },
+      createdAt: '2026-05-09T00:00:00.000Z',
+      updatedAt: '2026-05-09T00:00:00.000Z',
+    }
+    projectStore.setState({
+      project: state,
+      projectLibrary: { [state.project.id]: state },
+      selectedNodeId: undefined,
+      selectedNodeIds: [],
+    } as unknown as Partial<ReturnType<typeof projectStore.getState>>)
+
+    render(<SettingsPage onClose={() => undefined} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Function Management' }))
+    const dialog = screen.getByRole('dialog', { name: 'Function Management' })
+    const firstEditorServer = within(dialog).getByLabelText('Workflow editor ComfyUI server Flux Render')
+    expect(firstEditorServer).toHaveValue('endpoint_local')
+
+    fireEvent.click(within(within(dialog).getByLabelText('Managed function list')).getByRole('button', { name: /Second Render/ }))
+
+    expect(within(dialog).getByLabelText('Workflow editor ComfyUI server Second Render')).toHaveValue('endpoint_remote')
+
+    fireEvent.click(within(within(dialog).getByLabelText('Managed function list')).getByRole('button', { name: /Flux Render/ }))
+
+    expect(within(dialog).getByLabelText('Workflow editor ComfyUI server Flux Render')).toHaveValue('endpoint_local')
   })
 
   it('shows ComfyUI server status on the right panel and edits servers in management', () => {
