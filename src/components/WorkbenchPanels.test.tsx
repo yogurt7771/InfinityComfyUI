@@ -305,7 +305,7 @@ describe('LeftPanel', () => {
     })
   })
 
-  it('creates a workflow function in a separate dialog and selects it after saving', () => {
+  it('creates a workflow function from the embedded ComfyUI editor and selects it after saving', async () => {
     render(<SettingsPage onClose={() => undefined} />)
 
     fireEvent.click(screen.getByRole('button', { name: 'Function Management' }))
@@ -315,12 +315,66 @@ describe('LeftPanel', () => {
     const createDialog = screen.getByRole('dialog', { name: 'New Function' })
 
     fireEvent.change(within(createDialog).getByLabelText('Function name'), { target: { value: 'Kitchen Batch Render' } })
-    fireEvent.change(within(createDialog).getByLabelText('Workflow JSON'), {
-      target: {
-        value:
-          '{"6":{"class_type":"CLIPTextEncode","_meta":{"title":"Positive Prompt"},"inputs":{"text":"warm"}},"20":{"class_type":"SaveImage","_meta":{"title":"Result_Image"},"inputs":{"filename_prefix":"render"}}}',
+    expect(within(createDialog).queryByLabelText('Workflow JSON')).not.toBeInTheDocument()
+    expect(within(createDialog).queryByLabelText('New workflow JSON preview')).not.toBeInTheDocument()
+    expect(within(createDialog).getByRole('button', { name: 'Save function' })).toBeDisabled()
+
+    fireEvent.click(within(createDialog).getByRole('button', { name: 'Edit in ComfyUI' }))
+    const editor = await screen.findByRole('dialog', { name: 'ComfyUI Workflow Editor' })
+    const frame = within(editor).getByTitle('ComfyUI editor Local ComfyUI') as HTMLIFrameElement
+    const graphToPrompt = vi.fn().mockResolvedValue({
+      output: {
+        '20': {
+          class_type: 'SaveImage',
+          _meta: { title: 'Result_Image' },
+          inputs: { filename_prefix: 'render' },
+        },
+      },
+      workflow: {
+        id: 'created_in_comfy',
+        nodes: [{ id: 20, type: 'SaveImage', pos: [100, 120] }],
+        links: [],
       },
     })
+    const frameWindow = {
+      Request,
+      Response,
+      fetch: vi.fn().mockRejectedValue(new Error('real prompt submission should be blocked')),
+      app: {} as unknown,
+    }
+    const queuePrompt = vi.fn(async () => {
+      const response = await frameWindow.fetch('/prompt', {
+        method: 'POST',
+        body: JSON.stringify({
+          prompt: {
+            '6': { class_type: 'CLIPTextEncode', _meta: { title: 'Positive Prompt' }, inputs: { text: 'warm' } },
+            '20': {
+              class_type: 'SaveImage',
+              _meta: { title: 'Result_Image' },
+              inputs: { filename_prefix: 'render', images: ['6', 0] },
+            },
+          },
+          workflow: { nodes: [] },
+          client_id: 'client_test',
+        }),
+      })
+      await response.json()
+    })
+    frameWindow.app = {
+      graphToPrompt,
+      queuePrompt,
+      graph: { serialize: vi.fn() },
+    }
+    Object.defineProperty(frame, 'contentWindow', {
+      configurable: true,
+      value: frameWindow,
+    })
+
+    fireEvent.load(frame)
+    fireEvent.click(within(editor).getByRole('button', { name: 'Save from ComfyUI' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ComfyUI Workflow Editor' })).not.toBeInTheDocument())
+    expect(within(createDialog).getByLabelText('Captured ComfyUI workflow')).toHaveTextContent('2 API nodes saved')
     fireEvent.click(within(createDialog).getByRole('button', { name: 'Save function' }))
 
     expect(screen.queryByRole('dialog', { name: 'New Function' })).not.toBeInTheDocument()
@@ -329,9 +383,20 @@ describe('LeftPanel', () => {
       name: /Kitchen Batch Render/,
     })
     expect(listItem).toHaveClass('selected')
-    expect(Object.values(projectStore.getState().project.functions).some((fn) => fn.name === 'Kitchen Batch Render')).toBe(
-      true,
+    const createdFunction = Object.values(projectStore.getState().project.functions).find(
+      (fn) => fn.name === 'Kitchen Batch Render',
     )
+    expect(createdFunction).toMatchObject({
+      workflow: {
+        rawJson: {
+          '20': { class_type: 'SaveImage', _meta: { title: 'Result_Image' } },
+        },
+        uiJson: {
+          id: 'created_in_comfy',
+          nodes: [{ id: 20, type: 'SaveImage', pos: [100, 120] }],
+        },
+      },
+    })
   })
 
   it('creates a request function in the new function dialog and edits request bindings', () => {
@@ -539,28 +604,18 @@ describe('LeftPanel', () => {
     expect(within(dialog).getByLabelText('Output workflow node video')).not.toHaveAttribute('aria-invalid')
   })
 
-  it('formats new workflow JSON and renders a syntax highlighted preview in the create dialog', () => {
+  it('keeps ComfyUI workflow creation out of manual JSON editing', () => {
     render(<SettingsPage onClose={() => undefined} />)
 
     fireEvent.click(screen.getByRole('button', { name: 'Function Management' }))
     const dialog = screen.getByRole('dialog', { name: 'Function Management' })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Function' }))
     const createDialog = screen.getByRole('dialog', { name: 'New Function' })
-    const workflowJson = within(createDialog).getByLabelText('Workflow JSON')
 
-    fireEvent.change(workflowJson, {
-      target: {
-        value: '{"6":{"class_type":"CLIPTextEncode","_meta":{"title":"Positive Prompt"},"inputs":{"text":"warm"}}}',
-      },
-    })
-    fireEvent.click(within(createDialog).getByRole('button', { name: 'Format JSON' }))
-
-    expect((workflowJson as HTMLTextAreaElement).value).toContain('"6"')
-    expect((workflowJson as HTMLTextAreaElement).value).toContain('\n    "class_type"')
-    const preview = within(createDialog).getByLabelText('New workflow JSON preview')
-    expect(within(preview).getByText('"class_type"')).toBeVisible()
-    expect(preview.querySelector('.json-key')).not.toBeNull()
-    expect(preview.querySelector('.json-string')).not.toBeNull()
+    expect(within(createDialog).getByLabelText('No ComfyUI workflow saved')).toHaveTextContent('No workflow saved yet')
+    expect(within(createDialog).queryByLabelText('Workflow JSON')).not.toBeInTheDocument()
+    expect(within(createDialog).queryByRole('button', { name: 'Format JSON' })).not.toBeInTheDocument()
+    expect(within(createDialog).getByRole('button', { name: 'Save function' })).toBeDisabled()
   })
 
   it('renders the selected function workflow JSON only as a syntax highlighted view', () => {

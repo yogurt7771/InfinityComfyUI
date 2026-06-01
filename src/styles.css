@@ -927,6 +927,32 @@ div.server-list-item {
   font-size: 12px;
 }
 
+.comfy-workflow-capture {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.025);
+}
+
+.comfy-workflow-capture.is-saved {
+  border-style: solid;
+  border-color: rgba(13, 148, 136, 0.32);
+  background: rgba(13, 148, 136, 0.08);
+}
+
+.comfy-workflow-capture strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.comfy-workflow-capture span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .comfy-editor-modal {
   width: min(1540px, calc(100vw - 28px));
   max-height: min(940px, calc(100dvh - 28px));

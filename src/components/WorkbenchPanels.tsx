@@ -1168,7 +1168,7 @@ function NewFunctionDialog({
 }) {
   const [functionType, setFunctionType] = useState<NewFunctionType>('comfyui')
   const [functionName, setFunctionName] = useState('')
-  const [workflowJson, setWorkflowJson] = useState('')
+  const [workflowRawJson, setWorkflowRawJson] = useState<ComfyWorkflow>()
   const [workflowUiJson, setWorkflowUiJson] = useState<ComfyUiWorkflow>()
   const [workflowEditor, setWorkflowEditor] = useState<ComfyWorkflowEditorMetadata>()
   const [comfyEditorOpen, setComfyEditorOpen] = useState(false)
@@ -1215,12 +1215,7 @@ function NewFunctionDialog({
       return
     }
 
-    try {
-      setWorkflowJson(JSON.stringify(JSON.parse(workflowJson), null, 2))
-      setError(undefined)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid JSON')
-    }
+    setError(workflowRawJson ? undefined : 'Save a workflow from ComfyUI first')
   }
 
   const saveFunction = () => {
@@ -1259,7 +1254,11 @@ function NewFunctionDialog({
           messages: JSON.parse(geminiMessagesJson) as GeminiLlmConfig['messages'],
         })
       } else {
-        functionId = onSaveComfy(name, JSON.parse(workflowJson) as ComfyWorkflow, {
+        if (!workflowRawJson) {
+          setError('Save a workflow from ComfyUI first')
+          return
+        }
+        functionId = onSaveComfy(name, workflowRawJson, {
           ...(workflowUiJson !== undefined ? { uiJson: workflowUiJson } : {}),
           ...(workflowEditor !== undefined ? { editor: workflowEditor } : {}),
         })
@@ -1272,19 +1271,13 @@ function NewFunctionDialog({
   }
 
   const saveEmbeddedWorkflow = (value: EmbeddedComfySave) => {
-    setWorkflowJson(JSON.stringify(value.rawJson, null, 2))
+    setWorkflowRawJson(value.rawJson)
     setWorkflowUiJson(value.uiJson)
     setWorkflowEditor(value.editor)
     setError(undefined)
   }
-  const embeddedInitialApiJson = useMemo(() => {
-    if (!workflowJson.trim()) return undefined
-    try {
-      return JSON.parse(workflowJson) as ComfyWorkflow
-    } catch {
-      return undefined
-    }
-  }, [workflowJson])
+  const savedComfyNodeCount = workflowRawJson ? Object.keys(workflowRawJson).length : 0
+  const canSaveFunction = functionType !== 'comfyui' || workflowRawJson !== undefined
 
   return (
     <Fragment>
@@ -1319,23 +1312,28 @@ function NewFunctionDialog({
                 <Network size={14} />
                 Edit in ComfyUI
               </button>
-              <span>{workflowUiJson ? 'Editable ComfyUI graph saved' : 'Paste API JSON or edit in ComfyUI'}</span>
+              <span>
+                {workflowRawJson
+                  ? 'Workflow saved from ComfyUI'
+                  : 'Build or open the workflow in ComfyUI, then save it back here'}
+              </span>
             </div>
-            <label className="field">
-              <span>Workflow JSON</span>
-              <textarea
-                aria-invalid={error ? true : undefined}
-                aria-label="Workflow JSON"
-                value={workflowJson}
-                onChange={(event) => {
-                  setWorkflowJson(event.target.value)
-                  setWorkflowUiJson(undefined)
-                  setWorkflowEditor(undefined)
-                  setError(undefined)
-                }}
-                rows={12}
-              />
-            </label>
+            <div
+              className={`comfy-workflow-capture ${workflowRawJson ? 'is-saved' : 'is-empty'}`}
+              aria-label={workflowRawJson ? 'Captured ComfyUI workflow' : 'No ComfyUI workflow saved'}
+            >
+              <strong>{workflowRawJson ? `${savedComfyNodeCount} API nodes saved` : 'No workflow saved yet'}</strong>
+              <span>
+                {workflowRawJson
+                  ? workflowUiJson
+                    ? 'Editable UI workflow and runnable API workflow are stored.'
+                    : 'Runnable API workflow is stored.'
+                  : selectedComfyEndpoint
+                    ? 'Use the ComfyUI editor button above to create or import the workflow.'
+                    : 'Configure and enable a ComfyUI endpoint before creating a workflow function.'}
+              </span>
+            </div>
+            {error ? <span className="field-error">{error}</span> : null}
           </div>
         ) : functionType === 'request' ? (
           <>
@@ -1500,22 +1498,19 @@ function NewFunctionDialog({
             </label>
           </>
         )}
-        <div className="json-toolbar">
-          <button type="button" onClick={formatWorkflowJson}>
-            Format JSON
-          </button>
-          {error ? <span className="field-error">{error}</span> : null}
-        </div>
-        {functionType === 'comfyui' ? (
-          <pre className="json-preview new-workflow-preview" aria-label="New workflow JSON preview">
-            <code>{highlightedJson(workflowJson)}</code>
-          </pre>
+        {functionType !== 'comfyui' ? (
+          <div className="json-toolbar">
+            <button type="button" onClick={formatWorkflowJson}>
+              Format JSON
+            </button>
+            {error ? <span className="field-error">{error}</span> : null}
+          </div>
         ) : null}
         <div className="new-workflow-actions">
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button type="button" className="primary-action" onClick={saveFunction}>
+          <button type="button" className="primary-action" onClick={saveFunction} disabled={!canSaveFunction}>
             Save function
           </button>
         </div>
@@ -1525,7 +1520,7 @@ function NewFunctionDialog({
       <ComfyWorkflowEditorDialog
         endpoint={selectedComfyEndpoint}
         initialUiJson={workflowUiJson}
-        initialApiJson={embeddedInitialApiJson}
+        initialApiJson={workflowRawJson}
         onSave={saveEmbeddedWorkflow}
         onClose={() => setComfyEditorOpen(false)}
       />
