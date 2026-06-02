@@ -3069,9 +3069,6 @@ export function LeftPanel() {
         onClick={() => setAssetsOpen((value) => !value)}
       >
         <FileInput size={20} />
-        <span className="assets-dock-count" aria-hidden="true">
-          {resources.length}
-        </span>
       </button>
       {assetsOpen ? (
         <section id="assets-popover" className="side-panel left-panel asset-popover" aria-label="Assets popover">
