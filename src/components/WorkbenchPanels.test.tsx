@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LeftPanel, RightPanel, SettingsPage, highlightedJson } from './WorkbenchPanels'
 import { projectStore } from '../store/projectStore'
@@ -152,6 +152,8 @@ describe('LeftPanel', () => {
   it('shows compact previews for text and image assets', () => {
     render(<LeftPanel />)
 
+    expect(screen.getByRole('button', { name: 'Assets' })).toBeVisible()
+    expect(screen.queryByLabelText('Asset list')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Text' })).not.toBeInTheDocument()
     expect(screen.queryByDisplayValue('warm kitchen with soft daylight')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Function Management' })).not.toBeInTheDocument()
@@ -163,6 +165,7 @@ describe('LeftPanel', () => {
     expect(screen.queryByText('Tasks 1')).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Packages' })).not.toBeInTheDocument()
 
+    fireEvent.click(screen.getByRole('button', { name: 'Assets' }))
     const assetList = screen.getByLabelText('Asset list')
     expect(within(assetList).getByText(/cinematic modern kitchen/)).toBeVisible()
     expect(within(assetList).getByRole('img', { name: 'Render.png' })).toHaveAttribute(
@@ -171,46 +174,84 @@ describe('LeftPanel', () => {
     )
   })
 
-  it('opens asset list resources in a preview modal and double-clicks to locate their canvas node', () => {
-    const state = panelProject()
-    state.canvas.nodes = [
-      {
-        id: 'node_result_1',
-        type: 'result_group',
-        position: { x: 420, y: 0 },
-        data: { resources: [{ resourceId: 'res_image', type: 'image' }] },
-      },
-      {
-        id: 'node_image_asset',
-        type: 'resource',
-        position: { x: 0, y: 0 },
-        data: { resourceId: 'res_image' },
-      },
-    ]
-    state.resources.res_image.source = {
-      ...state.resources.res_image.source,
-      resultGroupNodeId: 'node_result_1',
-      functionNodeId: 'node_fn_render',
-    }
-    projectStore.setState({
-      project: state,
-      projectLibrary: { [state.project.id]: state },
-      selectedNodeId: undefined,
-      selectedNodeIds: [],
-    } as unknown as Partial<ReturnType<typeof projectStore.getState>>)
-    const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
-
+  it('collapses the asset list popover when the pointer leaves the assets dock', () => {
     render(<LeftPanel />)
 
-    const assetItem = screen.getByRole('button', { name: /Render\.png/ })
-    fireEvent.click(assetItem)
+    fireEvent.click(screen.getByRole('button', { name: 'Assets' }))
+    expect(screen.getByLabelText('Asset list')).toBeVisible()
 
-    expect(screen.getByRole('dialog', { name: 'Preview render.png' })).toBeVisible()
+    fireEvent.mouseLeave(screen.getByRole('complementary', { name: 'Assets panel' }))
 
-    fireEvent.doubleClick(assetItem)
+    expect(screen.queryByLabelText('Asset list')).not.toBeInTheDocument()
+  })
 
-    expect(projectStore.getState().selectedNodeId).toBe('node_result_1')
-    expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'infinity-focus-node' }))
+  it('opens asset list resources in a preview modal', () => {
+    vi.useFakeTimers()
+    try {
+      render(<LeftPanel />)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Assets' }))
+      fireEvent.click(screen.getByRole('button', { name: /Render\.png/ }))
+      act(() => {
+        vi.advanceTimersByTime(180)
+      })
+
+      expect(screen.getByRole('dialog', { name: 'Preview render.png' })).toBeVisible()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('double-clicks asset list resources to locate their canvas node without opening the preview modal', () => {
+    vi.useFakeTimers()
+    try {
+      const state = panelProject()
+      state.canvas.nodes = [
+        {
+          id: 'node_result_1',
+          type: 'result_group',
+          position: { x: 420, y: 0 },
+          data: { resources: [{ resourceId: 'res_image', type: 'image' }] },
+        },
+        {
+          id: 'node_image_asset',
+          type: 'resource',
+          position: { x: 0, y: 0 },
+          data: { resourceId: 'res_image' },
+        },
+      ]
+      state.resources.res_image.source = {
+        ...state.resources.res_image.source,
+        resultGroupNodeId: 'node_result_1',
+        functionNodeId: 'node_fn_render',
+      }
+      projectStore.setState({
+        project: state,
+        projectLibrary: { [state.project.id]: state },
+        selectedNodeId: undefined,
+        selectedNodeIds: [],
+      } as unknown as Partial<ReturnType<typeof projectStore.getState>>)
+      const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
+
+      render(<LeftPanel />)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Assets' }))
+      const assetItem = screen.getByRole('button', { name: /Render\.png/ })
+      fireEvent.click(assetItem)
+      expect(screen.queryByRole('dialog', { name: 'Preview render.png' })).not.toBeInTheDocument()
+      fireEvent.click(assetItem)
+      fireEvent.doubleClick(assetItem)
+
+      act(() => {
+        vi.runOnlyPendingTimers()
+      })
+
+      expect(projectStore.getState().selectedNodeId).toBe('node_result_1')
+      expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'infinity-focus-node' }))
+      expect(screen.queryByRole('dialog', { name: 'Preview render.png' })).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('manages projects from settings', () => {

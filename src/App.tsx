@@ -4,10 +4,8 @@ import {
   Activity,
   Boxes,
   ChevronLeft,
-  ChevronRight,
   Database,
   Moon,
-  PanelLeftClose,
   PanelRightClose,
   Settings,
   Sun,
@@ -18,7 +16,6 @@ import { useProjectStore } from './store/projectStore'
 import './styles.css'
 
 export default function App() {
-  const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false)
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [theme, setTheme] = useState<'light' | 'dark'>('light')
@@ -71,22 +68,13 @@ export default function App() {
       <main
         className={[
           'workbench',
-          leftPanelCollapsed ? 'left-collapsed' : '',
           rightPanelCollapsed ? 'right-collapsed' : '',
         ]
           .filter(Boolean)
           .join(' ')}
       >
-        <div className={`panel-shell left-panel-shell ${leftPanelCollapsed ? 'is-collapsed' : ''}`}>
-          <button
-            className="panel-collapse-button left-collapse-button"
-            type="button"
-            aria-label={leftPanelCollapsed ? 'Expand left panel' : 'Collapse left panel'}
-            onClick={() => setLeftPanelCollapsed((value) => !value)}
-          >
-            {leftPanelCollapsed ? <ChevronRight size={17} /> : <PanelLeftClose size={17} />}
-          </button>
-          {!leftPanelCollapsed ? <LeftPanel /> : null}
+        <div className="panel-shell left-panel-shell">
+          <LeftPanel />
         </div>
         <CanvasWorkspace />
         <div className={`panel-shell right-panel-shell ${rightPanelCollapsed ? 'is-collapsed' : ''}`}>

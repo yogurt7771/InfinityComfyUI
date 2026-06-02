@@ -3030,7 +3030,10 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
 export function LeftPanel() {
   const project = useProjectStore((state) => state.project)
   const selectNode = useProjectStore((state) => state.selectNode)
+  const [assetsOpen, setAssetsOpen] = useState(false)
   const [previewResource, setPreviewResource] = useState<Resource | undefined>()
+  const previewTimerRef = useRef<number | undefined>(undefined)
+  const resources = Object.values(project.resources)
   const focusResourceNode = (resource: Resource) => {
     setPreviewResource(undefined)
     const nodeId = resourceOwnerNodeId(project, resource)
@@ -3038,40 +3041,84 @@ export function LeftPanel() {
     selectNode(nodeId)
     window.dispatchEvent(new CustomEvent('infinity-focus-node', { detail: { nodeId } }))
   }
+  useEffect(
+    () => () => {
+      if (previewTimerRef.current === undefined) return
+      window.clearTimeout(previewTimerRef.current)
+    },
+    [],
+  )
 
   return (
-    <aside className="side-panel left-panel">
-      <section>
-        <div className="panel-title">
-          <FileInput size={16} />
-          <h2>Assets</h2>
-        </div>
-        <div className="item-list asset-list" aria-label="Asset list">
-          {Object.values(project.resources).length > 0 ? (
-            Object.values(project.resources).map((resource) => (
-              <button
-                key={resource.id}
-                type="button"
-                className="asset-list-item"
-                onClick={() => setPreviewResource(resource)}
-                onDoubleClick={(event) => {
-                  event.preventDefault()
-                  focusResourceNode(resource)
-                }}
-              >
-                <ResourceListPreview resource={resource} />
-                <span className="asset-list-copy">
-                  <span>{resourceLabel(resource)}</span>
-                  <small>{resourceSummary(resource)}</small>
-                </span>
-                <strong>{resource.type}</strong>
-              </button>
-            ))
-          ) : (
-            <div className="empty-list">No assets</div>
-          )}
-        </div>
-      </section>
+    <aside
+      className={`assets-dock ${assetsOpen ? 'is-open' : ''}`}
+      aria-label="Assets panel"
+      onMouseLeave={() => setAssetsOpen(false)}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') {
+          setAssetsOpen(false)
+        }
+      }}
+    >
+      <button
+        type="button"
+        className="assets-dock-button"
+        aria-label="Assets"
+        aria-expanded={assetsOpen}
+        aria-controls="assets-popover"
+        onClick={() => setAssetsOpen((value) => !value)}
+      >
+        <FileInput size={20} />
+        <span className="assets-dock-count" aria-hidden="true">
+          {resources.length}
+        </span>
+      </button>
+      {assetsOpen ? (
+        <section id="assets-popover" className="side-panel left-panel asset-popover" aria-label="Assets popover">
+          <div className="panel-title asset-popover-title">
+            <FileInput size={16} />
+            <h2>Assets</h2>
+            <span>{resources.length}</span>
+          </div>
+          <div className="item-list asset-list" aria-label="Asset list">
+            {resources.length > 0 ? (
+              resources.map((resource) => (
+                <button
+                  key={resource.id}
+                  type="button"
+                  className="asset-list-item"
+                  onClick={() => {
+                    if (previewTimerRef.current !== undefined) {
+                      window.clearTimeout(previewTimerRef.current)
+                    }
+                    previewTimerRef.current = window.setTimeout(() => {
+                      setPreviewResource(resource)
+                      previewTimerRef.current = undefined
+                    }, 160)
+                  }}
+                  onDoubleClick={(event) => {
+                    event.preventDefault()
+                    if (previewTimerRef.current !== undefined) {
+                      window.clearTimeout(previewTimerRef.current)
+                      previewTimerRef.current = undefined
+                    }
+                    focusResourceNode(resource)
+                  }}
+                >
+                  <ResourceListPreview resource={resource} />
+                  <span className="asset-list-copy">
+                    <span>{resourceLabel(resource)}</span>
+                    <small>{resourceSummary(resource)}</small>
+                  </span>
+                  <strong>{resource.type}</strong>
+                </button>
+              ))
+            ) : (
+              <div className="empty-list">No assets</div>
+            )}
+          </div>
+        </section>
+      ) : null}
       <FullResourcePreviewModal
         resource={previewResource}
         resources={previewResource ? [previewResource] : []}
