@@ -45,6 +45,7 @@ export type Resource = {
   value: string | number | MediaResourceValue
   source: {
     kind: ResourceSourceKind
+    runId?: string
     functionNodeId?: string
     resultGroupNodeId?: string
     taskId?: string
@@ -476,6 +477,40 @@ export type ExecutionTask = {
   completedAt?: string
 }
 
+export type RunProvider =
+  | 'comfyui'
+  | 'openai_llm'
+  | 'gemini_llm'
+  | 'openai_image'
+  | 'gemini_image'
+  | 'http_request'
+  | 'local_transform'
+
+export type RunSnapshot = {
+  id: string
+  functionId: string
+  functionName: string
+  functionSnapshot: GenerationFunction
+  provider: RunProvider
+  inputRefs: Record<string, InputResourceRef>
+  inputValuesSnapshot: Record<string, ExecutionInputSnapshot>
+  primitiveParams: Record<string, PrimitiveInputValue>
+  runIndex: number
+  runTotal: number
+  outputRefs: Record<string, ResourceRef[]>
+  endpointId?: string
+  workflowTemplateSnapshot?: ComfyWorkflow
+  compiledWorkflowSnapshot?: ComfyWorkflow
+  requestSnapshot?: unknown
+  seedPatchLog: SeedPatchRecord[]
+  taskIds: string[]
+  status: ExecutionTask['status']
+  error?: ExecutionTask['error']
+  createdAt: string
+  updatedAt: string
+  completedAt?: string
+}
+
 export type ProjectState = {
   schemaVersion: string
   project: {
@@ -489,6 +524,7 @@ export type ProjectState = {
   resources: Record<string, Resource>
   assets: Record<string, AssetRecord>
   functions: Record<string, GenerationFunction>
+  runs?: Record<string, RunSnapshot>
   tasks: Record<string, ExecutionTask>
   history?: ProjectHistoryState
   templates?: Record<string, CanvasTemplate>

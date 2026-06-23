@@ -169,10 +169,10 @@ Expected: pass.
 - Create: `src/domain/runs/runSnapshot.test.ts`
 - Modify: `src/domain/types.ts`
 
-- [ ] **Step 1: Write failing tests for run snapshot normalization**
-- [ ] **Step 2: Add `RunSnapshot` and provider discriminants**
-- [ ] **Step 3: Add helpers to derive output resource source metadata from `runId/outputKey`**
-- [ ] **Step 4: Add tests that generated resources no longer need `functionNodeId/resultGroupNodeId`**
+- [x] **Step 1: Write failing tests for run snapshot normalization**
+- [x] **Step 2: Add `RunSnapshot` and provider discriminants**
+- [x] **Step 3: Add helpers to derive output resource source metadata from `runId/outputKey`**
+- [x] **Step 4: Add tests that generated resources no longer need `functionNodeId/resultGroupNodeId`**
 
 Run: `npm test -- --run src/domain/runs/runSnapshot.test.ts`
 
