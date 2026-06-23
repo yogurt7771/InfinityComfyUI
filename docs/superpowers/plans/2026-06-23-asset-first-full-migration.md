@@ -218,10 +218,10 @@ Expected: pass. If `localTransforms.test.ts` does not exist, add focused local t
 - Create: `src/domain/runs/dependencyResolver.test.ts`
 - Modify: `src/store/projectStore.ts`
 
-- [ ] **Step 1: Write failing tests for deep pending dependency chains**
-- [ ] **Step 2: Implement pending task resolution when upstream output assets succeed**
-- [ ] **Step 3: Implement immediate downstream failure when upstream output assets fail**
-- [ ] **Step 4: Wire resolver into task completion/failure store actions**
+- [x] **Step 1: Write failing tests for deep pending dependency chains**
+- [x] **Step 2: Implement pending task resolution when upstream output assets succeed**
+- [x] **Step 3: Implement immediate downstream failure when upstream output assets fail**
+- [x] **Step 4: Wire resolver into task completion/failure store actions**
 
 Run: `npm test -- --run src/domain/runs/dependencyResolver.test.ts src/store/projectStore.test.ts`
 

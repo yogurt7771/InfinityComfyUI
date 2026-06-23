@@ -50,6 +50,7 @@ import {
   isLocalTransformFunction,
   type LocalTransformOutputValue,
 } from '../domain/localTransforms'
+import { inputValuesFromTaskSnapshot, resolveExecutionTaskDependencies } from '../domain/runs/dependencyResolver'
 import { createConfigPackage, createProjectPackage, type ConfigPackage, type FullProjectPackage } from '../domain/projectPackage'
 import { blobToDataUrl } from '../domain/projectAssets'
 import { randomizeWorkflowSeeds } from '../domain/seed'
@@ -3301,77 +3302,11 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       }
     }
 
-    const inputValuesFromTaskSnapshot = (task: ExecutionTask): RuntimeInputValues => {
-      const values: RuntimeInputValues = {}
-      for (const [key, snapshot] of Object.entries(task.inputValuesSnapshot ?? {})) {
-        if (snapshot.source === 'resource' && snapshot.resourceId) {
-          values[key] = { resourceId: snapshot.resourceId, type: snapshot.type }
-        } else if (snapshot.source === 'pending' && snapshot.pendingTaskId && snapshot.outputKey) {
-          values[key] = { pendingTaskId: snapshot.pendingTaskId, outputKey: snapshot.outputKey, type: snapshot.type }
-        } else if (snapshot.value === null || typeof snapshot.value === 'string' || typeof snapshot.value === 'number') {
-          values[key] = snapshot.value
-        }
-      }
-      return { ...values, ...structuredClone(task.inputRefs ?? {}) }
-    }
-
-    type DependencyResolution =
-      | { status: 'waiting' }
-      | { status: 'failed'; code: string; message: string; raw?: unknown }
-      | {
-          status: 'resolved'
-          inputValues: ResolvedRuntimeInputValues
-          resolvedRefsByPendingKey: Map<string, ResourceRef>
-        }
-
     const taskResultNode = (project: ProjectState, taskId: string) =>
       project.canvas.nodes.find((node) => node.type === 'result_group' && node.data.taskId === taskId)
 
-    const resolveTaskInputDependencies = (task: ExecutionTask, project: ProjectState): DependencyResolution => {
-      const inputValues = inputValuesFromTaskSnapshot(task)
-      const resolvedRefsByPendingKey = new Map<string, ResourceRef>()
-
-      for (const [inputKey, value] of Object.entries(inputValues)) {
-        if (!isPendingResourceRef(value)) continue
-
-        const dependencyTask = project.tasks[value.pendingTaskId]
-        if (!dependencyTask) {
-          return {
-            status: 'failed',
-            code: 'dependency_missing',
-            message: `Dependency task ${value.pendingTaskId} is missing`,
-          }
-        }
-        if (dependencyTask.status === 'failed' || dependencyTask.status === 'canceled') {
-          return {
-            status: 'failed',
-            code: 'dependency_failed',
-            message: `Dependency task ${value.pendingTaskId} ${dependencyTask.status}`,
-            raw: dependencyTask.error,
-          }
-        }
-        if (dependencyTask.status !== 'succeeded') return { status: 'waiting' }
-
-        const outputRefs = dependencyTask.outputRefs[value.outputKey] ?? []
-        const resolvedRef = outputRefs.find((ref) => ref.type === value.type) ?? outputRefs[0]
-        if (!resolvedRef) {
-          return {
-            status: 'failed',
-            code: 'dependency_output_missing',
-            message: `Dependency task ${value.pendingTaskId} did not produce ${value.outputKey}`,
-          }
-        }
-
-        inputValues[inputKey] = resolvedRef
-        resolvedRefsByPendingKey.set(pendingRefKey(value), resolvedRef)
-      }
-
-      return {
-        status: 'resolved',
-        inputValues: asResolvedInputValues(inputValues),
-        resolvedRefsByPendingKey,
-      }
-    }
+    const resolveTaskInputDependencies = (task: ExecutionTask, project: ProjectState) =>
+      resolveExecutionTaskDependencies(task, project.tasks)
 
     const markPendingTaskReady = (
       task: ExecutionTask,
