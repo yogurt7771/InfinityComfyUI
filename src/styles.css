@@ -2266,6 +2266,42 @@ textarea[aria-invalid="true"] {
   border-top: 3px solid var(--teal);
 }
 
+.resource-node-active {
+  box-shadow:
+    0 0 0 3px rgba(19, 136, 148, 0.12),
+    0 18px 48px rgba(15, 23, 42, 0.12);
+}
+
+.resource-node-active::before {
+  content: "";
+  position: absolute;
+  top: -3px;
+  left: -1px;
+  right: -1px;
+  height: 3px;
+  border-radius: 8px 8px 0 0;
+  background: linear-gradient(90deg, rgba(19, 136, 148, 0.34), rgba(20, 184, 166, 0.34), rgba(19, 136, 148, 0.34));
+  background-size: 220% 100%;
+  animation: active-result-flow 1.4s linear infinite;
+  pointer-events: none;
+}
+
+.resource-node-running,
+.resource-node-fetching_outputs {
+  border-top-color: var(--teal);
+}
+
+.resource-node-queued,
+.resource-node-pending {
+  border-top-color: var(--amber);
+}
+
+.resource-node-failed {
+  border-color: #f3a6b5;
+  border-top-color: #be123c;
+  background: #fffafa;
+}
+
 .function-node {
   width: 100%;
   min-width: 420px;
@@ -2607,6 +2643,10 @@ textarea[aria-invalid="true"] {
   min-width: 0;
 }
 
+.resource-node-meta .result-status-chip {
+  margin-left: auto;
+}
+
 .asset-function-chip {
   max-width: 58%;
   min-height: 28px;
@@ -2633,6 +2673,34 @@ textarea[aria-invalid="true"] {
   border-color: rgba(13, 148, 136, 0.56);
   color: #0f766e;
   background: rgba(20, 184, 166, 0.18);
+}
+
+.resource-pending-media {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  min-height: 154px;
+  border: 1px dashed rgba(13, 148, 136, 0.32);
+  border-radius: 8px;
+  color: var(--ink-soft);
+  background:
+    radial-gradient(circle at 50% 36%, rgba(20, 184, 166, 0.13), transparent 45%),
+    rgba(240, 253, 250, 0.54);
+  text-align: center;
+}
+
+.resource-pending-media strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.resource-pending-media-failed {
+  border-color: rgba(190, 18, 60, 0.28);
+  background:
+    radial-gradient(circle at 50% 36%, rgba(244, 63, 94, 0.11), transparent 45%),
+    rgba(255, 241, 242, 0.64);
 }
 
 .result-meta {

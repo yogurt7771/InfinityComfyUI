@@ -126,6 +126,7 @@ const resourceHandleId = (resourceId: string) => `resource:${resourceId}`
 const assetInputHandleId = (resourceId: string) => `asset-input:${resourceId}`
 const resultHandleId = (resourceId: string) => `result:${resourceId}`
 const activeResultStatuses = new Set(['pending', 'queued', 'running', 'fetching_outputs'])
+const visibleAssetStatuses = new Set(['pending', 'queued', 'running', 'fetching_outputs', 'failed'])
 
 const commitActiveTextControl = () => {
   const activeElement = document.activeElement
@@ -769,6 +770,17 @@ function ResourceActions({
 
 function EmptyMediaPreview({ type }: { type: MediaResourceKind }) {
   return <div className="resource-empty-media">Drop or upload {type}</div>
+}
+
+function PendingAssetPreview({ type, status }: { type: ResourceType; status: string }) {
+  const action = status === 'failed' ? 'Failed to generate' : status === 'pending' ? 'Waiting for' : 'Generating'
+  return (
+    <div className={`resource-pending-media resource-pending-media-${status}`}>
+      <strong>
+        {action} {type}
+      </strong>
+    </div>
+  )
 }
 
 function NumberResourceEditor({
@@ -1833,6 +1845,10 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
   const title = String(nodeData.title ?? resource?.name ?? 'Resource')
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [previewResource, setPreviewResource] = useState<Resource | undefined>()
+  const taskId = resource?.source.taskId ?? nodeData.taskId
+  const taskStatus = taskId ? nodeData.tasksById?.[taskId]?.status : undefined
+  const assetStatus = resource?.source.kind === 'function_output' ? taskStatus ?? nodeData.status : undefined
+  const showAssetStatus = typeof assetStatus === 'string' && visibleAssetStatuses.has(assetStatus)
   const sourceFunctionId =
     resource?.metadata?.workflowFunctionId ??
     (resource?.source.taskId ? nodeData.tasksById?.[resource.source.taskId]?.functionId : undefined)
@@ -1847,7 +1863,14 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
 
   return (
     <div
-      className="canvas-node resource-node"
+      className={[
+        'canvas-node',
+        'resource-node',
+        showAssetStatus ? 'resource-node-active' : undefined,
+        showAssetStatus ? `resource-node-${assetStatus}` : undefined,
+      ]
+        .filter(Boolean)
+        .join(' ')}
       onDragOver={(event) => {
         if (!resource || !isMediaResource(resource)) return
         event.preventDefault()
@@ -1892,6 +1915,11 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
       />
       <div className="node-meta resource-node-meta">
         <span>{resource?.type ?? nodeData.resourceType}</span>
+        {showAssetStatus ? (
+          <span className={`result-status-chip ${assetStatus}`} aria-label={`Asset status ${assetStatus}`}>
+            {assetStatus}
+          </span>
+        ) : null}
         {resource?.source.kind === 'function_output' && sourceFunction ? (
           <button
             type="button"
@@ -1948,6 +1976,8 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
             >
               <ResourcePreview resource={resource} />
             </div>
+          ) : showAssetStatus ? (
+            <PendingAssetPreview type={resource.type} status={assetStatus} />
           ) : (
             <EmptyMediaPreview type={resource.type} />
           )}

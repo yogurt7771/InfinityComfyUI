@@ -138,6 +138,72 @@ describe('NodeViews', () => {
     expect(onUpdateTextResourceValue).toHaveBeenCalledWith('res_text', '编辑 prompt\nsecond line')
   })
 
+  it('shows running state on pending function output asset nodes', () => {
+    const pendingOutput: Resource = {
+      id: 'res_pending_image',
+      type: 'image',
+      name: 'Klein9B Image',
+      value: {
+        assetId: 'pending_res_pending_image',
+        url: '',
+        filename: 'image.png',
+        mimeType: 'image/*',
+        sizeBytes: 0,
+      },
+      source: {
+        kind: 'function_output',
+        outputKey: 'image',
+        functionNodeId: 'task_running',
+        taskId: 'task_running',
+      },
+      metadata: { workflowFunctionId: 'fn_render', createdAt: '2026-01-01T00:00:00.000Z' },
+    }
+    const props = {
+      id: 'node_pending_image',
+      selected: false,
+      data: {
+        ...baseNodeData,
+        resourcesById: { res_pending_image: pendingOutput },
+        resourceId: 'res_pending_image',
+        resourceType: 'image',
+        title: 'Klein9B Image',
+        status: 'running',
+        taskId: 'task_running',
+        tasksById: {
+          task_running: {
+            id: 'task_running',
+            functionNodeId: 'task_running',
+            functionId: 'fn_render',
+            runIndex: 1,
+            runTotal: 1,
+            status: 'running',
+            inputRefs: {},
+            inputSnapshot: {},
+            paramsSnapshot: {},
+            workflowTemplateSnapshot: {},
+            compiledWorkflowSnapshot: {},
+            seedPatchLog: [],
+            outputRefs: { image: [{ resourceId: 'res_pending_image', type: 'image' }] },
+            createdAt: '2026-05-09T00:00:00.000Z',
+            updatedAt: '2026-05-09T00:00:00.000Z',
+          },
+        },
+      },
+    } as unknown as ComponentProps<typeof ResourceNodeView>
+
+    const { container } = render(
+      <ReactFlowProvider>
+        <ResourceNodeView {...props} />
+      </ReactFlowProvider>,
+    )
+
+    const resourceNode = container.querySelector('.resource-node')
+    expect(resourceNode).toHaveClass('resource-node-running')
+    expect(within(resourceNode as HTMLElement).getByLabelText('Asset status running')).toBeVisible()
+    expect(within(resourceNode as HTMLElement).getByText('running')).toBeVisible()
+    expect(within(resourceNode as HTMLElement).getByText('Generating image')).toBeVisible()
+  })
+
   it('shows node reference counts and locates referenced nodes from the popover', () => {
     const onFocusReferenceNode = vi.fn()
     const props = {
