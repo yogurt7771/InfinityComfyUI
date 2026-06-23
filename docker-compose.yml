@@ -10,5 +10,8 @@ services:
       HOST: 0.0.0.0
       PORT: 7930
       COMFY_PROXY_LOOPBACK_HOST: host.docker.internal
+      COMFY_PROXY_TOKEN_FILE: /run/secrets/comfyui_password
+    volumes:
+      - "${COMFY_PROXY_PASSWORD_FILE:-D:/Codes/AIArt/ComfyUI/login/PASSWORD}:/run/secrets/comfyui_password:ro"
     extra_hosts:
       - "host.docker.internal:host-gateway"

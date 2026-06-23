@@ -1103,7 +1103,11 @@ function ComfyWorkflowEditorDialog({
   const [status, setStatus] = useState(endpoint ? 'Loading ComfyUI editor' : 'No ComfyUI endpoint configured')
   const [error, setError] = useState<string>()
   const [saving, setSaving] = useState(false)
-  const proxyUrl = endpoint ? comfyProxyUrl(endpoint.baseUrl) : undefined
+  const proxyUrl = endpoint
+    ? comfyProxyUrl(endpoint.baseUrl, {
+        bearerToken: endpoint.auth?.type === 'token' ? endpoint.auth.token : undefined,
+      })
+    : undefined
 
   const initializeFrame = async () => {
     if (!frameRef.current || !endpoint) return
