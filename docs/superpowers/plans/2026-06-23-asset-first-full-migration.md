@@ -275,11 +275,11 @@ Expected: pass.
 - Modify: `src/components/CanvasWorkspace.tsx`
 - Modify: `src/App.tsx`
 
-- [ ] **Step 1: Write failing tests that canvas nodeTypes exclude function/result nodes**
-- [ ] **Step 2: Implement asset/group node views using existing preview components**
-- [ ] **Step 3: Implement context menu entry to open Function Command Modal**
-- [ ] **Step 4: Implement Pick Mode**
-- [ ] **Step 5: Replace old workspace import path**
+- [x] **Step 1: Write failing tests that canvas nodeTypes exclude function/result nodes**
+- [x] **Step 2: Implement asset/group node views using existing preview components**
+- [x] **Step 3: Implement context menu entry to open Function Command Modal**
+- [x] **Step 4: Implement Pick Mode**
+- [x] **Step 5: Replace old workspace import path**
 
 Run: `npm test -- --run src/components/canvas src/components/CanvasWorkspace.test.ts`
 

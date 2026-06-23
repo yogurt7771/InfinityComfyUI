@@ -14,7 +14,6 @@ import {
   Background,
   Controls,
   ReactFlow,
-  ReactFlowProvider,
   SelectionMode,
   type Connection,
   type FinalConnectionState,
@@ -28,6 +27,7 @@ import {
 } from '@xyflow/react'
 import { CaseSensitive, GitCompareArrows, Grid2X2, Image, Info, Layers, MousePointer2, Pencil, Scissors, Shrink, Video, Volume2, X } from 'lucide-react'
 import { EmptyNodeView, FunctionNodeView, GroupNodeView, ResourceNodeView, ResultGroupNodeView } from './NodeViews'
+import { CanvasWorkspace as AssetOnlyCanvasWorkspace } from './canvas/CanvasWorkspace'
 import { FunctionManager } from './WorkbenchPanels'
 import { ResourcePreview } from './ResourcePreview'
 import { buildCanvasFlowEdges } from '../domain/canvasEdges'
@@ -989,7 +989,7 @@ function FunctionInputPickStrip({
   )
 }
 
-function CanvasSurface() {
+export function LegacyCanvasSurface() {
   const project = useProjectStore((state) => state.project)
   const selectedNodeId = useProjectStore((state) => state.selectedNodeId)
   const selectedNodeIds = useProjectStore((state) => state.selectedNodeIds)
@@ -2387,9 +2387,5 @@ function CanvasSurface() {
 }
 
 export function CanvasWorkspace() {
-  return (
-    <ReactFlowProvider>
-      <CanvasSurface />
-    </ReactFlowProvider>
-  )
+  return <AssetOnlyCanvasWorkspace />
 }

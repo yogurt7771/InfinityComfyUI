@@ -10,7 +10,7 @@ import {
   Settings,
   Sun,
 } from 'lucide-react'
-import { CanvasWorkspace } from './components/CanvasWorkspace'
+import { CanvasWorkspace } from './components/canvas/CanvasWorkspace'
 import { LeftPanel, RightPanel, SettingsPage } from './components/WorkbenchPanels'
 import { useProjectStore } from './store/projectStore'
 import './styles.css'
