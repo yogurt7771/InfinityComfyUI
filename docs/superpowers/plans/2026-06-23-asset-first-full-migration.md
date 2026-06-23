@@ -313,11 +313,11 @@ Expected: pass.
 - Modify: `src/domain/types.ts`
 - Test: `src/store/projectStore.test.ts`
 
-- [ ] **Step 1: Write failing tests for group/ungroup asset nodes**
-- [ ] **Step 2: Write failing tests for template recipe creation from asset subgraph**
-- [ ] **Step 3: Implement group commands**
-- [ ] **Step 4: Implement template recipe commands**
-- [ ] **Step 5: Implement template instantiation as a new group containing cloned asset nodes**
+- [x] **Step 1: Write failing tests for group/ungroup asset nodes**
+- [x] **Step 2: Write failing tests for template recipe creation from asset subgraph**
+- [x] **Step 3: Implement group commands**
+- [x] **Step 4: Implement template recipe commands**
+- [x] **Step 5: Implement template instantiation as a new group containing cloned asset nodes**
 
 Run: `npm test -- --run src/domain/commands/groupCommands.test.ts src/domain/commands/templateCommands.test.ts src/store/projectStore.test.ts`
 
