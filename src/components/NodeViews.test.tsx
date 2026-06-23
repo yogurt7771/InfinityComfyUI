@@ -204,6 +204,58 @@ describe('NodeViews', () => {
     expect(within(resourceNode as HTMLElement).getByText('Generating image')).toBeVisible()
   })
 
+  it('shows the completed run duration on function output asset nodes', () => {
+    const completedOutput: Resource = {
+      ...outputResource,
+      source: {
+        ...outputResource.source,
+        taskId: 'task_done',
+      },
+      metadata: { workflowFunctionId: 'fn_render', createdAt: '2026-05-09T00:00:04.500Z' },
+    }
+    const props = {
+      id: 'node_image',
+      selected: false,
+      data: {
+        ...baseNodeData,
+        resourcesById: { res_image: completedOutput },
+        resourceId: 'res_image',
+        resourceType: 'image',
+        title: 'Render Image',
+        tasksById: {
+          task_done: {
+            id: 'task_done',
+            functionNodeId: 'node_fn',
+            functionId: 'fn_render',
+            runIndex: 1,
+            runTotal: 1,
+            status: 'succeeded',
+            inputRefs: {},
+            inputSnapshot: {},
+            paramsSnapshot: {},
+            workflowTemplateSnapshot: {},
+            compiledWorkflowSnapshot: {},
+            seedPatchLog: [],
+            outputRefs: { image: [{ resourceId: 'res_image', type: 'image' }] },
+            createdAt: '2026-05-09T00:00:00.000Z',
+            startedAt: '2026-05-09T00:00:00.000Z',
+            updatedAt: '2026-05-09T00:00:04.500Z',
+            completedAt: '2026-05-09T00:00:04.500Z',
+          },
+        },
+      },
+    } as unknown as ComponentProps<typeof ResourceNodeView>
+
+    const { container } = render(
+      <ReactFlowProvider>
+        <ResourceNodeView {...props} />
+      </ReactFlowProvider>,
+    )
+
+    const resourceNode = container.querySelector('.resource-node')
+    expect(within(resourceNode as HTMLElement).getByLabelText('Run duration 4.5s')).toBeVisible()
+  })
+
   it('shows node reference counts and locates referenced nodes from the popover', () => {
     const onFocusReferenceNode = vi.fn()
     const props = {

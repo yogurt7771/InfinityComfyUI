@@ -34,6 +34,7 @@ import {
   requestParseModes,
 } from '../domain/requestFunction'
 import { readFileAsMediaResource, type MediaResourceKind, type MediaResourcePayload } from '../domain/resourceFiles'
+import { formatDurationMs, runDurationMs } from '../domain/runTiming'
 import { projectStore } from '../store/projectStore'
 import type {
   FunctionInputDef,
@@ -1846,9 +1847,11 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [previewResource, setPreviewResource] = useState<Resource | undefined>()
   const taskId = resource?.source.taskId ?? nodeData.taskId
-  const taskStatus = taskId ? nodeData.tasksById?.[taskId]?.status : undefined
+  const task = taskId ? nodeData.tasksById?.[taskId] : undefined
+  const taskStatus = task?.status
   const assetStatus = resource?.source.kind === 'function_output' ? taskStatus ?? nodeData.status : undefined
   const showAssetStatus = typeof assetStatus === 'string' && visibleAssetStatuses.has(assetStatus)
+  const durationLabel = formatDurationMs(runDurationMs(task))
   const sourceFunctionId =
     resource?.metadata?.workflowFunctionId ??
     (resource?.source.taskId ? nodeData.tasksById?.[resource.source.taskId]?.functionId : undefined)
@@ -1918,6 +1921,11 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
         {showAssetStatus ? (
           <span className={`result-status-chip ${assetStatus}`} aria-label={`Asset status ${assetStatus}`}>
             {assetStatus}
+          </span>
+        ) : null}
+        {durationLabel ? (
+          <span className="resource-run-duration" aria-label={`Run duration ${durationLabel}`}>
+            {durationLabel}
           </span>
         ) : null}
         {resource?.source.kind === 'function_output' && sourceFunction ? (

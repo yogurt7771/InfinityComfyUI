@@ -7561,7 +7561,6 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       set((state) => ({
         project: {
           ...state.project,
-          project: { ...state.project.project, updatedAt: now },
           comfy: {
             ...state.project.comfy,
             endpoints: state.project.comfy.endpoints.map((endpoint) =>
@@ -7625,6 +7624,17 @@ export const projectStore = createProjectSlice()
 const PROJECT_STORAGE_KEY = 'infinity-comfyui.project.v1'
 const PROJECT_LIBRARY_STORAGE_KEY = 'infinity-comfyui.projects.v1'
 
+const persistentProjectSnapshot = (project: ProjectState): ProjectState => {
+  const baseProject = withoutBuiltInProjectFunctions(project)
+  return {
+    ...baseProject,
+    comfy: {
+      ...baseProject.comfy,
+      endpoints: baseProject.comfy.endpoints.map(({ health, ...endpoint }) => endpoint),
+    },
+  }
+}
+
 const serializeProjectLibrary = (state: ProjectStoreState): ProjectLibraryPackage => {
   const projects = {
     ...state.projectLibrary,
@@ -7633,10 +7643,12 @@ const serializeProjectLibrary = (state: ProjectStoreState): ProjectLibraryPackag
   return {
     currentProjectId: state.project.project.id,
     projects: Object.fromEntries(
-      Object.entries(projects).map(([projectId, project]) => [projectId, withoutBuiltInProjectFunctions(project)]),
+      Object.entries(projects).map(([projectId, project]) => [projectId, persistentProjectSnapshot(project)]),
     ),
   }
 }
+
+const serializedProjectLibraryKey = (state: ProjectStoreState) => JSON.stringify(serializeProjectLibrary(state))
 
 const loadProjectLibrary = (payload: ProjectLibraryPackage | undefined, now: string) => {
   const projectEntries = Object.entries(payload?.projects ?? {})
@@ -7676,18 +7688,19 @@ const loadIndexedDbProjectLibrary = () =>
 const startIndexedDbProjectPersistence = () => {
   let saveTimer: number | undefined
   let loadSettled = false
-  let pendingSaveState: ProjectStoreState | undefined
+  let lastSavedLibraryKey: string | undefined
 
   const saveProjectLibrary = (state: ProjectStoreState) => {
-    void setIdb(PROJECT_STORAGE_KEY, withoutBuiltInProjectFunctions(state.project)).catch(() => undefined)
-    void setIdb(PROJECT_LIBRARY_STORAGE_KEY, serializeProjectLibrary(state)).catch(() => undefined)
+    const nextLibrary = serializeProjectLibrary(state)
+    const nextLibraryKey = JSON.stringify(nextLibrary)
+    if (nextLibraryKey === lastSavedLibraryKey) return
+    lastSavedLibraryKey = nextLibraryKey
+    void setIdb(PROJECT_STORAGE_KEY, persistentProjectSnapshot(state.project)).catch(() => undefined)
+    void setIdb(PROJECT_LIBRARY_STORAGE_KEY, nextLibrary).catch(() => undefined)
   }
 
   const scheduleSaveProjectLibrary = (state: ProjectStoreState) => {
-    if (!loadSettled) {
-      pendingSaveState = state
-      return
-    }
+    if (!loadSettled) return
 
     if (saveTimer !== undefined) window.clearTimeout(saveTimer)
     saveTimer = window.setTimeout(() => {
@@ -7698,9 +7711,7 @@ const startIndexedDbProjectPersistence = () => {
 
   void loadIndexedDbProjectLibrary().finally(() => {
     loadSettled = true
-    const stateToSave = pendingSaveState
-    pendingSaveState = undefined
-    if (stateToSave) scheduleSaveProjectLibrary(stateToSave)
+    lastSavedLibraryKey = serializedProjectLibraryKey(projectStore.getState())
   })
 
   projectStore.subscribe((state) => scheduleSaveProjectLibrary(state))
@@ -7715,16 +7726,18 @@ const startIndexedDbProjectPersistence = () => {
 const startDesktopProjectPersistence = (storage: DesktopProjectStorage) => {
   let saveTimer: number | undefined
   let loadSettled = false
-  let pendingSaveState: ProjectStoreState | undefined
+  let lastSavedLibraryKey: string | undefined
 
-  const saveProjectLibrary = (state: ProjectStoreState) =>
-    storage.saveProjectLibrary(serializeProjectLibrary(state)).catch(() => undefined)
+  const saveProjectLibrary = (state: ProjectStoreState) => {
+    const nextLibrary = serializeProjectLibrary(state)
+    const nextLibraryKey = JSON.stringify(nextLibrary)
+    if (nextLibraryKey === lastSavedLibraryKey) return Promise.resolve()
+    lastSavedLibraryKey = nextLibraryKey
+    return storage.saveProjectLibrary(nextLibrary).catch(() => undefined)
+  }
 
   const scheduleSaveProjectLibrary = (state: ProjectStoreState) => {
-    if (!loadSettled) {
-      pendingSaveState = state
-      return
-    }
+    if (!loadSettled) return
 
     if (saveTimer !== undefined) window.clearTimeout(saveTimer)
     saveTimer = window.setTimeout(() => {
@@ -7739,15 +7752,11 @@ const startDesktopProjectPersistence = (storage: DesktopProjectStorage) => {
       const now = new Date().toISOString()
       loadProjectLibrary(savedLibrary, now)
       loadSettled = true
-      const stateToSave = pendingSaveState
-      pendingSaveState = undefined
-      if (stateToSave) scheduleSaveProjectLibrary(stateToSave)
+      lastSavedLibraryKey = serializedProjectLibraryKey(projectStore.getState())
     })
     .catch(() => {
       loadSettled = true
-      const stateToSave = pendingSaveState
-      pendingSaveState = undefined
-      if (stateToSave) scheduleSaveProjectLibrary(stateToSave)
+      lastSavedLibraryKey = serializedProjectLibraryKey(projectStore.getState())
     })
 
   projectStore.subscribe((state) => scheduleSaveProjectLibrary(state))

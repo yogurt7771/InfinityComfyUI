@@ -82,9 +82,77 @@ describe('desktop project persistence', () => {
     await vi.advanceTimersByTimeAsync(5000)
 
     expect(projectStore.getState().project.project.id).toBe(savedProject.project.id)
+    expect(projectStore.getState().project.project.name).toBe('Saved Desktop Project')
+    expect(projectStore.getState().projectLibrary[savedProject.project.id].project.name).toBe('Saved Desktop Project')
+    expect(projectStore.getState().projectLibrary.project_local).toBeUndefined()
+    expect(saveProjectLibrary).not.toHaveBeenCalled()
+  })
+
+  it('does not save after loading an existing library until the project is edited', async () => {
+    vi.useFakeTimers()
+    const savedProject = {
+      schemaVersion: '1.0.0',
+      project: {
+        id: 'saved_project',
+        name: 'Saved Project',
+        createdAt: '2026-05-09T00:00:00.000Z',
+        updatedAt: '2026-05-09T00:00:00.000Z',
+      },
+      canvas: { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } },
+      resources: {},
+      assets: {},
+      functions: {},
+      tasks: {},
+      history: { schemaVersion: '1.0.0', undoStack: [], redoStack: [] },
+      templates: {},
+      comfy: {
+        endpoints: [
+          {
+            id: 'endpoint_local',
+            name: 'Local ComfyUI',
+            baseUrl: 'http://127.0.0.1:8188',
+            enabled: true,
+            maxConcurrentJobs: 2,
+            priority: 10,
+            timeoutMs: 600000,
+            auth: { type: 'none' },
+            health: { status: 'online' },
+          },
+        ],
+        scheduler: { strategy: 'least_busy', retry: { maxAttempts: 1, fallbackToOtherEndpoint: true } },
+      },
+    }
+    const loadProjectLibrary = vi.fn().mockResolvedValue({
+      currentProjectId: savedProject.project.id,
+      projects: { [savedProject.project.id]: savedProject },
+    })
+    const saveProjectLibrary = vi.fn().mockResolvedValue({ ok: true, rootPath: 'C:/Infinity/projects' })
+
+    Object.defineProperty(window, 'infinityComfyUIStorage', {
+      configurable: true,
+      value: {
+        loadProjectLibrary,
+        saveProjectLibrary,
+      },
+    })
+
+    const { projectStore } = await import('./projectStore')
+    await Promise.resolve()
+    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(saveProjectLibrary).not.toHaveBeenCalled()
+
+    projectStore.getState().markEndpoint('endpoint_local', 'online')
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(saveProjectLibrary).not.toHaveBeenCalled()
+
+    projectStore.getState().updateProjectMetadata({ name: 'Edited Project' })
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(saveProjectLibrary).toHaveBeenCalledTimes(1)
     const savedLibrary = saveProjectLibrary.mock.calls.at(-1)?.[0]
-    expect(savedLibrary.currentProjectId).toBe(savedProject.project.id)
-    expect(savedLibrary.projects[savedProject.project.id].project.name).toBe('Saved Desktop Project')
-    expect(savedLibrary.projects.project_local).toBeUndefined()
+    expect(savedLibrary.projects[savedLibrary.currentProjectId].project.name).toBe('Edited Project')
   })
 })

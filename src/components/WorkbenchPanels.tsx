@@ -32,6 +32,7 @@ import {
 import { defaultOpenAILlmConfig, isOpenAILlmFunction, mergedOpenAILlmConfig } from '../domain/openaiLlm'
 import { defaultGeminiLlmConfig, isGeminiLlmFunction, mergedGeminiLlmConfig } from '../domain/geminiLlm'
 import { getNodeRunHistory } from '../domain/runHistory'
+import { formatDurationMs, formatHistoryTimestamp, runDurationMs } from '../domain/runTiming'
 import { collectProjectAssetFiles, hydrateProjectAssetFiles, type ProjectAssetFileEntry } from '../domain/projectAssets'
 import type {
   ComfyEndpointConfig,
@@ -387,36 +388,62 @@ const inputTargetNodeId = (project: ProjectState, task: ExecutionTask, input: Ex
 type HistoryDockRow = {
   id: string
   entryId: string
+  sequence: number
   label: string
   title: string
   subtitle: string
+  createdAtLabel: string
+  durationLabel?: string
   stack: 'undo' | 'redo'
   assetIds: string[]
   nodeIds: string[]
 }
 
-const buildHistoryDockRows = (project: ProjectState): HistoryDockRow[] => [
-  ...(project.history?.undoStack ?? []).toReversed().map((entry) => ({
+const taskForHistoryAssetIds = (project: ProjectState, assetIds: string[]) => {
+  for (const assetId of assetIds) {
+    const taskId = project.resources[assetId]?.source.taskId
+    if (taskId && project.tasks[taskId]) return project.tasks[taskId]
+  }
+  return undefined
+}
+
+const buildHistoryDockRows = (project: ProjectState): HistoryDockRow[] => {
+  const undoRows = (project.history?.undoStack ?? []).map((entry, index) => {
+    const assetIds = entry.preview.assetIds ?? entry.affectedIds.assetIds ?? []
+    const task = taskForHistoryAssetIds(project, assetIds)
+    return {
     id: `undo-${entry.id}`,
     entryId: entry.id,
+    sequence: index + 1,
     label: entry.label,
     title: entry.preview.title || entry.label,
     subtitle: entry.preview.subtitle ?? entry.transactionType,
+    createdAtLabel: formatHistoryTimestamp(entry.createdAt),
+    durationLabel: formatDurationMs(runDurationMs(task)),
     stack: 'undo' as const,
-    assetIds: entry.preview.assetIds ?? entry.affectedIds.assetIds ?? [],
+    assetIds,
     nodeIds: entry.preview.nodeIds ?? entry.affectedIds.nodeIds ?? [],
-  })),
-  ...(project.history?.redoStack ?? []).toReversed().map((entry) => ({
+    }
+  })
+  const redoRows = (project.history?.redoStack ?? []).map((entry, index) => {
+    const assetIds = entry.preview.assetIds ?? entry.affectedIds.assetIds ?? []
+    const task = taskForHistoryAssetIds(project, assetIds)
+    return {
     id: `redo-${entry.id}`,
     entryId: entry.id,
+    sequence: undoRows.length + index + 1,
     label: entry.label,
     title: entry.preview.title || entry.label,
     subtitle: entry.preview.subtitle ?? entry.transactionType,
+    createdAtLabel: formatHistoryTimestamp(entry.createdAt),
+    durationLabel: formatDurationMs(runDurationMs(task)),
     stack: 'redo' as const,
-    assetIds: entry.preview.assetIds ?? entry.affectedIds.assetIds ?? [],
+    assetIds,
     nodeIds: entry.preview.nodeIds ?? entry.affectedIds.nodeIds ?? [],
-  })),
-]
+    }
+  })
+  return [...undoRows.toReversed(), ...redoRows.toReversed()]
+}
 
 function RunInspector({
   project,
@@ -3251,6 +3278,9 @@ export function LeftPanel() {
                       <strong>{row.title}</strong>
                       <small>
                         {row.subtitle}
+                        <span>{`#${row.sequence}`}</span>
+                        <span>{row.createdAtLabel}</span>
+                        {row.durationLabel ? <span>{row.durationLabel}</span> : null}
                         <span>{row.stack === 'redo' ? 'redo' : 'undo'}</span>
                       </small>
                     </div>

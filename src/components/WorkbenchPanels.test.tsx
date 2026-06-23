@@ -187,6 +187,33 @@ describe('LeftPanel', () => {
 
   it('shows visual operation history with asset previews and undo/redo actions', () => {
     const project = panelProject()
+    project.resources.res_image = {
+      ...project.resources.res_image,
+      source: {
+        ...project.resources.res_image.source,
+        taskId: 'task_done',
+      },
+    }
+    project.tasks.task_done = {
+      id: 'task_done',
+      functionNodeId: 'node_fn_render',
+      functionId: 'fn_render',
+      runIndex: 1,
+      runTotal: 1,
+      status: 'succeeded',
+      inputRefs: {},
+      inputSnapshot: {},
+      paramsSnapshot: {},
+      workflowTemplateSnapshot: {},
+      compiledWorkflowSnapshot: {},
+      seedPatchLog: [],
+      endpointId: 'endpoint_local',
+      outputRefs: { image: [{ resourceId: 'res_image', type: 'image' }] },
+      createdAt: '2026-05-09T00:00:00.000Z',
+      startedAt: '2026-05-09T00:00:00.000Z',
+      updatedAt: '2026-05-09T00:00:04.500Z',
+      completedAt: '2026-05-09T00:00:04.500Z',
+    }
     const projectSnapshot = structuredClone(project)
     delete projectSnapshot.history
     project.history = {
@@ -196,7 +223,7 @@ describe('LeftPanel', () => {
           id: 'history_1',
           label: 'Create image asset',
           transactionType: 'asset',
-          createdAt: '2026-05-09T00:00:00.000Z',
+          createdAt: '2026-05-09T00:00:05.000Z',
           affectedIds: { assetIds: ['res_image'], nodeIds: ['node_image_asset'] },
           preview: {
             title: 'Create image asset',
@@ -230,6 +257,9 @@ describe('LeftPanel', () => {
     const historyList = screen.getByLabelText('Operation history list')
     expect(within(historyList).getByText('Create image asset')).toBeVisible()
     expect(within(historyList).getByText('Render.png')).toBeVisible()
+    expect(within(historyList).getByText('#1')).toBeVisible()
+    expect(within(historyList).getByText('2026-05-09 00:00:05')).toBeVisible()
+    expect(within(historyList).getByText('4.5s')).toBeVisible()
     expect(within(historyList).getByRole('img', { name: 'Render.png' })).toBeVisible()
 
     fireEvent.click(screen.getByRole('button', { name: 'Undo last operation' }))

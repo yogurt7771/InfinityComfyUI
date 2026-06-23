@@ -2647,6 +2647,19 @@ textarea[aria-invalid="true"] {
   margin-left: auto;
 }
 
+.resource-run-duration {
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 999px;
+  color: var(--ink-soft);
+  background: rgba(248, 250, 252, 0.78);
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
 .asset-function-chip {
   max-width: 58%;
   min-height: 28px;
