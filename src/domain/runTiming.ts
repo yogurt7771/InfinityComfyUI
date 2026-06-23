@@ -7,10 +7,13 @@ export const formatHistoryTimestamp = (value: string | undefined) => {
   return timestamp.replace('T', ' ').replace(/\.\d{3}Z?$/, '').replace(/Z$/, '').slice(0, 19)
 }
 
-export const runDurationMs = (task: Pick<ExecutionTask, 'startedAt' | 'updatedAt' | 'completedAt'> | undefined) => {
+export const runDurationMs = (
+  task: Pick<ExecutionTask, 'startedAt' | 'updatedAt' | 'completedAt'> | undefined,
+  liveEndAt?: string,
+) => {
   if (!task?.startedAt) return undefined
   const start = Date.parse(task.startedAt)
-  const end = Date.parse(task.completedAt ?? task.updatedAt)
+  const end = Date.parse(task.completedAt ?? liveEndAt ?? task.updatedAt)
   if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return undefined
   return end - start
 }

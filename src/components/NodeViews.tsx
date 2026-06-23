@@ -128,6 +128,7 @@ const assetInputHandleId = (resourceId: string) => `asset-input:${resourceId}`
 const resultHandleId = (resourceId: string) => `result:${resourceId}`
 const activeResultStatuses = new Set(['pending', 'queued', 'running', 'fetching_outputs'])
 const visibleAssetStatuses = new Set(['pending', 'queued', 'running', 'fetching_outputs', 'failed'])
+const liveAssetDurationStatuses = activeResultStatuses
 
 const commitActiveTextControl = () => {
   const activeElement = document.activeElement
@@ -1851,7 +1852,10 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
   const taskStatus = task?.status
   const assetStatus = resource?.source.kind === 'function_output' ? taskStatus ?? nodeData.status : undefined
   const showAssetStatus = typeof assetStatus === 'string' && visibleAssetStatuses.has(assetStatus)
-  const durationLabel = formatDurationMs(runDurationMs(task))
+  const [liveDurationNow, setLiveDurationNow] = useState(() => new Date().toISOString())
+  const showLiveDuration =
+    Boolean(task?.startedAt) && typeof assetStatus === 'string' && liveAssetDurationStatuses.has(assetStatus)
+  const durationLabel = formatDurationMs(runDurationMs(task, showLiveDuration ? liveDurationNow : undefined))
   const sourceFunctionId =
     resource?.metadata?.workflowFunctionId ??
     (resource?.source.taskId ? nodeData.tasksById?.[resource.source.taskId]?.functionId : undefined)
@@ -1863,6 +1867,13 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
     if (!result || result.type !== resource.type) return
     nodeData.onReplaceResourceMedia(resource.id, result.type, result.media)
   }
+
+  useEffect(() => {
+    if (!showLiveDuration) return undefined
+    setLiveDurationNow(new Date().toISOString())
+    const timer = window.setInterval(() => setLiveDurationNow(new Date().toISOString()), 1000)
+    return () => window.clearInterval(timer)
+  }, [showLiveDuration, task?.startedAt])
 
   return (
     <div

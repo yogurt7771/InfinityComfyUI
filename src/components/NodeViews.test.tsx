@@ -1,5 +1,5 @@
 import { ReactFlowProvider } from '@xyflow/react'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ComponentProps, ReactElement } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EmptyNodeView, FunctionNodeView, GroupNodeView, ResourceNodeView, ResultGroupNodeView } from './NodeViews'
@@ -202,6 +202,80 @@ describe('NodeViews', () => {
     expect(within(resourceNode as HTMLElement).getByLabelText('Asset status running')).toBeVisible()
     expect(within(resourceNode as HTMLElement).getByText('running')).toBeVisible()
     expect(within(resourceNode as HTMLElement).getByText('Generating image')).toBeVisible()
+  })
+
+  it('keeps increasing the run duration while a function output asset is running', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-05-09T00:00:01.000Z'))
+      const runningOutput: Resource = {
+        id: 'res_running_image',
+        type: 'image',
+        name: 'Klein9B Image',
+        value: {
+          assetId: 'pending_res_running_image',
+          url: '',
+          filename: 'image.png',
+          mimeType: 'image/*',
+          sizeBytes: 0,
+        },
+        source: {
+          kind: 'function_output',
+          outputKey: 'image',
+          functionNodeId: 'task_running',
+          taskId: 'task_running',
+        },
+        metadata: { workflowFunctionId: 'fn_render', createdAt: '2026-05-09T00:00:00.000Z' },
+      }
+      const props = {
+        id: 'node_running_image',
+        selected: false,
+        data: {
+          ...baseNodeData,
+          resourcesById: { res_running_image: runningOutput },
+          resourceId: 'res_running_image',
+          resourceType: 'image',
+          title: 'Klein9B Image',
+          tasksById: {
+            task_running: {
+              id: 'task_running',
+              functionNodeId: 'task_running',
+              functionId: 'fn_render',
+              runIndex: 1,
+              runTotal: 1,
+              status: 'running',
+              inputRefs: {},
+              inputSnapshot: {},
+              paramsSnapshot: {},
+              workflowTemplateSnapshot: {},
+              compiledWorkflowSnapshot: {},
+              seedPatchLog: [],
+              outputRefs: { image: [{ resourceId: 'res_running_image', type: 'image' }] },
+              createdAt: '2026-05-09T00:00:00.000Z',
+              startedAt: '2026-05-09T00:00:00.000Z',
+              updatedAt: '2026-05-09T00:00:00.000Z',
+            },
+          },
+        },
+      } as unknown as ComponentProps<typeof ResourceNodeView>
+
+      const { container } = render(
+        <ReactFlowProvider>
+          <ResourceNodeView {...props} />
+        </ReactFlowProvider>,
+      )
+
+      const resourceNode = container.querySelector('.resource-node')
+      expect(within(resourceNode as HTMLElement).getByLabelText('Run duration 1s')).toBeVisible()
+
+      await act(async () => {
+        vi.advanceTimersByTime(2000)
+      })
+
+      expect(within(resourceNode as HTMLElement).getByLabelText('Run duration 3s')).toBeVisible()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('shows the completed run duration on function output asset nodes', () => {
