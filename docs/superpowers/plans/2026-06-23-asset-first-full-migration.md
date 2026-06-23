@@ -331,11 +331,11 @@ Expected: pass.
 - Create tests beside them.
 - Modify: `src/store/projectStore.ts`
 
-- [ ] **Step 1: Write failing tests that UI-only state does not schedule persistence**
-- [ ] **Step 2: Implement project revision tracking**
-- [ ] **Step 3: Implement idle persistence scheduler**
-- [ ] **Step 4: Implement unload flush**
-- [ ] **Step 5: Remove full-store stringify from the hot notification path**
+- [x] **Step 1: Write failing tests that UI-only state does not schedule persistence**
+- [x] **Step 2: Implement project revision tracking**
+- [x] **Step 3: Implement idle persistence scheduler**
+- [x] **Step 4: Implement unload flush**
+- [x] **Step 5: Remove full-store stringify from the hot notification path**
 
 Run: `npm test -- --run src/domain/persistence src/store/projectPersistence.test.ts`
 

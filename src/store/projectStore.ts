@@ -53,6 +53,14 @@ import {
 import { inputValuesFromTaskSnapshot, resolveExecutionTaskDependencies } from '../domain/runs/dependencyResolver'
 import { createRunSnapshot, generatedResourceSourceForRun, runProviderForFunction } from '../domain/runs/runSnapshot'
 import { createConfigPackage, createProjectPackage, type ConfigPackage, type FullProjectPackage } from '../domain/projectPackage'
+import { createIdleProjectPersistenceController } from '../domain/persistence/projectPersistence'
+import {
+  createPersistentProjectSnapshot,
+  createProjectLibraryRevisionKey,
+  createProjectLibrarySnapshot,
+  restoreProjectLibrarySnapshot,
+  type ProjectLibraryPackage,
+} from '../domain/persistence/projectSerializer'
 import { blobToDataUrl } from '../domain/projectAssets'
 import { randomizeWorkflowSeeds } from '../domain/seed'
 import { selectEndpoint } from '../domain/scheduler'
@@ -218,10 +226,7 @@ type ProjectMetadataPatch = {
   name?: string
   description?: string
 }
-export type ProjectLibraryPackage = {
-  currentProjectId: string
-  projects: Record<string, ProjectState>
-}
+export type { ProjectLibraryPackage } from '../domain/persistence/projectSerializer'
 
 type DesktopProjectStorage = {
   loadProjectLibrary: () => Promise<ProjectLibraryPackage | undefined>
@@ -7942,45 +7947,13 @@ export const projectStore = createProjectSlice()
 const PROJECT_STORAGE_KEY = 'infinity-comfyui.project.v1'
 const PROJECT_LIBRARY_STORAGE_KEY = 'infinity-comfyui.projects.v1'
 
-const persistentProjectSnapshot = (project: ProjectState): ProjectState => {
-  const baseProject = withoutBuiltInProjectFunctions(project)
-  return {
-    ...baseProject,
-    comfy: {
-      ...baseProject.comfy,
-      endpoints: baseProject.comfy.endpoints.map(({ health, ...endpoint }) => endpoint),
-    },
-  }
-}
-
-const serializeProjectLibrary = (state: ProjectStoreState): ProjectLibraryPackage => {
-  const projects = {
-    ...state.projectLibrary,
-    [state.project.project.id]: state.project,
-  }
-  return {
-    currentProjectId: state.project.project.id,
-    projects: Object.fromEntries(
-      Object.entries(projects).map(([projectId, project]) => [projectId, persistentProjectSnapshot(project)]),
-    ),
-  }
-}
-
-const serializedProjectLibraryKey = (state: ProjectStoreState) => JSON.stringify(serializeProjectLibrary(state))
-
 const loadProjectLibrary = (payload: ProjectLibraryPackage | undefined, now: string) => {
-  const projectEntries = Object.entries(payload?.projects ?? {})
-  if (projectEntries.length === 0) return false
-
-  const projects = Object.fromEntries(
-    projectEntries.map(([projectId, project]) => [projectId, withBuiltInFunctions(project, now)]),
-  ) as Record<string, ProjectState>
-  const activeProject = projects[payload?.currentProjectId ?? ''] ?? Object.values(projects)[0]
-  if (!activeProject) return false
+  const restored = restoreProjectLibrarySnapshot(payload, (project) => withBuiltInFunctions(project, now))
+  if (!restored) return false
 
   projectStore.setState({
-    project: activeProject,
-    projectLibrary: projects,
+    project: restored.activeProject,
+    projectLibrary: restored.projects,
     ...selectedState([]),
   })
   return true
@@ -8004,121 +7977,66 @@ const loadIndexedDbProjectLibrary = () =>
     .catch(() => undefined)
 
 const startIndexedDbProjectPersistence = () => {
-  let saveTimer: number | undefined
-  let loadSettled = false
-  let lastSavedLibraryKey: string | undefined
-  let saveInFlight = false
-
-  const scheduleSaveProjectLibrary = (state: ProjectStoreState) => {
-    if (!loadSettled) return
-
-    if (saveTimer !== undefined) window.clearTimeout(saveTimer)
-    saveTimer = window.setTimeout(() => {
-      saveTimer = undefined
-      runProjectLibrarySave(state)
-    }, PROJECT_PERSIST_IDLE_MS)
-  }
-
-  const saveProjectLibrary = async (state: ProjectStoreState) => {
-    const nextLibrary = serializeProjectLibrary(state)
-    const nextLibraryKey = JSON.stringify(nextLibrary)
-    if (nextLibraryKey === lastSavedLibraryKey) return true
+  const controller = createIdleProjectPersistenceController<ProjectLibraryPackage>({
+    idleMs: PROJECT_PERSIST_IDLE_MS,
+    getRevisionKey: () => createProjectLibraryRevisionKey(projectStore.getState()),
+    createSnapshot: () => createProjectLibrarySnapshot(projectStore.getState()),
+    saveSnapshot: async (nextLibrary) => {
     try {
-      await Promise.all([setIdb(PROJECT_STORAGE_KEY, persistentProjectSnapshot(state.project)), setIdb(PROJECT_LIBRARY_STORAGE_KEY, nextLibrary)])
-      lastSavedLibraryKey = nextLibraryKey
+        const activeProject = nextLibrary.projects[nextLibrary.currentProjectId]
+        await Promise.all([
+          setIdb(PROJECT_STORAGE_KEY, activeProject ?? createPersistentProjectSnapshot(projectStore.getState().project)),
+          setIdb(PROJECT_LIBRARY_STORAGE_KEY, nextLibrary),
+        ])
       return true
     } catch {
       return false
     }
-  }
-
-  const runProjectLibrarySave = (state: ProjectStoreState) => {
-    if (saveInFlight) return
-    saveInFlight = true
-    void saveProjectLibrary(state).then(() => {
-      saveInFlight = false
-      const currentState = projectStore.getState()
-      if (serializedProjectLibraryKey(currentState) !== lastSavedLibraryKey) {
-        scheduleSaveProjectLibrary(currentState)
-      }
-    })
-  }
-
-  void loadIndexedDbProjectLibrary().finally(() => {
-    loadSettled = true
-    lastSavedLibraryKey = serializedProjectLibraryKey(projectStore.getState())
+    },
   })
 
-  projectStore.subscribe((state) => scheduleSaveProjectLibrary(state))
+  void loadIndexedDbProjectLibrary().finally(() => {
+    controller.markLoaded()
+  })
+
+  projectStore.subscribe(() => controller.schedule())
 
   window.addEventListener('beforeunload', () => {
-    if (!loadSettled) return
-    if (saveTimer !== undefined) window.clearTimeout(saveTimer)
-    runProjectLibrarySave(projectStore.getState())
+    controller.flush()
   })
 }
 
 const startDesktopProjectPersistence = (storage: DesktopProjectStorage) => {
-  let saveTimer: number | undefined
-  let loadSettled = false
-  let lastSavedLibraryKey: string | undefined
-  let saveInFlight = false
-
-  const scheduleSaveProjectLibrary = (state: ProjectStoreState) => {
-    if (!loadSettled) return
-
-    if (saveTimer !== undefined) window.clearTimeout(saveTimer)
-    saveTimer = window.setTimeout(() => {
-      saveTimer = undefined
-      runProjectLibrarySave(state)
-    }, PROJECT_PERSIST_IDLE_MS)
-  }
-
-  const saveProjectLibrary = async (state: ProjectStoreState) => {
-    const nextLibrary = serializeProjectLibrary(state)
-    const nextLibraryKey = JSON.stringify(nextLibrary)
-    if (nextLibraryKey === lastSavedLibraryKey) return true
+  const controller = createIdleProjectPersistenceController<ProjectLibraryPackage>({
+    idleMs: PROJECT_PERSIST_IDLE_MS,
+    getRevisionKey: () => createProjectLibraryRevisionKey(projectStore.getState()),
+    createSnapshot: () => createProjectLibrarySnapshot(projectStore.getState()),
+    saveSnapshot: async (nextLibrary) => {
     try {
       const result = await storage.saveProjectLibrary(nextLibrary)
       if (!result?.ok) return false
-      lastSavedLibraryKey = nextLibraryKey
       return true
     } catch {
       return false
     }
-  }
-
-  const runProjectLibrarySave = (state: ProjectStoreState) => {
-    if (saveInFlight) return
-    saveInFlight = true
-    void saveProjectLibrary(state).then(() => {
-      saveInFlight = false
-      const currentState = projectStore.getState()
-      if (serializedProjectLibraryKey(currentState) !== lastSavedLibraryKey) {
-        scheduleSaveProjectLibrary(currentState)
-      }
-    })
-  }
+    },
+  })
 
   void storage
     .loadProjectLibrary()
     .then((savedLibrary) => {
       const now = new Date().toISOString()
       loadProjectLibrary(savedLibrary, now)
-      loadSettled = true
-      lastSavedLibraryKey = serializedProjectLibraryKey(projectStore.getState())
+      controller.markLoaded()
     })
     .catch(() => {
-      loadSettled = true
-      lastSavedLibraryKey = serializedProjectLibraryKey(projectStore.getState())
+      controller.markLoaded()
     })
 
-  projectStore.subscribe((state) => scheduleSaveProjectLibrary(state))
+  projectStore.subscribe(() => controller.schedule())
 
   window.addEventListener('beforeunload', () => {
-    if (!loadSettled) return
-    if (saveTimer !== undefined) window.clearTimeout(saveTimer)
-    runProjectLibrarySave(projectStore.getState())
+    controller.flush()
   })
 }
 

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const styles = readFileSync(resolve(__dirname, 'styles.css'), 'utf8')
+const styles = readFileSync(resolve(__dirname, 'styles.css'), 'utf8').replace(/\r\n?/g, '\n')
 
 const cssBlock = (selector: string) => {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
