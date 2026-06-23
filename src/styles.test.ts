@@ -6,7 +6,7 @@ const styles = readFileSync(resolve(__dirname, 'styles.css'), 'utf8')
 
 const cssBlock = (selector: string) => {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const match = new RegExp(`${escaped}\\s*\\{(?<body>[^}]*)\\}`, 'm').exec(styles)
+  const match = new RegExp(`(?:^|\\n)${escaped}\\s*\\{(?<body>[^}]*)\\}`, 'm').exec(styles)
   return match?.groups?.body ?? ''
 }
 
@@ -35,6 +35,23 @@ describe('preview media CSS', () => {
 })
 
 describe('canvas resource UI CSS', () => {
+  it('keeps media previews inside resized resource nodes', () => {
+    const nodeBlock = cssBlock('.resource-node')
+    const triggerBlock = cssBlock('.resource-preview-trigger')
+    const triggerMediaBlock = cssBlock('.resource-preview-trigger .resource-preview-image,\n.resource-preview-trigger .resource-preview-video')
+    const boundedPlaceholderBlock = cssBlock('.resource-node .resource-empty-media,\n.resource-node .resource-pending-media')
+
+    expect(nodeBlock).toContain('display: grid')
+    expect(nodeBlock).toContain('grid-template-rows: auto auto auto minmax(0, 1fr)')
+    expect(nodeBlock).toContain('min-height: 0')
+    expect(triggerBlock).toContain('min-height: 0')
+    expect(triggerBlock).toContain('overflow: hidden')
+    expect(triggerMediaBlock).toContain('height: 100%')
+    expect(triggerMediaBlock).toContain('max-height: none')
+    expect(boundedPlaceholderBlock).toContain('height: 100%')
+    expect(boundedPlaceholderBlock).toContain('min-height: 0')
+  })
+
   it('lets text result previews fill the available result card area', () => {
     const block = cssBlock('.result-preview-card .resource-preview-text')
 

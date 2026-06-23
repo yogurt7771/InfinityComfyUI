@@ -2263,6 +2263,10 @@ textarea[aria-invalid="true"] {
 }
 
 .resource-node {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  align-content: stretch;
+  min-height: 0;
   border-top: 3px solid var(--teal);
 }
 
@@ -3238,8 +3242,10 @@ textarea[aria-invalid="true"] {
 }
 
 .resource-preview-trigger {
-  display: block;
+  display: grid;
+  min-height: 0;
   min-width: 0;
+  overflow: hidden;
   margin-top: 10px;
   border-radius: 8px;
   cursor: zoom-in;
@@ -3251,9 +3257,23 @@ textarea[aria-invalid="true"] {
 }
 
 .resource-preview-trigger .resource-preview-image,
-.resource-preview-trigger .resource-preview-video,
-.resource-preview-trigger .resource-preview-audio {
+.resource-preview-trigger .resource-preview-video {
+  width: 100%;
+  height: 100%;
+  max-height: none;
   margin-top: 0;
+}
+
+.resource-preview-trigger .resource-preview-audio {
+  align-self: center;
+  margin-top: 0;
+}
+
+.resource-node .resource-empty-media,
+.resource-node .resource-pending-media {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .resource-preview-image,
