@@ -34,6 +34,11 @@ import { buildCanvasFlowEdges } from '../domain/canvasEdges'
 import { targetInputInitialResourceValue } from '../domain/inputInitialValue'
 import { buildNodeReferenceMap } from '../domain/nodeReferences'
 import { readFileAsMediaResource } from '../domain/resourceFiles'
+import {
+  resourceNodeMinSize,
+  resourceNodeMinSizeForCanvasNode,
+  type ResourceNodeLayoutContext,
+} from '../domain/resourceNodeLayout'
 import { workflowPrimitiveInputValue } from '../domain/workflow'
 import { useProjectStore } from '../store/projectStore'
 import { shouldIgnoreCanvasShortcut } from './canvasKeyboard'
@@ -484,8 +489,7 @@ const defaultFunctionHeight = (functionDef: GenerationFunction | undefined) => {
 }
 
 const MENU_NODE_GAP = 96
-const DEFAULT_ASSET_NODE_WIDTH = 360
-const DEFAULT_ASSET_NODE_HEIGHT = 280
+const DEFAULT_ASSET_NODE_WIDTH = resourceNodeMinSize({ resourceType: 'image', title: 'Resource', referenceCount: 0 }).width
 
 const defaultNodeSize = (node: CanvasNode, functionsById: Record<string, GenerationFunction>) => {
   if (node.type === 'function') {
@@ -499,16 +503,17 @@ const defaultNodeSize = (node: CanvasNode, functionsById: Record<string, Generat
 
   if (node.type === 'result_group') return { width: 300, height: undefined }
   if (node.type === 'group') return { width: 230, height: undefined }
-  return { width: DEFAULT_ASSET_NODE_WIDTH, height: DEFAULT_ASSET_NODE_HEIGHT }
+  return resourceNodeMinSizeForCanvasNode(node, { functionsById })
 }
 
-export const flowNodeStyle = (node: CanvasNode, functionsById: Record<string, GenerationFunction>) => {
-  const defaultSize = defaultNodeSize(node, functionsById)
+export const flowNodeStyle = (node: CanvasNode, context: ResourceNodeLayoutContext) => {
+  const defaultSize = defaultNodeSize(node, context.functionsById)
   const size = storedNodeSize(node)
   if (node.type === 'resource') {
+    const minSize = resourceNodeMinSizeForCanvasNode(node, context)
     return {
-      width: Math.max(size?.width ?? defaultSize.width, DEFAULT_ASSET_NODE_WIDTH),
-      height: Math.max(size?.height ?? defaultSize.height ?? DEFAULT_ASSET_NODE_HEIGHT, DEFAULT_ASSET_NODE_HEIGHT),
+      width: Math.max(size?.width ?? minSize.width, minSize.width),
+      height: Math.max(size?.height ?? minSize.height, minSize.height),
     }
   }
   return {
@@ -1058,6 +1063,17 @@ function CanvasSurface() {
     [selectedNodeId, selectedNodeIds],
   )
   const nodeReferenceMap = useMemo(() => buildNodeReferenceMap(project), [project])
+  const flowNodeLayoutContext = useMemo<ResourceNodeLayoutContext>(
+    () => ({
+      functionsById: project.functions,
+      resourcesById: project.resources,
+      tasksById: project.tasks,
+      nodeReferenceCountsById: Object.fromEntries(
+        Object.entries(nodeReferenceMap).map(([nodeId, references]) => [nodeId, references.length]),
+      ),
+    }),
+    [nodeReferenceMap, project.functions, project.resources, project.tasks],
+  )
   const focusCanvasNode = useCallback(
     (nodeId: string) => {
       selectNode(nodeId)
@@ -1104,7 +1120,7 @@ function CanvasSurface() {
       const sourceNode = project.canvas.nodes.find(
         (node) => node.type === 'resource' && node.data.resourceId === resourceId,
       )
-      const sourceWidth = sourceNode ? Number(flowNodeStyle(sourceNode, project.functions).width) : DEFAULT_ASSET_NODE_WIDTH
+      const sourceWidth = sourceNode ? Number(flowNodeStyle(sourceNode, flowNodeLayoutContext).width) : DEFAULT_ASSET_NODE_WIDTH
       openFunctionRunDialog({
         functionId,
         inputValues: functionRunInputsFromTask(task),
@@ -1117,7 +1133,7 @@ function CanvasSurface() {
           : { x: 0, y: 0 },
       })
     },
-    [openFunctionRunDialog, project.canvas.nodes, project.functions, project.resources, project.tasks],
+    [flowNodeLayoutContext, openFunctionRunDialog, project.canvas.nodes, project.functions, project.resources, project.tasks],
   )
 
   useEffect(() => {
@@ -1155,7 +1171,7 @@ function CanvasSurface() {
               ? 'asset-pickable'
               : 'asset-pick-incompatible'
             : undefined,
-        style: flowNodeStyle(node, project.functions),
+        style: flowNodeStyle(node, flowNodeLayoutContext),
         data: {
           ...node.data,
           nodeReferences: nodeReferenceMap[node.id] ?? [],
@@ -1190,6 +1206,7 @@ function CanvasSurface() {
     [
       deleteNode,
       focusCanvasNode,
+      flowNodeLayoutContext,
       nodeReferenceMap,
       openFunctionRunForResource,
       inputPickMode,
@@ -1718,7 +1735,7 @@ function CanvasSurface() {
     const anchorNode = project.canvas.nodes.find((node) => node.id === addMenu.placement?.anchorNodeId)
     if (!anchorNode) return addMenu.flow
 
-    const anchorSize = flowNodeStyle(anchorNode, project.functions)
+    const anchorSize = flowNodeStyle(anchorNode, flowNodeLayoutContext)
     const anchorWidth = Number(anchorSize.width)
     const resolvedAnchorWidth = Number.isFinite(anchorWidth) ? anchorWidth : DEFAULT_ASSET_NODE_WIDTH
     return addMenu.placement.side === 'right'
@@ -1729,7 +1746,7 @@ function CanvasSurface() {
   const commandPositionForSourceNode = (sourceNodeId: string) => {
     const sourceNode = project.canvas.nodes.find((node) => node.id === sourceNodeId)
     if (!sourceNode) return { x: 0, y: 0 }
-    const sourceSize = flowNodeStyle(sourceNode, project.functions)
+    const sourceSize = flowNodeStyle(sourceNode, flowNodeLayoutContext)
     const sourceWidth = Number(sourceSize.width)
     const resolvedSourceWidth = Number.isFinite(sourceWidth) ? sourceWidth : DEFAULT_ASSET_NODE_WIDTH
     return {

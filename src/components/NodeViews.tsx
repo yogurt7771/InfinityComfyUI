@@ -34,6 +34,7 @@ import {
   requestParseModes,
 } from '../domain/requestFunction'
 import { readFileAsMediaResource, type MediaResourceKind, type MediaResourcePayload } from '../domain/resourceFiles'
+import { resourceNodeMinSize } from '../domain/resourceNodeLayout'
 import { formatDurationMs, runDurationMs } from '../domain/runTiming'
 import { projectStore } from '../store/projectStore'
 import type {
@@ -128,8 +129,6 @@ const resultHandleId = (resourceId: string) => `result:${resourceId}`
 const activeResultStatuses = new Set(['pending', 'queued', 'running', 'fetching_outputs'])
 const visibleAssetStatuses = new Set(['pending', 'queued', 'running', 'fetching_outputs', 'failed'])
 const liveAssetDurationStatuses = activeResultStatuses
-const RESOURCE_NODE_MIN_WIDTH = 360
-const RESOURCE_NODE_MIN_HEIGHT = 280
 
 const commitActiveTextControl = () => {
   const activeElement = document.activeElement
@@ -1861,6 +1860,14 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
     resource?.metadata?.workflowFunctionId ??
     (resource?.source.taskId ? nodeData.tasksById?.[resource.source.taskId]?.functionId : undefined)
   const sourceFunction = sourceFunctionId ? nodeData.functionsById[sourceFunctionId] : undefined
+  const minSize = resourceNodeMinSize({
+    resourceType: resource?.type ?? nodeData.resourceType,
+    title,
+    referenceCount: nodeData.nodeReferences?.length ?? 0,
+    assetStatus: showAssetStatus ? assetStatus : undefined,
+    durationLabel,
+    sourceFunctionName: sourceFunction?.name,
+  })
 
   const replaceFromFile = async (file: File | undefined) => {
     if (!resource || !isMediaResource(resource) || !file) return
@@ -1901,8 +1908,8 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
     >
       <SelectedResizeControl
         id={id}
-        minHeight={RESOURCE_NODE_MIN_HEIGHT}
-        minWidth={RESOURCE_NODE_MIN_WIDTH}
+        minHeight={minSize.height}
+        minWidth={minSize.width}
         nodeData={nodeData}
         selected={Boolean(selected)}
       />

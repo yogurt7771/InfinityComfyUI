@@ -119,11 +119,11 @@ describe('CanvasWorkspace helpers', () => {
 
   it('gives resource nodes a default height so media previews have a viewport before resizing', () => {
     const style = flowNodeStyle(
-      { id: 'asset_1', type: 'resource', position: { x: 0, y: 0 }, data: { resourceId: 'res_1' } },
-      {},
+      { id: 'asset_1', type: 'resource', position: { x: 0, y: 0 }, data: { resourceId: 'res_1', resourceType: 'image', title: 'Image' } },
+      { functionsById: {} },
     )
 
-    expect(style).toEqual({ width: 360, height: 280 })
+    expect(style).toEqual({ width: 290, height: 294 })
   })
 
   it('clamps stored resource node sizes to the minimum usable asset card size', () => {
@@ -132,12 +132,64 @@ describe('CanvasWorkspace helpers', () => {
         id: 'asset_1',
         type: 'resource',
         position: { x: 0, y: 0 },
-        data: { resourceId: 'res_1', size: { width: 220, height: 140 } },
+        data: { resourceId: 'res_1', resourceType: 'image', title: 'Image', size: { width: 220, height: 140 } },
       },
-      {},
+      { functionsById: {} },
     )
 
-    expect(style).toEqual({ width: 360, height: 280 })
+    expect(style).toEqual({ width: 290, height: 294 })
+  })
+
+  it('calculates wider minimums for resource nodes with visible run chrome', () => {
+    const project = projectWithOptionalInput()
+    project.functions.fn_render.name = 'Gemini Generate Image'
+    project.resources = {
+      res_image: {
+        id: 'res_image',
+        type: 'image',
+        name: 'Gemini Generate Image Image',
+        value: {
+          assetId: 'asset_image',
+          url: '',
+          filename: 'image.png',
+          mimeType: 'image/png',
+          sizeBytes: 0,
+        },
+        source: { kind: 'function_output', taskId: 'task_1', outputKey: 'image' },
+      },
+    }
+    project.tasks = {
+      task_1: {
+        id: 'task_1',
+        functionNodeId: 'node_fn',
+        functionId: 'fn_render',
+        runIndex: 1,
+        runTotal: 1,
+        status: 'queued',
+        inputRefs: {},
+        inputSnapshot: {},
+        paramsSnapshot: {},
+        workflowTemplateSnapshot: {},
+        compiledWorkflowSnapshot: {},
+        seedPatchLog: [],
+        outputRefs: { image: [{ resourceId: 'res_image', type: 'image' }] },
+        createdAt: '2026-05-09T00:00:00.000Z',
+        startedAt: '2026-05-09T00:00:00.000Z',
+        updatedAt: '2026-05-09T00:08:30.000Z',
+      },
+    }
+
+    const style = flowNodeStyle(
+      { id: 'asset_1', type: 'resource', position: { x: 0, y: 0 }, data: { resourceId: 'res_image' } },
+      {
+        functionsById: project.functions,
+        resourcesById: project.resources,
+        tasksById: project.tasks,
+        nodeReferenceCountsById: { asset_1: 0 },
+      },
+    )
+
+    expect(style).toEqual({ width: 390, height: 294 })
   })
 
   it('prefills function popup inputs from selected assets in function input order', () => {
