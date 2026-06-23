@@ -155,4 +155,81 @@ describe('desktop project persistence', () => {
     const savedLibrary = saveProjectLibrary.mock.calls.at(-1)?.[0]
     expect(savedLibrary.projects[savedLibrary.currentProjectId].project.name).toBe('Edited Project')
   })
+
+  it('retries a failed desktop save without requiring another project edit', async () => {
+    vi.useFakeTimers()
+    const loadProjectLibrary = vi.fn().mockResolvedValue(undefined)
+    const saveProjectLibrary = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, error: 'disk temporarily unavailable' })
+      .mockResolvedValueOnce({ ok: true, rootPath: 'C:/Infinity/projects' })
+
+    Object.defineProperty(window, 'infinityComfyUIStorage', {
+      configurable: true,
+      value: {
+        loadProjectLibrary,
+        saveProjectLibrary,
+      },
+    })
+
+    const { projectStore } = await import('./projectStore')
+    await Promise.resolve()
+    await Promise.resolve()
+
+    projectStore.getState().updateProjectMetadata({ name: 'Must Survive Refresh' })
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(saveProjectLibrary).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(saveProjectLibrary).toHaveBeenCalledTimes(2)
+    const savedLibrary = saveProjectLibrary.mock.calls.at(-1)?.[0]
+    expect(savedLibrary.projects[savedLibrary.currentProjectId].project.name).toBe('Must Survive Refresh')
+  })
+
+  it('serializes desktop saves so an older slow save cannot overwrite newer project data', async () => {
+    vi.useFakeTimers()
+    let resolveFirstSave: (value: { ok: boolean; rootPath?: string }) => void = () => undefined
+    const loadProjectLibrary = vi.fn().mockResolvedValue(undefined)
+    const saveProjectLibrary = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirstSave = resolve
+          }),
+      )
+      .mockResolvedValue({ ok: true, rootPath: 'C:/Infinity/projects' })
+
+    Object.defineProperty(window, 'infinityComfyUIStorage', {
+      configurable: true,
+      value: {
+        loadProjectLibrary,
+        saveProjectLibrary,
+      },
+    })
+
+    const { projectStore } = await import('./projectStore')
+    await Promise.resolve()
+    await Promise.resolve()
+
+    projectStore.getState().updateProjectMetadata({ name: 'Older Save' })
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(saveProjectLibrary).toHaveBeenCalledTimes(1)
+
+    projectStore.getState().updateProjectMetadata({ name: 'Newer Save' })
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(saveProjectLibrary).toHaveBeenCalledTimes(1)
+
+    resolveFirstSave({ ok: true, rootPath: 'C:/Infinity/projects' })
+    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(saveProjectLibrary).toHaveBeenCalledTimes(2)
+    const savedLibrary = saveProjectLibrary.mock.calls.at(-1)?.[0]
+    expect(savedLibrary.projects[savedLibrary.currentProjectId].project.name).toBe('Newer Save')
+  })
 })

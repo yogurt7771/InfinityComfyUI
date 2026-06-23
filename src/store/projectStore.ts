@@ -7689,15 +7689,7 @@ const startIndexedDbProjectPersistence = () => {
   let saveTimer: number | undefined
   let loadSettled = false
   let lastSavedLibraryKey: string | undefined
-
-  const saveProjectLibrary = (state: ProjectStoreState) => {
-    const nextLibrary = serializeProjectLibrary(state)
-    const nextLibraryKey = JSON.stringify(nextLibrary)
-    if (nextLibraryKey === lastSavedLibraryKey) return
-    lastSavedLibraryKey = nextLibraryKey
-    void setIdb(PROJECT_STORAGE_KEY, persistentProjectSnapshot(state.project)).catch(() => undefined)
-    void setIdb(PROJECT_LIBRARY_STORAGE_KEY, nextLibrary).catch(() => undefined)
-  }
+  let saveInFlight = false
 
   const scheduleSaveProjectLibrary = (state: ProjectStoreState) => {
     if (!loadSettled) return
@@ -7705,8 +7697,33 @@ const startIndexedDbProjectPersistence = () => {
     if (saveTimer !== undefined) window.clearTimeout(saveTimer)
     saveTimer = window.setTimeout(() => {
       saveTimer = undefined
-      saveProjectLibrary(state)
+      runProjectLibrarySave(state)
     }, PROJECT_PERSIST_IDLE_MS)
+  }
+
+  const saveProjectLibrary = async (state: ProjectStoreState) => {
+    const nextLibrary = serializeProjectLibrary(state)
+    const nextLibraryKey = JSON.stringify(nextLibrary)
+    if (nextLibraryKey === lastSavedLibraryKey) return true
+    try {
+      await Promise.all([setIdb(PROJECT_STORAGE_KEY, persistentProjectSnapshot(state.project)), setIdb(PROJECT_LIBRARY_STORAGE_KEY, nextLibrary)])
+      lastSavedLibraryKey = nextLibraryKey
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  const runProjectLibrarySave = (state: ProjectStoreState) => {
+    if (saveInFlight) return
+    saveInFlight = true
+    void saveProjectLibrary(state).then(() => {
+      saveInFlight = false
+      const currentState = projectStore.getState()
+      if (serializedProjectLibraryKey(currentState) !== lastSavedLibraryKey) {
+        scheduleSaveProjectLibrary(currentState)
+      }
+    })
   }
 
   void loadIndexedDbProjectLibrary().finally(() => {
@@ -7719,7 +7736,7 @@ const startIndexedDbProjectPersistence = () => {
   window.addEventListener('beforeunload', () => {
     if (!loadSettled) return
     if (saveTimer !== undefined) window.clearTimeout(saveTimer)
-    saveProjectLibrary(projectStore.getState())
+    runProjectLibrarySave(projectStore.getState())
   })
 }
 
@@ -7727,14 +7744,7 @@ const startDesktopProjectPersistence = (storage: DesktopProjectStorage) => {
   let saveTimer: number | undefined
   let loadSettled = false
   let lastSavedLibraryKey: string | undefined
-
-  const saveProjectLibrary = (state: ProjectStoreState) => {
-    const nextLibrary = serializeProjectLibrary(state)
-    const nextLibraryKey = JSON.stringify(nextLibrary)
-    if (nextLibraryKey === lastSavedLibraryKey) return Promise.resolve()
-    lastSavedLibraryKey = nextLibraryKey
-    return storage.saveProjectLibrary(nextLibrary).catch(() => undefined)
-  }
+  let saveInFlight = false
 
   const scheduleSaveProjectLibrary = (state: ProjectStoreState) => {
     if (!loadSettled) return
@@ -7742,8 +7752,34 @@ const startDesktopProjectPersistence = (storage: DesktopProjectStorage) => {
     if (saveTimer !== undefined) window.clearTimeout(saveTimer)
     saveTimer = window.setTimeout(() => {
       saveTimer = undefined
-      void saveProjectLibrary(state)
+      runProjectLibrarySave(state)
     }, PROJECT_PERSIST_IDLE_MS)
+  }
+
+  const saveProjectLibrary = async (state: ProjectStoreState) => {
+    const nextLibrary = serializeProjectLibrary(state)
+    const nextLibraryKey = JSON.stringify(nextLibrary)
+    if (nextLibraryKey === lastSavedLibraryKey) return true
+    try {
+      const result = await storage.saveProjectLibrary(nextLibrary)
+      if (!result?.ok) return false
+      lastSavedLibraryKey = nextLibraryKey
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  const runProjectLibrarySave = (state: ProjectStoreState) => {
+    if (saveInFlight) return
+    saveInFlight = true
+    void saveProjectLibrary(state).then(() => {
+      saveInFlight = false
+      const currentState = projectStore.getState()
+      if (serializedProjectLibraryKey(currentState) !== lastSavedLibraryKey) {
+        scheduleSaveProjectLibrary(currentState)
+      }
+    })
   }
 
   void storage
@@ -7764,7 +7800,7 @@ const startDesktopProjectPersistence = (storage: DesktopProjectStorage) => {
   window.addEventListener('beforeunload', () => {
     if (!loadSettled) return
     if (saveTimer !== undefined) window.clearTimeout(saveTimer)
-    void saveProjectLibrary(projectStore.getState())
+    runProjectLibrarySave(projectStore.getState())
   })
 }
 
