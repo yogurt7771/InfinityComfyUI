@@ -71,7 +71,7 @@
 - Create: `src/domain/assetGraph.test.ts`
 - Reference: `docs/superpowers/specs/2026-06-23-asset-first-full-migration-design.md`
 
-- [ ] **Step 1: Write failing tests for the asset-only graph contract**
+- [x] **Step 1: Write failing tests for the asset-only graph contract**
 
 ```ts
 import { describe, expect, it } from 'vitest'
@@ -105,23 +105,23 @@ describe('assetGraph', () => {
 })
 ```
 
-- [ ] **Step 2: Run the test and verify it fails**
+- [x] **Step 2: Run the test and verify it fails**
 
 Run: `npm test -- --run src/domain/assetGraph.test.ts`
 
 Expected: fail because `assetGraph` does not exist.
 
-- [ ] **Step 3: Implement the minimal asset graph domain**
+- [x] **Step 3: Implement the minimal asset graph domain**
 
 Create focused exported types and helpers only. Do not edit the legacy `CanvasNodeKind` yet.
 
-- [ ] **Step 4: Run the test and verify it passes**
+- [x] **Step 4: Run the test and verify it passes**
 
 Run: `npm test -- --run src/domain/assetGraph.test.ts`
 
 Expected: pass.
 
-- [ ] **Step 5: Run nearby tests**
+- [x] **Step 5: Run nearby tests**
 
 Run: `npm test -- --run src/domain/canvasEdges.test.ts src/domain/resourceNodeLayout.test.ts`
 
