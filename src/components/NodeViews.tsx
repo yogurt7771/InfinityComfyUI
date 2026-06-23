@@ -117,11 +117,13 @@ type WorkbenchNodeData = {
   onUpdateTextResourceValue: (resourceId: string, value: string) => void
   onUpdateNumberResourceValue: (resourceId: string, value: number) => void
   onReplaceResourceMedia: (resourceId: string, type: MediaResourceKind, media: MediaResourcePayload) => void
+  onOpenFunctionRunForResource?: (resourceId: string) => void
 }
 
 const inputHandleId = (inputKey: string) => `input:${inputKey}`
 const outputHandleId = (outputKey: string) => `output:${outputKey}`
 const resourceHandleId = (resourceId: string) => `resource:${resourceId}`
+const assetInputHandleId = (resourceId: string) => `asset-input:${resourceId}`
 const resultHandleId = (resourceId: string) => `result:${resourceId}`
 const activeResultStatuses = new Set(['pending', 'queued', 'running', 'fetching_outputs'])
 
@@ -1831,6 +1833,10 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
   const title = String(nodeData.title ?? resource?.name ?? 'Resource')
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [previewResource, setPreviewResource] = useState<Resource | undefined>()
+  const sourceFunctionId =
+    resource?.metadata?.workflowFunctionId ??
+    (resource?.source.taskId ? nodeData.tasksById?.[resource.source.taskId]?.functionId : undefined)
+  const sourceFunction = sourceFunctionId ? nodeData.functionsById[sourceFunctionId] : undefined
 
   const replaceFromFile = async (file: File | undefined) => {
     if (!resource || !isMediaResource(resource) || !file) return
@@ -1857,13 +1863,23 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
     >
       <SelectedResizeControl id={id} minHeight={120} minWidth={190} nodeData={nodeData} selected={Boolean(selected)} />
       {resource ? (
-        <Handle
-          data-slot-handle={resourceHandleId(resource.id)}
-          id={resourceHandleId(resource.id)}
-          position={Position.Right}
-          type="source"
-          onPointerDown={commitActiveTextControl}
-        />
+        <>
+          <Handle
+            className="asset-lineage-target-handle"
+            data-slot-handle={assetInputHandleId(resource.id)}
+            id={assetInputHandleId(resource.id)}
+            position={Position.Left}
+            type="target"
+            onPointerDown={commitActiveTextControl}
+          />
+          <Handle
+            data-slot-handle={resourceHandleId(resource.id)}
+            id={resourceHandleId(resource.id)}
+            position={Position.Right}
+            type="source"
+            onPointerDown={commitActiveTextControl}
+          />
+        </>
       ) : null}
       <EditableNodeTitle
         actions={nodeReferenceBadge(nodeData)}
@@ -1874,7 +1890,23 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
         onDeleteNode={nodeData.onDeleteNode}
         onRenameNode={nodeData.onRenameNode}
       />
-      <div className="node-meta">{resource?.type ?? nodeData.resourceType}</div>
+      <div className="node-meta resource-node-meta">
+        <span>{resource?.type ?? nodeData.resourceType}</span>
+        {resource?.source.kind === 'function_output' && sourceFunction ? (
+          <button
+            type="button"
+            className="asset-function-chip nodrag nopan"
+            aria-label={`Edit and run ${sourceFunction.name}`}
+            title={sourceFunction.name}
+            onClick={(event) => {
+              event.stopPropagation()
+              nodeData.onOpenFunctionRunForResource?.(resource.id)
+            }}
+          >
+            {sourceFunction.name}
+          </button>
+        ) : null}
+      </div>
       {resource?.type === 'text' ? (
         <>
           <ResourceActions canUpload={false} resource={resource} />

@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { targetInputInitialResourceValue } from '../domain/inputInitialValue'
 import { buildNodeReferenceMap } from '../domain/nodeReferences'
 import type { ProjectState } from '../domain/types'
-import { buildComfyMinimapLayout, visibleCanvasNodes, minimapPointToFlowPosition, sameFlowEdgesForSync } from './CanvasWorkspace'
+import {
+  buildComfyMinimapLayout,
+  buildFunctionRunInputDraft,
+  visibleCanvasNodes,
+  minimapPointToFlowPosition,
+  sameFlowEdgesForSync,
+} from './CanvasWorkspace'
 
 const projectWithOptionalInput = (inputValues: Record<string, unknown> = {}): ProjectState => ({
   schemaVersion: '1.0.0',
@@ -106,6 +112,51 @@ describe('CanvasWorkspace helpers', () => {
     ]
 
     expect(visibleCanvasNodes(nodes).map((node) => node.id)).toEqual(['asset_1', 'group_1'])
+  })
+
+  it('prefills function popup inputs from selected assets in function input order', () => {
+    const project = projectWithOptionalInput()
+    project.functions.fn_render.inputs.push({
+      key: 'image',
+      label: 'Image',
+      type: 'image',
+      required: true,
+      bind: { nodeId: '12', nodeTitle: 'Load Image', path: 'inputs.image' },
+      upload: { strategy: 'comfy_upload' },
+    })
+    project.resources = {
+      res_image: {
+        id: 'res_image',
+        type: 'image',
+        name: 'input.png',
+        value: {
+          assetId: 'asset_image',
+          url: 'data:image/png;base64,abc',
+          filename: 'input.png',
+          mimeType: 'image/png',
+          sizeBytes: 3,
+        },
+        source: { kind: 'manual_input' },
+      },
+      res_text: {
+        id: 'res_text',
+        type: 'text',
+        name: 'Prompt',
+        value: '  trim this  ',
+        source: { kind: 'manual_input' },
+      },
+    }
+
+    const draft = buildFunctionRunInputDraft(project.functions.fn_render, project.resources, [
+      { resourceId: 'res_image', type: 'image' },
+      { resourceId: 'res_text', type: 'text' },
+    ])
+
+    expect(draft).toEqual({
+      negative_prompt: { resourceId: 'res_text', type: 'text' },
+      scale_by: 7,
+      image: { resourceId: 'res_image', type: 'image' },
+    })
   })
 
   it('builds incoming and outgoing node reference summaries from canvas edges', () => {

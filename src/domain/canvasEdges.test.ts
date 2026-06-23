@@ -223,4 +223,58 @@ describe('buildCanvasFlowEdges', () => {
       ]),
     )
   })
+
+  it('derives visible asset lineage edges from completed task inputs and outputs', () => {
+    const state = project()
+    state.canvas.nodes = [
+      { id: 'node_prompt', type: 'resource', position: { x: 0, y: 0 }, data: { resourceId: 'res_prompt' } },
+      { id: 'node_image', type: 'resource', position: { x: 0, y: 160 }, data: { resourceId: 'res_image' } },
+      { id: 'node_output', type: 'resource', position: { x: 420, y: 80 }, data: { resourceId: 'res_output' } },
+    ]
+    state.tasks = {
+      task_1: {
+        id: 'task_1',
+        functionNodeId: 'node_fn_hidden',
+        functionId: 'fn_edit',
+        runIndex: 1,
+        runTotal: 1,
+        status: 'succeeded',
+        inputRefs: {
+          prompt: { resourceId: 'res_prompt', type: 'text' },
+          image: { resourceId: 'res_image', type: 'image' },
+        },
+        inputSnapshot: {},
+        inputValuesSnapshot: {},
+        paramsSnapshot: {},
+        workflowTemplateSnapshot: {},
+        compiledWorkflowSnapshot: {},
+        seedPatchLog: [],
+        outputRefs: {
+          image: [{ resourceId: 'res_output', type: 'image' }],
+        },
+        createdAt: '2026-05-09T00:00:00.000Z',
+        updatedAt: '2026-05-09T00:00:00.000Z',
+        completedAt: '2026-05-09T00:00:00.000Z',
+      },
+    }
+
+    expect(buildCanvasFlowEdges(state).filter((edge) => edge.className === 'asset-lineage-edge')).toMatchObject([
+      {
+        id: 'lineage:task_1:prompt:res_prompt:res_output',
+        source: 'node_prompt',
+        sourceHandle: 'resource:res_prompt',
+        target: 'node_output',
+        targetHandle: 'asset-input:res_output',
+        label: 'prompt',
+      },
+      {
+        id: 'lineage:task_1:image:res_image:res_output',
+        source: 'node_image',
+        sourceHandle: 'resource:res_image',
+        target: 'node_output',
+        targetHandle: 'asset-input:res_output',
+        label: 'image',
+      },
+    ])
+  })
 })

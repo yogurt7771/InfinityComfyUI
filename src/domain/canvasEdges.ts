@@ -21,6 +21,7 @@ const resultResourceIds = (node: CanvasNode) => {
 }
 
 const resourceHandleId = (resourceId: string) => `resource:${resourceId}`
+const assetInputHandleId = (resourceId: string) => `asset-input:${resourceId}`
 const resultHandleId = (resourceId: string) => `result:${resourceId}`
 const inputHandleId = (inputKey: string) => `input:${inputKey}`
 const outputHandleId = (outputKey: string) => `output:${outputKey}`
@@ -41,13 +42,14 @@ const edgeSourceHandle = (edge: CanvasEdge, nodes: CanvasNode[]) => {
 }
 
 const resourceNodeByResourceId = (nodes: CanvasNode[]) => {
-  const resourceNodes = new Map<string, { nodeId: string; handleId: string }>()
+  const resourceNodes = new Map<string, { nodeId: string; sourceHandleId: string; targetHandleId: string }>()
 
   for (const node of nodes) {
     if (node.type === 'resource' && typeof node.data.resourceId === 'string') {
       resourceNodes.set(node.data.resourceId, {
         nodeId: node.id,
-        handleId: resourceHandleId(node.data.resourceId),
+        sourceHandleId: resourceHandleId(node.data.resourceId),
+        targetHandleId: assetInputHandleId(node.data.resourceId),
       })
     }
   }
@@ -58,7 +60,8 @@ const resourceNodeByResourceId = (nodes: CanvasNode[]) => {
       if (!resourceNodes.has(resourceId)) {
         resourceNodes.set(resourceId, {
           nodeId: node.id,
-          handleId: resultHandleId(resourceId),
+          sourceHandleId: resultHandleId(resourceId),
+          targetHandleId: resultHandleId(resourceId),
         })
       }
     }
@@ -66,6 +69,11 @@ const resourceNodeByResourceId = (nodes: CanvasNode[]) => {
 
   return resourceNodes
 }
+
+const taskOutputRefs = (task: ProjectState['tasks'][string]) =>
+  Object.values(task.outputRefs ?? {})
+    .flat()
+    .filter(isResourceRef)
 
 const functionOutputHandleForResult = (project: ProjectState, node: CanvasNode) => {
   const resources = resultResourceIds(node)
@@ -130,7 +138,7 @@ export function buildCanvasFlowEdges(project: ProjectState): Edge[] {
           {
             id: `input:${source.nodeId}:${node.id}:${inputKey}`,
             source: source.nodeId,
-            sourceHandle: source.handleId,
+            sourceHandle: source.sourceHandleId,
             target: node.id,
             targetHandle: inputHandleId(inputKey),
             animated: true,
@@ -157,5 +165,37 @@ export function buildCanvasFlowEdges(project: ProjectState): Edge[] {
       markerEnd: edgeMarkerEnd,
     }))
 
-  return [...explicitEdges, ...inferredInputEdges, ...resultEdges]
+  const lineageEdges: Edge[] = Object.values(project.tasks).flatMap((task) => {
+    const outputs = taskOutputRefs(task)
+    if (outputs.length === 0) return []
+
+    return Object.entries(task.inputRefs ?? {}).flatMap(([inputKey, inputRef]) => {
+      if (!isResourceRef(inputRef)) return []
+      const source = resourceNodes.get(inputRef.resourceId)
+      if (!source) return []
+
+      return outputs.flatMap((outputRef) => {
+        if (outputRef.resourceId === inputRef.resourceId) return []
+        const target = resourceNodes.get(outputRef.resourceId)
+        if (!target) return []
+
+        return [
+          {
+            id: `lineage:${task.id}:${inputKey}:${inputRef.resourceId}:${outputRef.resourceId}`,
+            source: source.nodeId,
+            sourceHandle: source.sourceHandleId,
+            target: target.nodeId,
+            targetHandle: target.targetHandleId,
+            animated: false,
+            label: inputKey,
+            type: 'default',
+            className: 'asset-lineage-edge',
+            markerEnd: edgeMarkerEnd,
+          },
+        ]
+      })
+    })
+  })
+
+  return [...explicitEdges, ...inferredInputEdges, ...resultEdges, ...lineageEdges]
 }

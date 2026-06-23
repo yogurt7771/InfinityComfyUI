@@ -6,7 +6,8 @@ import { GEMINI_LLM_FUNCTION_ID } from '../domain/geminiLlm'
 import { OPENAI_IMAGE_FUNCTION_ID } from '../domain/openaiImage'
 import { GEMINI_IMAGE_FUNCTION_ID } from '../domain/geminiImage'
 import { REQUEST_FUNCTION_ID } from '../domain/requestFunction'
-import type { GenerationFunction, ProjectState } from '../domain/types'
+import { LOCAL_TEXT_TRIM_FUNCTION_ID } from '../domain/localTransforms'
+import type { GenerationFunction } from '../domain/types'
 
 describe('project store actions', () => {
   const flushPromises = async () => {
@@ -668,82 +669,6 @@ describe('project store actions', () => {
     expect(geminiImageFunction.geminiImage?.baseUrl).toBe('https://gemini-proxy.local/v1beta')
   })
 
-  it('materializes legacy result outputs as visible resource nodes when importing a project', () => {
-    const slice = createProjectSlice({ now: () => '2026-05-09T00:00:00.000Z' })
-    const project: ProjectState = {
-      ...slice.getState().project,
-      canvas: {
-        nodes: [
-          {
-            id: 'node_result_1',
-            type: 'result_group',
-            position: { x: 320, y: 180 },
-            data: {
-              sourceFunctionNodeId: 'node_fn_1',
-              functionId: 'fn_1',
-              taskId: 'task_1',
-              resources: [{ resourceId: 'res_image_1', type: 'image' }],
-              status: 'succeeded',
-            },
-          },
-        ],
-        edges: [],
-        viewport: { x: 0, y: 0, zoom: 1 },
-      },
-      resources: {
-        res_image_1: {
-          id: 'res_image_1',
-          type: 'image',
-          name: 'Result image',
-          value: {
-            assetId: 'asset_1',
-            url: 'data:image/png;base64,abc',
-            filename: 'result.png',
-            mimeType: 'image/png',
-            sizeBytes: 3,
-          },
-          source: {
-            kind: 'function_output',
-            functionNodeId: 'node_fn_1',
-            resultGroupNodeId: 'node_result_1',
-            taskId: 'task_1',
-            outputKey: 'image',
-          },
-        },
-      },
-      assets: {
-        asset_1: {
-          id: 'asset_1',
-          name: 'result.png',
-          mimeType: 'image/png',
-          sizeBytes: 3,
-          blobUrl: 'data:image/png;base64,abc',
-          createdAt: '2026-05-09T00:00:00.000Z',
-        },
-      },
-    }
-
-    slice.getState().importProject({ project })
-
-    expect(
-      slice
-        .getState()
-        .project.canvas.nodes.filter((node) => node.type === 'resource')
-        .map((node) => ({ id: node.id, position: node.position, data: node.data })),
-    ).toEqual([
-      {
-        id: 'output_node_node_result_1_res_image_1',
-        position: { x: 320, y: 180 },
-        data: {
-          resourceId: 'res_image_1',
-          sourceResultNodeId: 'node_result_1',
-          sourceFunctionNodeId: 'node_fn_1',
-          taskId: 'task_1',
-        },
-      },
-    ])
-  })
-
   it('does not update or delete built-in functions through function management actions', () => {
     const slice = createProjectSlice({
       now: () => '2026-05-09T00:00:00.000Z',
@@ -1354,6 +1279,49 @@ describe('project store actions', () => {
       image: [{ resourceId: 'res_out_1', type: 'text' }],
     })
     expect(state.project.tasks.task_1.seedPatchLog[0].newValue).toBe(42)
+  })
+
+  it('runs a function from explicit popup inputs and creates only asset nodes', async () => {
+    const ids = ['res_input', 'task_1', 'res_output']
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now: () => '2026-05-08T09:00:00.000Z',
+    })
+
+    slice.getState().addTextResourceAtPosition('Prompt', '  warm kitchen  ', { x: 0, y: 0 })
+    await slice.getState().runFunctionAtPosition(
+      LOCAL_TEXT_TRIM_FUNCTION_ID,
+      { text: { resourceId: 'res_input', type: 'text' } },
+      { x: 360, y: 0 },
+      1,
+    )
+
+    const state = slice.getState()
+    expect(state.selectedNodeIds).toEqual([])
+    expect(state.selectedNodeId).toBeUndefined()
+    expect(state.project.canvas.nodes.filter((node) => node.type === 'function')).toEqual([])
+    expect(state.project.canvas.nodes.filter((node) => node.type === 'result_group')).toEqual([])
+    expect(
+      state.project.canvas.nodes
+        .filter((node) => node.type === 'resource')
+        .map((node) => ({ id: node.id, resourceId: node.data.resourceId })),
+    ).toEqual([
+      { id: 'node_res_input', resourceId: 'res_input' },
+      { id: 'node_res_output', resourceId: 'res_output' },
+    ])
+    expect(state.project.resources.res_output.value).toBe('warm kitchen')
+    expect(state.project.resources.res_output.source).toMatchObject({
+      kind: 'function_output',
+      functionNodeId: 'task_1',
+      taskId: 'task_1',
+      outputKey: 'text',
+    })
+    expect(state.project.tasks.task_1.inputRefs).toEqual({
+      text: { resourceId: 'res_input', type: 'text' },
+    })
+    expect(state.project.tasks.task_1.outputRefs).toEqual({
+      text: [{ resourceId: 'res_output', type: 'text' }],
+    })
   })
 
   it('uses the function node run count and appends result nodes to the right', () => {
@@ -2446,6 +2414,73 @@ describe('project store actions', () => {
       { resourceId: 'res_audio_1', sourceResultNodeId: 'node_result_1' },
       { resourceId: 'res_text_1', sourceResultNodeId: 'node_result_1' },
     ])
+  })
+
+  it('runs a ComfyUI function command into asset nodes without visible function or result nodes', async () => {
+    const ids = ['res_1', 'fn_1', 'task_1', 'res_img_1', 'asset_1']
+    const viewFile = vi.fn(async () => new Blob(['render-bytes'], { type: 'image/png' }))
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now: () => '2026-05-08T09:00:00.000Z',
+      randomInt: () => 42,
+      createComfyClient: () => ({
+        queuePrompt: async () => ({ prompt_id: 'prompt_1', number: 1 }),
+        getHistory: async () => ({
+          prompt_1: {
+            outputs: {
+              '20': {
+                images: [{ filename: 'render.png', subfolder: 'renders', type: 'output' }],
+              },
+            },
+          },
+        }),
+        viewFile,
+      }),
+      comfyRunOptions: {
+        maxPollAttempts: 1,
+        pollIntervalMs: 1,
+      },
+    })
+
+    slice.getState().addTextResource('Prompt', 'warm kitchen')
+    addTestWorkflowFunction(slice)
+    const textInput = slice.getState().project.functions.fn_1.inputs.find((input) => input.type === 'text')
+    expect(textInput).toBeDefined()
+
+    await slice.getState().runFunctionAtPosition(
+      'fn_1',
+      { [textInput!.key]: { resourceId: 'res_1', type: 'text' } },
+      { x: 360, y: 0 },
+      1,
+    )
+
+    const state = slice.getState()
+    expect(state.project.canvas.nodes.filter((node) => node.type === 'function')).toEqual([])
+    expect(state.project.canvas.nodes.filter((node) => node.type === 'result_group')).toEqual([])
+    expect(
+      state.project.canvas.nodes
+        .filter((node) => node.type === 'resource')
+        .map((node) => ({ id: node.id, resourceId: node.data.resourceId, taskId: node.data.taskId })),
+    ).toEqual([
+      { id: 'node_res_1', resourceId: 'res_1', taskId: undefined },
+      { id: 'node_res_img_1', resourceId: 'res_img_1', taskId: 'task_1' },
+    ])
+    expect(state.project.tasks.task_1).toMatchObject({
+      status: 'succeeded',
+      comfyPromptId: 'prompt_1',
+      outputRefs: { image: [{ resourceId: 'res_img_1', type: 'image' }] },
+    })
+    expect(state.project.resources.res_img_1.value).toMatchObject({
+      assetId: 'asset_1',
+      url: expect.stringMatching(/^data:image\/png;base64,/),
+      filename: 'render.png',
+      comfy: {
+        endpointId: 'endpoint_local',
+        filename: 'render.png',
+        subfolder: 'renders',
+        type: 'output',
+      },
+    })
   })
 
   it('updates the initial Comfy result node instead of appending a second node when outputs arrive', async () => {

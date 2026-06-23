@@ -286,6 +286,12 @@ export type ProjectStoreState = {
   updateFunctionNodeGeminiImageConfig: (nodeId: string, patch: Partial<GeminiImageConfig>) => void
   updateFunctionNodeRequestConfig: (nodeId: string, patch: Partial<RequestFunctionConfig>) => void
   updateFunctionNodeRequestOutputs: (nodeId: string, outputs: FunctionOutputDef[]) => void
+  runFunctionAtPosition: (
+    functionId: string,
+    inputValues: Record<string, PrimitiveInputValue | ResourceRef>,
+    position: { x: number; y: number },
+    runCount?: number,
+  ) => Promise<string | undefined>
   runFunctionNode: (nodeId: string, runCount?: number) => void
   runFunctionNodeWithComfy: (nodeId: string, runCount?: number) => Promise<void>
   runLocalFunctionForResourceNode: (
@@ -401,74 +407,28 @@ const nodeResourceIds = (project: ProjectState, nodeIds: string[]) => {
 }
 
 const outputResourceNodeId = (resultNodeId: string, resourceId: string) => `output_node_${resultNodeId}_${resourceId}`
+const resourceNodeId = (resourceId: string) => `node_${resourceId}`
 
-const materializeResultResourceNodes = (project: ProjectState): ProjectState => {
-  const existingResourceNodeIds = new Set(
-    project.canvas.nodes
-      .filter((node) => node.type === 'resource' && typeof node.data.resourceId === 'string')
-      .map((node) => String(node.data.resourceId)),
-  )
-  const existingNodeIds = new Set(project.canvas.nodes.map((node) => node.id))
-  const materializedNodes: CanvasNode[] = []
-
-  for (const resultNode of project.canvas.nodes) {
-    if (resultNode.type !== 'result_group' || !Array.isArray(resultNode.data.resources)) continue
-
-    const refs = resultNode.data.resources.filter((ref, index, allRefs): ref is ResourceRef => {
-      if (typeof ref !== 'object' || ref === null || !('resourceId' in ref)) return false
-      const resourceId = String((ref as { resourceId: unknown }).resourceId)
-      return (
-        allRefs.findIndex(
-          (item) =>
-            typeof item === 'object' &&
-            item !== null &&
-            'resourceId' in item &&
-            String((item as { resourceId: unknown }).resourceId) === resourceId,
-        ) === index
-      )
-    })
-
-    refs.forEach((ref, index) => {
-      const resource = project.resources[ref.resourceId]
-      if (!resource || existingResourceNodeIds.has(ref.resourceId)) return
-
-      let nodeId = outputResourceNodeId(resultNode.id, ref.resourceId)
-      let suffix = 1
-      while (existingNodeIds.has(nodeId)) {
-        suffix += 1
-        nodeId = `${outputResourceNodeId(resultNode.id, ref.resourceId)}_${suffix}`
-      }
-
-      existingResourceNodeIds.add(ref.resourceId)
-      existingNodeIds.add(nodeId)
-      materializedNodes.push({
-        id: nodeId,
-        type: 'resource',
-        position: {
-          x: resultNode.position.x + (index % 3) * 260,
-          y: resultNode.position.y + Math.floor(index / 3) * 230,
-        },
-        data: {
-          resourceId: ref.resourceId,
-          sourceResultNodeId: resultNode.id,
-          sourceFunctionNodeId:
-            typeof resultNode.data.sourceFunctionNodeId === 'string' ? resultNode.data.sourceFunctionNodeId : undefined,
-          taskId: typeof resultNode.data.taskId === 'string' ? resultNode.data.taskId : undefined,
-        },
-      })
-    })
+const emptyFunctionOutputValue = (type: ResourceType, resourceId: string): Resource['value'] => {
+  if (type === 'number') return 0
+  if (type === 'text') return ''
+  return {
+    assetId: `pending_${resourceId}`,
+    url: '',
+    filename: resourceNameForType(type),
+    mimeType: `${type}/*`,
+    sizeBytes: 0,
   }
-
-  return materializedNodes.length
-    ? {
-        ...project,
-        canvas: {
-          ...project.canvas,
-          nodes: [...project.canvas.nodes, ...materializedNodes],
-        },
-      }
-    : project
 }
+
+const commandOutputPosition = (
+  basePosition: { x: number; y: number },
+  runIndex: number,
+  outputIndex: number,
+) => ({
+  x: basePosition.x + outputIndex * 260,
+  y: basePosition.y + runIndex * 230,
+})
 
 const projectWithRecordedHistory = (
   beforeProject: ProjectState,
@@ -625,7 +585,7 @@ const withBuiltInFunctions = (project: ProjectState, now: string): ProjectState 
     ]),
   ) as Record<string, GenerationFunction>
 
-  return materializeResultResourceNodes({
+  return {
     ...project,
     history: project.history ?? emptyProjectHistory(),
     templates: project.templates ?? {},
@@ -633,7 +593,7 @@ const withBuiltInFunctions = (project: ProjectState, now: string): ProjectState 
       ...project.functions,
       ...builtIns,
     },
-  })
+  }
 }
 
 const activeJobs = (tasks: Record<string, ExecutionTask>) =>
@@ -5185,6 +5145,517 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         },
       }))
       return id
+    },
+
+    runFunctionAtPosition: async (functionId, inputValues, position, runCount) => {
+      const state = get()
+      const functionDef = state.project.functions[functionId]
+      if (!functionDef) return undefined
+
+      const now = runtime.now()
+      const normalizedRuns = normalizedRunCount(runCount ?? functionDef.runtimeDefaults?.runCount ?? 1)
+      const runtimeInputValues = inputValues as RuntimeInputValues
+      if (missingRequiredInputKeys(functionDef.inputs, runtimeInputValues, state.project.resources).length > 0) {
+        return undefined
+      }
+
+      const hasPendingDependencies = hasPendingInputRefs(runtimeInputValues)
+      const tasks: Record<string, ExecutionTask> = {}
+      const resources: Record<string, Resource> = {}
+      const nodes: CanvasNode[] = []
+      const queuedLocalRuns: Array<{
+        taskId: string
+        runIndex: number
+        outputRefs: Record<string, ResourceRef[]>
+        inputValues: ResolvedRuntimeInputValues
+      }> = []
+      const queuedComfyRuns: Array<{
+        taskId: string
+        runIndex: number
+        outputRefs: Record<string, ResourceRef[]>
+        inputValues: ResolvedRuntimeInputValues
+      }> = []
+
+      for (let index = 0; index < normalizedRuns; index += 1) {
+        const taskId = runtime.idFactory()
+        const runIndex = index + 1
+        const outputRefs: Record<string, ResourceRef[]> = {}
+
+        functionDef.outputs.forEach((output, outputIndex) => {
+          const resourceId = runtime.idFactory()
+          const ref: ResourceRef = { resourceId, type: output.type }
+          outputRefs[output.key] = [ref]
+          resources[resourceId] = {
+            id: resourceId,
+            type: output.type,
+            name: `${functionDef.name} ${output.label || output.key}`,
+            value: emptyFunctionOutputValue(output.type, resourceId),
+            source: {
+              kind: 'function_output',
+              functionNodeId: taskId,
+              taskId,
+              outputKey: output.key,
+            },
+            metadata: {
+              workflowFunctionId: functionId,
+              endpointId: functionDef.workflow.format === 'local_transform' ? 'local' : undefined,
+              createdAt: now,
+            },
+          }
+          nodes.push({
+            id: resourceNodeId(resourceId),
+            type: 'resource',
+            position: commandOutputPosition(position, index, outputIndex),
+            data: {
+              resourceId,
+              resourceType: output.type,
+              functionId,
+              taskId,
+              outputKey: output.key,
+              status: hasPendingDependencies ? 'pending' : 'queued',
+            },
+          })
+        })
+
+        tasks[taskId] = {
+          id: taskId,
+          functionNodeId: taskId,
+          functionId,
+          runIndex,
+          runTotal: normalizedRuns,
+          status: hasPendingDependencies ? 'pending' : 'queued',
+          inputRefs: inputResourceRefs(runtimeInputValues),
+          inputSnapshot: resourceInputSnapshot(runtimeInputValues, state.project.resources),
+          inputValuesSnapshot: executionInputSnapshot(functionDef, runtimeInputValues, state.project.resources),
+          paramsSnapshot: { runCount: normalizedRuns, mode: 'function_command' },
+          workflowTemplateSnapshot: functionDef.workflow.rawJson,
+          compiledWorkflowSnapshot: functionDef.workflow.rawJson,
+          seedPatchLog: [],
+          endpointId: functionDef.workflow.format === 'local_transform' ? 'local' : undefined,
+          outputRefs,
+          createdAt: now,
+          updatedAt: now,
+        }
+
+        if (isLocalTransformFunction(functionDef) && !hasPendingDependencies) {
+          queuedLocalRuns.push({
+            taskId,
+            runIndex,
+            outputRefs,
+            inputValues: asResolvedInputValues(runtimeInputValues),
+          })
+        }
+        if (functionDef.workflow.format === 'comfyui_api_json' && !hasPendingDependencies) {
+          queuedComfyRuns.push({
+            taskId,
+            runIndex,
+            outputRefs,
+            inputValues: asResolvedInputValues(runtimeInputValues),
+          })
+        }
+      }
+
+      const firstTaskId = Object.keys(tasks)[0]
+
+      set((state) => ({
+        ...selectedState([]),
+        project: {
+          ...state.project,
+          project: { ...state.project.project, updatedAt: now },
+          resources: { ...state.project.resources, ...resources },
+          tasks: { ...state.project.tasks, ...tasks },
+          canvas: { ...state.project.canvas, nodes: [...state.project.canvas.nodes, ...nodes] },
+        },
+      }))
+
+      const outputResourceFromLocalValue = (
+        resourceId: string,
+        output: { key: string; label: string; type: ResourceType },
+        value: LocalTransformOutputValue,
+        taskId: string,
+        completedAt: string,
+      ): { resource: Resource; asset?: ProjectState['assets'][string] } => {
+        if (output.type === 'number') {
+          const numericValue = Number(value)
+          return {
+            resource: {
+              id: resourceId,
+              type: 'number',
+              name: output.label,
+              value: Number.isFinite(numericValue) ? numericValue : 0,
+              source: { kind: 'function_output', functionNodeId: taskId, taskId, outputKey: output.key },
+              metadata: { workflowFunctionId: functionId, endpointId: 'local', createdAt: completedAt },
+            },
+          }
+        }
+
+        if (output.type === 'image' || output.type === 'video' || output.type === 'audio') {
+          if (typeof value !== 'object' || value === null || !('url' in value)) {
+            throw new Error(`Local output ${output.key} did not produce a media payload`)
+          }
+          const assetId = runtime.idFactory()
+          const filename = value.filename ?? output.label
+          const asset = {
+            id: assetId,
+            name: filename,
+            mimeType: value.mimeType,
+            sizeBytes: value.sizeBytes,
+            blobUrl: value.url,
+            createdAt: completedAt,
+          }
+          return {
+            asset,
+            resource: {
+              id: resourceId,
+              type: output.type,
+              name: filename,
+              value: mediaValueWithAsset(assetId, value),
+              source: { kind: 'function_output', functionNodeId: taskId, taskId, outputKey: output.key },
+              metadata: { workflowFunctionId: functionId, endpointId: 'local', createdAt: completedAt },
+            },
+          }
+        }
+
+        return {
+          resource: {
+            id: resourceId,
+            type: 'text',
+            name: output.label,
+            value: String(value ?? ''),
+            source: { kind: 'function_output', functionNodeId: taskId, taskId, outputKey: output.key },
+            metadata: { workflowFunctionId: functionId, endpointId: 'local', createdAt: completedAt },
+          },
+        }
+      }
+
+      const markCommandTaskRunning = (taskId: string, endpointId: string) => {
+        const startedAt = runtime.now()
+        set((current) => ({
+          project: {
+            ...current.project,
+            tasks: {
+              ...current.project.tasks,
+              [taskId]: {
+                ...current.project.tasks[taskId]!,
+                status: 'running',
+                endpointId,
+                startedAt,
+                updatedAt: startedAt,
+              },
+            },
+            canvas: {
+              ...current.project.canvas,
+              nodes: current.project.canvas.nodes.map((node) =>
+                node.data.taskId === taskId
+                  ? { ...node, data: { ...node.data, endpointId, status: 'running', startedAt } }
+                  : node,
+              ),
+            },
+          },
+        }))
+      }
+
+      const failCommandTask = (taskId: string, err: unknown) => {
+        const failedAt = runtime.now()
+        const message = err instanceof Error ? err.message : 'Function command failed'
+        set((current) => ({
+          project: {
+            ...current.project,
+            project: { ...current.project.project, updatedAt: failedAt },
+            tasks: {
+              ...current.project.tasks,
+              [taskId]: {
+                ...current.project.tasks[taskId]!,
+                status: 'failed',
+                error: { code: 'function_command_failed', message, raw: err },
+                updatedAt: failedAt,
+                completedAt: failedAt,
+              },
+            },
+            canvas: {
+              ...current.project.canvas,
+              nodes: current.project.canvas.nodes.map((node) =>
+                node.data.taskId === taskId
+                  ? {
+                      ...node,
+                      data: {
+                        ...node.data,
+                        status: 'failed',
+                        error: { code: 'function_command_failed', message },
+                        completedAt: failedAt,
+                      },
+                    }
+                  : node,
+              ),
+            },
+          },
+        }))
+      }
+
+      for (const queuedRun of queuedLocalRuns) {
+        markCommandTaskRunning(queuedRun.taskId, 'local')
+        try {
+          const outputs = await executeLocalTransformFunction(
+            functionDef,
+            queuedRun.inputValues,
+            get().project.resources,
+            (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
+          )
+          const completedAt = runtime.now()
+          const nextResources: Record<string, Resource> = {}
+          const nextAssets: ProjectState['assets'] = {}
+          const nextOutputRefs: Record<string, ResourceRef[]> = {}
+          const extraNodes: CanvasNode[] = []
+
+          outputs.forEach((outputItem, outputIndex) => {
+            const refs = queuedRun.outputRefs[outputItem.key] ? [...queuedRun.outputRefs[outputItem.key]] : []
+            outputItem.values.forEach((value, valueIndex) => {
+              let ref = refs[valueIndex]
+              if (!ref) {
+                const resourceId = runtime.idFactory()
+                ref = { resourceId, type: outputItem.type }
+                refs.push(ref)
+                extraNodes.push({
+                  id: resourceNodeId(resourceId),
+                  type: 'resource',
+                  position: commandOutputPosition(position, queuedRun.runIndex - 1, outputIndex + valueIndex),
+                  data: {
+                    resourceId,
+                    resourceType: outputItem.type,
+                    functionId,
+                    taskId: queuedRun.taskId,
+                    outputKey: outputItem.key,
+                    status: 'succeeded',
+                    completedAt,
+                  },
+                })
+              }
+
+              const created = outputResourceFromLocalValue(ref.resourceId, outputItem, value, queuedRun.taskId, completedAt)
+              nextResources[created.resource.id] = created.resource
+              if (created.asset) nextAssets[created.asset.id] = created.asset
+            })
+            nextOutputRefs[outputItem.key] = refs
+          })
+
+          const completedResourceIds = new Set(Object.keys(nextResources))
+          set((current) => ({
+            project: {
+              ...current.project,
+              project: { ...current.project.project, updatedAt: completedAt },
+              resources: { ...current.project.resources, ...nextResources },
+              assets: { ...current.project.assets, ...nextAssets },
+              tasks: {
+                ...current.project.tasks,
+                [queuedRun.taskId]: {
+                  ...current.project.tasks[queuedRun.taskId]!,
+                  status: 'succeeded',
+                  outputRefs: nextOutputRefs,
+                  updatedAt: completedAt,
+                  completedAt,
+                },
+              },
+              canvas: {
+                ...current.project.canvas,
+                nodes: [
+                  ...current.project.canvas.nodes.map((node) =>
+                    completedResourceIds.has(String(node.data.resourceId))
+                      ? { ...node, data: { ...node.data, status: 'succeeded', completedAt } }
+                      : node,
+                  ),
+                  ...extraNodes,
+                ],
+              },
+            },
+          }))
+        } catch (err) {
+          failCommandTask(queuedRun.taskId, err)
+        }
+      }
+
+      for (const queuedRun of queuedComfyRuns) {
+        const endpoint = selectEndpoint(get().project.comfy.endpoints, activeJobs(get().project.tasks), functionId)
+        if (!endpoint) {
+          failCommandTask(queuedRun.taskId, new Error('No eligible ComfyUI endpoint'))
+          continue
+        }
+
+        markCommandTaskRunning(queuedRun.taskId, endpoint.id)
+        try {
+          const client = runtime.createComfyClient(endpoint)
+          const preparedInputValues = await prepareComfyInputValues(
+            client,
+            functionDef.inputs,
+            queuedRun.inputValues,
+            get().project.resources,
+            (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
+          )
+          const compiledWithInputs = injectWorkflowInputs(
+            functionDef.workflow.rawJson,
+            functionDef.inputs,
+            asResolvedInputValues(preparedInputValues),
+            get().project.resources,
+          )
+          const randomized = randomizeWorkflowSeeds(compiledWithInputs, {
+            now: runtime.now,
+            randomInt: runtime.randomInt,
+          })
+          set((current) => ({
+            project: {
+              ...current.project,
+              tasks: {
+                ...current.project.tasks,
+                [queuedRun.taskId]: {
+                  ...current.project.tasks[queuedRun.taskId]!,
+                  compiledWorkflowSnapshot: randomized.workflow,
+                  requestSnapshot: randomized.workflow,
+                  seedPatchLog: randomized.patchLog,
+                  updatedAt: runtime.now(),
+                },
+              },
+            },
+          }))
+
+          const result = await runComfyPrompt(client, randomized.workflow, runtime.comfyRunOptions)
+          const outputs = extractComfyOutputs(result.history, randomized.workflow, functionDef.outputs)
+          const completedAt = runtime.now()
+          const nextResources: Record<string, Resource> = {}
+          const nextAssets: ProjectState['assets'] = {}
+          const nextOutputRefs: Record<string, ResourceRef[]> = {}
+          const extraNodes: CanvasNode[] = []
+
+          for (const [outputIndex, output] of outputs.entries()) {
+            const refs = queuedRun.outputRefs[output.key] ? [...queuedRun.outputRefs[output.key]] : []
+            let valueIndex = 0
+
+            for (const file of output.files) {
+              let ref = refs[valueIndex]
+              if (!ref) {
+                const resourceId = runtime.idFactory()
+                ref = { resourceId, type: output.type }
+                refs.push(ref)
+                extraNodes.push({
+                  id: resourceNodeId(resourceId),
+                  type: 'resource',
+                  position: commandOutputPosition(position, queuedRun.runIndex - 1, outputIndex + valueIndex),
+                  data: {
+                    resourceId,
+                    resourceType: output.type,
+                    functionId,
+                    taskId: queuedRun.taskId,
+                    outputKey: output.key,
+                    status: 'succeeded',
+                    completedAt,
+                  },
+                })
+              }
+
+              const assetId = runtime.idFactory()
+              const persisted = await persistedComfyFile(client, endpoint, file, outputMimeType(output.type, file.filename))
+              nextAssets[assetId] = {
+                id: assetId,
+                name: file.filename,
+                mimeType: persisted.mimeType,
+                sizeBytes: persisted.sizeBytes,
+                blobUrl: persisted.url,
+                createdAt: completedAt,
+              }
+              nextResources[ref.resourceId] = {
+                id: ref.resourceId,
+                type: output.type,
+                name: file.filename,
+                value: {
+                  assetId,
+                  url: persisted.url,
+                  filename: file.filename,
+                  mimeType: persisted.mimeType,
+                  sizeBytes: persisted.sizeBytes,
+                  comfy: {
+                    endpointId: endpoint.id,
+                    filename: file.filename,
+                    subfolder: file.subfolder ?? '',
+                    type: file.type,
+                  },
+                },
+                source: { kind: 'function_output', functionNodeId: queuedRun.taskId, taskId: queuedRun.taskId, outputKey: output.key },
+                metadata: { workflowFunctionId: functionId, endpointId: endpoint.id, createdAt: completedAt },
+              }
+              valueIndex += 1
+            }
+
+            for (const text of output.texts ?? []) {
+              let ref = refs[valueIndex]
+              if (!ref) {
+                const resourceId = runtime.idFactory()
+                ref = { resourceId, type: 'text' }
+                refs.push(ref)
+                extraNodes.push({
+                  id: resourceNodeId(resourceId),
+                  type: 'resource',
+                  position: commandOutputPosition(position, queuedRun.runIndex - 1, outputIndex + valueIndex),
+                  data: {
+                    resourceId,
+                    resourceType: 'text',
+                    functionId,
+                    taskId: queuedRun.taskId,
+                    outputKey: output.key,
+                    status: 'succeeded',
+                    completedAt,
+                  },
+                })
+              }
+
+              nextResources[ref.resourceId] = {
+                id: ref.resourceId,
+                type: 'text',
+                name: output.key,
+                value: text,
+                source: { kind: 'function_output', functionNodeId: queuedRun.taskId, taskId: queuedRun.taskId, outputKey: output.key },
+                metadata: { workflowFunctionId: functionId, endpointId: endpoint.id, createdAt: completedAt },
+              }
+              valueIndex += 1
+            }
+
+            nextOutputRefs[output.key] = refs
+          }
+
+          const completedResourceIds = new Set(Object.keys(nextResources))
+          set((current) => ({
+            project: {
+              ...current.project,
+              project: { ...current.project.project, updatedAt: completedAt },
+              resources: { ...current.project.resources, ...nextResources },
+              assets: { ...current.project.assets, ...nextAssets },
+              tasks: {
+                ...current.project.tasks,
+                [queuedRun.taskId]: {
+                  ...current.project.tasks[queuedRun.taskId]!,
+                  status: 'succeeded',
+                  comfyPromptId: result.promptId,
+                  outputRefs: nextOutputRefs,
+                  updatedAt: completedAt,
+                  completedAt,
+                },
+              },
+              canvas: {
+                ...current.project.canvas,
+                nodes: [
+                  ...current.project.canvas.nodes.map((node) =>
+                    completedResourceIds.has(String(node.data.resourceId))
+                      ? { ...node, data: { ...node.data, status: 'succeeded', completedAt } }
+                      : node,
+                  ),
+                  ...extraNodes,
+                ],
+              },
+            },
+          }))
+        } catch (err) {
+          failCommandTask(queuedRun.taskId, err)
+        }
+      }
+
+      return firstTaskId
     },
 
     updateFunctionNodeRunCount: (nodeId, runCount) => {

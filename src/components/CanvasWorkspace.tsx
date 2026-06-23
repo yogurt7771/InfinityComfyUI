@@ -29,15 +29,19 @@ import {
 import { CaseSensitive, GitCompareArrows, Grid2X2, Image, Info, Layers, Pencil, Scissors, Shrink, Video, Volume2, X } from 'lucide-react'
 import { EmptyNodeView, FunctionNodeView, GroupNodeView, ResourceNodeView, ResultGroupNodeView } from './NodeViews'
 import { FunctionManager } from './WorkbenchPanels'
+import { ResourcePreview } from './ResourcePreview'
 import { buildCanvasFlowEdges } from '../domain/canvasEdges'
 import { targetInputInitialResourceValue } from '../domain/inputInitialValue'
 import { buildNodeReferenceMap } from '../domain/nodeReferences'
 import { readFileAsMediaResource } from '../domain/resourceFiles'
+import { workflowPrimitiveInputValue } from '../domain/workflow'
 import { useProjectStore } from '../store/projectStore'
 import { shouldIgnoreCanvasShortcut } from './canvasKeyboard'
 import type {
   CanvasNode,
+  ExecutionTask,
   GenerationFunction,
+  PrimitiveInputValue,
   Resource,
   ResourceRef,
   ResourceType,
@@ -75,11 +79,6 @@ type CompareImagePair = {
   right: Resource
 }
 
-type LocalActionDialogState = {
-  sourceNodeId: string
-  functionId: string
-}
-
 type QuickToolbarState = {
   sourceNodeId: string
   left: number
@@ -102,6 +101,12 @@ type GroupNodeMenuState = {
 type FunctionEditorState = {
   nodeId: string
   functionId: string
+}
+
+type FunctionRunDialogState = {
+  functionId: string
+  inputValues: Record<string, PrimitiveInputValue | ResourceRef>
+  position: { x: number; y: number }
 }
 
 const nodeTypes: NodeTypes = {
@@ -135,6 +140,61 @@ const pendingOutputKeyFromHandle = (handleId?: string | null) =>
 
 const functionAcceptsResourceType = (fn: GenerationFunction, resourceType?: ResourceType) =>
   !resourceType || fn.inputs.some((input) => input.type === resourceType)
+
+const isResourceRefValue = (value: unknown): value is ResourceRef =>
+  typeof value === 'object' &&
+  value !== null &&
+  'resourceId' in value &&
+  typeof (value as { resourceId?: unknown }).resourceId === 'string'
+
+const functionRunInputsFromTask = (task: ExecutionTask): Record<string, PrimitiveInputValue | ResourceRef> => {
+  const values: Record<string, PrimitiveInputValue | ResourceRef> = {}
+  for (const [key, snapshot] of Object.entries(task.inputValuesSnapshot ?? {})) {
+    if (snapshot.source === 'resource' && snapshot.resourceId) {
+      values[key] = { resourceId: snapshot.resourceId, type: snapshot.type }
+    } else if (
+      snapshot.source !== 'pending' &&
+      (snapshot.value === null || typeof snapshot.value === 'string' || typeof snapshot.value === 'number')
+    ) {
+      values[key] = snapshot.value
+    }
+  }
+
+  for (const [key, ref] of Object.entries(task.inputRefs ?? {})) {
+    if (isResourceRefValue(ref)) values[key] = ref
+  }
+
+  return values
+}
+
+export const buildFunctionRunInputDraft = (
+  functionDef: GenerationFunction,
+  resourcesById: Record<string, Resource>,
+  candidateRefs: ResourceRef[],
+) => {
+  const usedResourceIds = new Set<string>()
+  const inputValues: Record<string, PrimitiveInputValue | ResourceRef> = {}
+
+  for (const input of functionDef.inputs) {
+    const resourceRef = candidateRefs.find((ref) => {
+      if (usedResourceIds.has(ref.resourceId) || ref.type !== input.type) return false
+      return Boolean(resourcesById[ref.resourceId])
+    })
+
+    if (resourceRef) {
+      inputValues[input.key] = resourceRef
+      usedResourceIds.add(resourceRef.resourceId)
+      continue
+    }
+
+    if (input.type === 'text' || input.type === 'number') {
+      inputValues[input.key] =
+        input.defaultValue ?? workflowPrimitiveInputValue(functionDef, input) ?? (input.type === 'number' ? 0 : '')
+    }
+  }
+
+  return inputValues
+}
 
 const addMenuItemMatches = (label: string, query: string) => {
   const tokens = query
@@ -680,22 +740,51 @@ function ComfyMinimap({
   )
 }
 
-function LocalActionDialog({
+function functionInputSatisfied(value: PrimitiveInputValue | ResourceRef | undefined, resourcesById: Record<string, Resource>) {
+  if (isResourceRefValue(value)) return Boolean(resourcesById[value.resourceId])
+  if (typeof value === 'number') return Number.isFinite(value)
+  if (typeof value === 'string') return value.trim().length > 0
+  return value !== undefined && value !== null
+}
+
+function FunctionRunDialog({
   functionDef,
+  inputValues,
+  resourcesById,
   onClose,
   onRun,
 }: {
   functionDef: GenerationFunction
+  inputValues: Record<string, PrimitiveInputValue | ResourceRef>
+  resourcesById: Record<string, Resource>
   onClose: () => void
-  onRun: (values: Record<string, string | number | null>) => void
+  onRun: (values: Record<string, PrimitiveInputValue | ResourceRef>, runCount: number) => void
 }) {
-  const optionalInputs = useMemo(
-    () => functionDef.inputs.filter((input) => !input.required && (input.type === 'text' || input.type === 'number')),
-    [functionDef],
+  const [values, setValues] = useState<Record<string, PrimitiveInputValue | ResourceRef>>(inputValues)
+  const [runCount, setRunCount] = useState(functionDef.runtimeDefaults?.runCount ?? 1)
+  const selectedResources = functionDef.inputs
+    .map((input) => values[input.key])
+    .filter(isResourceRefValue)
+    .map((ref) => resourcesById[ref.resourceId])
+    .filter((resource): resource is Resource => Boolean(resource))
+  const missingRequiredInputs = functionDef.inputs.filter(
+    (input) => input.required && !functionInputSatisfied(values[input.key], resourcesById),
   )
-  const [values, setValues] = useState<Record<string, string | number | null>>(() =>
-    Object.fromEntries(optionalInputs.map((input) => [input.key, input.defaultValue ?? (input.type === 'number' ? 0 : '')])),
-  )
+
+  const setResourceValue = (inputKey: string, resourceId: string, type: ResourceType) => {
+    setValues((current) => {
+      if (!resourceId) {
+        const next = { ...current }
+        delete next[inputKey]
+        return next
+      }
+      return { ...current, [inputKey]: { resourceId, type } }
+    })
+  }
+
+  const setPrimitiveValue = (inputKey: string, value: PrimitiveInputValue) => {
+    setValues((current) => ({ ...current, [inputKey]: value }))
+  }
 
   return (
     <div
@@ -708,56 +797,100 @@ function LocalActionDialog({
       <section
         aria-label={`Run ${functionDef.name}`}
         aria-modal="true"
-        className="local-action-dialog"
+        className="local-action-dialog function-run-dialog"
         role="dialog"
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header>
           <div>
             <h2>{functionDef.name}</h2>
-            <span>{functionDef.category ?? 'Local'}</span>
+            <span>{functionDef.category ?? 'Function'}</span>
           </div>
-          <button type="button" aria-label="Close local action" onClick={onClose}>
+          <button type="button" aria-label="Close function runner" onClick={onClose}>
             <X size={16} />
           </button>
         </header>
-        {optionalInputs.length ? (
-          <div className="local-action-fields">
-            {optionalInputs.map((input) => (
-              <label key={input.key}>
-                <span>{input.label || input.key}</span>
+        <div className="function-run-gallery" aria-label="Selected function inputs">
+          {selectedResources.length ? (
+            selectedResources.map((resource, index) => (
+              <div key={`${resource.id}-${index}`} className="function-run-gallery-item">
+                <ResourcePreview resource={resource} />
+                <span>{resource.name ?? resource.id}</span>
+              </div>
+            ))
+          ) : (
+            <p>No assets selected yet.</p>
+          )}
+        </div>
+        <div className="function-run-fields">
+          {functionDef.inputs.map((input) => {
+            const value = values[input.key]
+            const resourceValue = isResourceRefValue(value) ? value : undefined
+            const matchingResources = Object.values(resourcesById).filter((resource) => resource.type === input.type)
+            const primitiveValue = isResourceRefValue(value) ? '' : value
+            return (
+              <label key={input.key} className="function-run-field">
+                <span>
+                  {input.label || input.key}
+                  {input.required ? <strong>Required</strong> : null}
+                </span>
+                <select
+                  aria-label={`Asset input ${input.label || input.key}`}
+                  value={resourceValue?.resourceId ?? ''}
+                  onChange={(event) => setResourceValue(input.key, event.target.value, input.type)}
+                >
+                  <option value="">Manual / empty</option>
+                  {matchingResources.map((resource) => (
+                    <option key={resource.id} value={resource.id}>
+                      {resource.name ?? resource.id}
+                    </option>
+                  ))}
+                </select>
                 {input.type === 'number' ? (
                   <input
-                    aria-label={input.label || input.key}
+                    aria-label={`Manual input ${input.label || input.key}`}
+                    disabled={Boolean(resourceValue)}
                     inputMode="decimal"
                     type="number"
-                    value={Number(values[input.key] ?? 0)}
-                    onChange={(event) => setValues((current) => ({ ...current, [input.key]: Number(event.target.value) }))}
+                    value={Number(primitiveValue ?? 0)}
+                    onChange={(event) => setPrimitiveValue(input.key, Number(event.target.value))}
                   />
-                ) : (
+                ) : input.type === 'text' ? (
                   <textarea
-                    aria-label={input.label || input.key}
-                    rows={4}
-                    value={String(values[input.key] ?? '')}
-                    onChange={(event) => setValues((current) => ({ ...current, [input.key]: event.target.value }))}
+                    aria-label={`Manual input ${input.label || input.key}`}
+                    disabled={Boolean(resourceValue)}
+                    rows={3}
+                    value={String(primitiveValue ?? '')}
+                    onChange={(event) => setPrimitiveValue(input.key, event.target.value)}
                   />
-                )}
+                ) : null}
               </label>
-            ))}
-          </div>
-        ) : (
-          <p className="local-action-empty">This action runs with the selected resource.</p>
-        )}
+            )
+          })}
+        </div>
         <div className="local-action-footer">
+          <label className="function-run-count">
+            <span>Runs</span>
+            <input
+              aria-label="Function run count"
+              max={99}
+              min={1}
+              type="number"
+              value={runCount}
+              onChange={(event) => setRunCount(Math.max(1, Math.min(99, Number(event.target.value) || 1)))}
+            />
+          </label>
           <button type="button" onClick={onClose}>
             Cancel
           </button>
           <button
             type="button"
-            aria-label="Run local function"
+            aria-label="Run function from popup"
             className="primary"
+            disabled={missingRequiredInputs.length > 0}
+            title={missingRequiredInputs.length > 0 ? `Missing ${missingRequiredInputs.map((input) => input.label || input.key).join(', ')}` : undefined}
             onClick={() => {
-              onRun(values)
+              onRun(values, runCount)
               onClose()
             }}
           >
@@ -776,13 +909,12 @@ function CanvasSurface() {
   const selectNode = useProjectStore((state) => state.selectNode)
   const selectNodes = useProjectStore((state) => state.selectNodes)
   const runFunctionNodeWithComfy = useProjectStore((state) => state.runFunctionNodeWithComfy)
-  const runLocalFunctionForResourceNode = useProjectStore((state) => state.runLocalFunctionForResourceNode)
+  const runFunctionAtPosition = useProjectStore((state) => state.runFunctionAtPosition)
   const rerunResultNode = useProjectStore((state) => state.rerunResultNode)
   const cancelResultRun = useProjectStore((state) => state.cancelResultRun)
   const addTextResourceAtPosition = useProjectStore((state) => state.addTextResourceAtPosition)
   const addEmptyResourceAtPosition = useProjectStore((state) => state.addEmptyResourceAtPosition)
   const addMediaResourceAtPosition = useProjectStore((state) => state.addMediaResourceAtPosition)
-  const addFunctionNodeAtPosition = useProjectStore((state) => state.addFunctionNodeAtPosition)
   const updateTextResourceValue = useProjectStore((state) => state.updateTextResourceValue)
   const updateNumberResourceValue = useProjectStore((state) => state.updateNumberResourceValue)
   const replaceResourceMedia = useProjectStore((state) => state.replaceResourceMedia)
@@ -818,11 +950,11 @@ function CanvasSurface() {
   const duplicateNodes = useProjectStore((state) => state.duplicateNodes)
   const { screenToFlowPosition, setCenter } = useReactFlow()
   const [addMenu, setAddMenu] = useState<AddNodeMenuState | null>(null)
-  const [localActionDialog, setLocalActionDialog] = useState<LocalActionDialogState | null>(null)
   const [quickToolbar, setQuickToolbar] = useState<QuickToolbarState>()
   const [functionNodeMenu, setFunctionNodeMenu] = useState<FunctionNodeMenuState>()
   const [groupNodeMenu, setGroupNodeMenu] = useState<GroupNodeMenuState>()
   const [functionEditor, setFunctionEditor] = useState<FunctionEditorState>()
+  const [functionRunDialog, setFunctionRunDialog] = useState<FunctionRunDialogState>()
   const [comparePair, setComparePair] = useState<CompareImagePair | null>(null)
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([])
   const [addMenuQuery, setAddMenuQuery] = useState('')
@@ -849,6 +981,33 @@ function CanvasSurface() {
       window.dispatchEvent(new CustomEvent('infinity-focus-node', { detail: { nodeId } }))
     },
     [selectNode],
+  )
+
+  const openFunctionRunForResource = useCallback(
+    (resourceId: string) => {
+      const resource = project.resources[resourceId]
+      const taskId = resource?.source.taskId
+      const task = taskId ? project.tasks[taskId] : undefined
+      const functionId = task?.functionId ?? resource?.metadata?.workflowFunctionId
+      const functionDef = functionId ? project.functions[functionId] : undefined
+      if (!resource || !task || !functionId || !functionDef) return
+
+      const sourceNode = project.canvas.nodes.find(
+        (node) => node.type === 'resource' && node.data.resourceId === resourceId,
+      )
+      const sourceWidth = sourceNode ? Number(flowNodeStyle(sourceNode, project.functions).width) : DEFAULT_ASSET_NODE_WIDTH
+      setFunctionRunDialog({
+        functionId,
+        inputValues: functionRunInputsFromTask(task),
+        position: sourceNode
+          ? {
+              x: sourceNode.position.x + (Number.isFinite(sourceWidth) ? sourceWidth : DEFAULT_ASSET_NODE_WIDTH) + MENU_NODE_GAP,
+              y: sourceNode.position.y,
+            }
+          : { x: 0, y: 0 },
+      })
+    },
+    [project.canvas.nodes, project.functions, project.resources, project.tasks],
   )
 
   useEffect(() => {
@@ -908,6 +1067,7 @@ function CanvasSurface() {
           onUpdateTextResourceValue: updateTextResourceValue,
           onUpdateNumberResourceValue: updateNumberResourceValue,
           onReplaceResourceMedia: replaceResourceMedia,
+          onOpenFunctionRunForResource: openFunctionRunForResource,
           onResizeNode: updateNodeSize,
         },
       })),
@@ -915,6 +1075,7 @@ function CanvasSurface() {
       deleteNode,
       focusCanvasNode,
       nodeReferenceMap,
+      openFunctionRunForResource,
       project.canvas.nodes,
       project.functions,
       project.resources,
@@ -1050,6 +1211,7 @@ function CanvasSurface() {
         setQuickToolbar(undefined)
         setFunctionNodeMenu(undefined)
         setGroupNodeMenu(undefined)
+        setFunctionRunDialog(undefined)
         selectNode(undefined)
         setSelectedEdgeIds([])
       }
@@ -1239,8 +1401,6 @@ function CanvasSurface() {
     menu.style.top = `${top}px`
   }, [groupNodeMenu])
 
-  const activeLocalActionFunction = localActionDialog ? project.functions[localActionDialog.functionId] : undefined
-
   const connectionResourceType = (sourceNodeId: string | undefined, sourceHandleId?: string | null) => {
     const existingResourceType = sourceResourceRefs(sourceNodeId, sourceHandleId)[0]?.type
     if (existingResourceType || !sourceNodeId) return existingResourceType
@@ -1398,6 +1558,7 @@ function CanvasSurface() {
 
   const activeFunctionEditorFunction = functionEditor ? project.functions[functionEditor.functionId] : undefined
   const activeFunctionEditorFunctions = activeFunctionEditorFunction ? [activeFunctionEditorFunction] : []
+  const activeFunctionRunFunction = functionRunDialog ? project.functions[functionRunDialog.functionId] : undefined
 
   const placedNodePosition = (newNodeWidth: number) => {
     if (!addMenu?.placement) return addMenu?.flow
@@ -1410,6 +1571,35 @@ function CanvasSurface() {
     return addMenu.placement.side === 'right'
       ? { x: anchorNode.position.x + resolvedAnchorWidth + MENU_NODE_GAP, y: anchorNode.position.y }
       : { x: anchorNode.position.x - newNodeWidth - MENU_NODE_GAP, y: anchorNode.position.y }
+  }
+
+  const commandPositionForSourceNode = (sourceNodeId: string) => {
+    const sourceNode = project.canvas.nodes.find((node) => node.id === sourceNodeId)
+    if (!sourceNode) return { x: 0, y: 0 }
+    const sourceSize = flowNodeStyle(sourceNode, project.functions)
+    const sourceWidth = Number(sourceSize.width)
+    const resolvedSourceWidth = Number.isFinite(sourceWidth) ? sourceWidth : DEFAULT_ASSET_NODE_WIDTH
+    return {
+      x: sourceNode.position.x + resolvedSourceWidth + MENU_NODE_GAP,
+      y: sourceNode.position.y,
+    }
+  }
+
+  const uniqueResourceRefs = (refs: ResourceRef[]) => {
+    const seen = new Set<string>()
+    return refs.filter((ref) => {
+      if (seen.has(ref.resourceId)) return false
+      seen.add(ref.resourceId)
+      return true
+    })
+  }
+
+  const resourceRefsForFunctionMenu = () => {
+    const refs =
+      addMenu?.connection?.kind === 'source'
+        ? sourceResourceRefs(addMenu.connection.sourceNodeId, addMenu.connection.sourceHandleId)
+        : activeSelectedNodeIds.flatMap((nodeId) => sourceResourceRefs(nodeId))
+    return uniqueResourceRefs(refs)
   }
 
   const addMenuFunctions = Object.values(project.functions).filter((fn) =>
@@ -1450,14 +1640,11 @@ function CanvasSurface() {
 
   const createFunctionFromMenu = (functionId: string) => {
     if (!addMenu) return
-    const nodeId = addFunctionNodeAtPosition(functionId, placedNodePosition(defaultFunctionWidth(project.functions[functionId])) ?? addMenu.flow, {
-      autoBindRequiredInputs: false,
-    })
-    if (nodeId && addMenu.connection?.kind === 'source') {
-      connectNodes(addMenu.connection.sourceNodeId, nodeId, {
-        sourceHandleId: addMenu.connection.sourceHandleId,
-      })
-    }
+    const functionDef = project.functions[functionId]
+    if (!functionDef) return
+    const inputValues = buildFunctionRunInputDraft(functionDef, project.resources, resourceRefsForFunctionMenu())
+    const position = placedNodePosition(defaultFunctionWidth(functionDef)) ?? addMenu.flow
+    setFunctionRunDialog({ functionId, inputValues, position })
     setAddMenu(null)
   }
 
@@ -1838,7 +2025,16 @@ function CanvasSurface() {
               aria-label={fn.name}
               title={fn.name}
               onClick={() => {
-                setLocalActionDialog({ sourceNodeId: quickToolbar.sourceNodeId, functionId: fn.id })
+                const inputValues = buildFunctionRunInputDraft(
+                  fn,
+                  project.resources,
+                  uniqueResourceRefs(sourceResourceRefs(quickToolbar.sourceNodeId)),
+                )
+                setFunctionRunDialog({
+                  functionId: fn.id,
+                  inputValues,
+                  position: commandPositionForSourceNode(quickToolbar.sourceNodeId),
+                })
                 setQuickToolbar(undefined)
               }}
             >
@@ -1942,13 +2138,14 @@ function CanvasSurface() {
           ) : null}
         </div>
       ) : null}
-      {localActionDialog && activeLocalActionFunction ? (
-        <LocalActionDialog
-          key={activeLocalActionFunction.id}
-          functionDef={activeLocalActionFunction}
-          onClose={() => setLocalActionDialog(null)}
-          onRun={(values) => {
-            void runLocalFunctionForResourceNode(localActionDialog.sourceNodeId, localActionDialog.functionId, values)
+      {functionRunDialog && activeFunctionRunFunction ? (
+        <FunctionRunDialog
+          functionDef={activeFunctionRunFunction}
+          inputValues={functionRunDialog.inputValues}
+          resourcesById={project.resources}
+          onClose={() => setFunctionRunDialog(undefined)}
+          onRun={(values, runCount) => {
+            void runFunctionAtPosition(functionRunDialog.functionId, values, functionRunDialog.position, runCount)
           }}
         />
       ) : null}
