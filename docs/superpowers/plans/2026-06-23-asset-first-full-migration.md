@@ -135,11 +135,11 @@ Expected: pass.
 - Create: `src/domain/commands/commandHistory.test.ts`
 - Modify later: `src/store/projectStore.ts`
 
-- [ ] **Step 1: Write failing tests for one-command-one-history behavior**
-- [ ] **Step 2: Implement serializable command and transaction types**
-- [ ] **Step 3: Implement compact snapshot creation and hydrate restore helpers**
-- [ ] **Step 4: Prove batch delete/move commands produce one transaction**
-- [ ] **Step 5: Run command tests**
+- [x] **Step 1: Write failing tests for one-command-one-history behavior**
+- [x] **Step 2: Implement serializable command and transaction types**
+- [x] **Step 3: Implement compact snapshot creation and hydrate restore helpers**
+- [x] **Step 4: Prove batch delete/move commands produce one transaction**
+- [x] **Step 5: Run command tests**
 
 Run: `npm test -- --run src/domain/commands/commandHistory.test.ts`
 
