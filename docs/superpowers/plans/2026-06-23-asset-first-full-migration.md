@@ -201,11 +201,11 @@ Expected: pass.
 - Create: `src/domain/runs/runOrchestrator.test.ts`
 - Create: `src/domain/runs/adapters/*.ts`
 
-- [ ] **Step 1: Write failing adapter contract tests**
-- [ ] **Step 2: Implement provider-neutral adapter interface**
-- [ ] **Step 3: Move provider-specific request preparation behind adapters**
-- [ ] **Step 4: Keep existing provider domain modules pure and reusable**
-- [ ] **Step 5: Test each adapter with existing provider tests**
+- [x] **Step 1: Write failing adapter contract tests**
+- [x] **Step 2: Implement provider-neutral adapter interface**
+- [x] **Step 3: Move provider-specific request preparation behind adapters**
+- [x] **Step 4: Keep existing provider domain modules pure and reusable**
+- [x] **Step 5: Test each adapter with existing provider tests**
 
 Run: `npm test -- --run src/domain/runs/runOrchestrator.test.ts src/domain/*Image*.test.ts src/domain/*Llm*.test.ts src/domain/requestFunction.test.ts src/domain/localTransforms.test.ts`
 
