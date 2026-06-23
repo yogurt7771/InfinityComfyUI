@@ -1889,6 +1889,7 @@ function CanvasSurface() {
   }
 
   const handleInfoFromElement = (element: Element | null) => {
+    if (element?.classList.contains('asset-lineage-anchor-handle')) return undefined
     const nodeId = element?.closest('.react-flow__node')?.getAttribute('data-id') ?? undefined
     const handleId = element?.getAttribute('data-slot-handle') ?? element?.getAttribute('data-handleid') ?? undefined
     return nodeId ? { nodeId, handleId } : undefined

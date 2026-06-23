@@ -21,6 +21,7 @@ const resultResourceIds = (node: CanvasNode) => {
 }
 
 const resourceHandleId = (resourceId: string) => `resource:${resourceId}`
+const resourceTargetHandleId = (resourceId: string) => `resource-target:${resourceId}`
 const resultHandleId = (resourceId: string) => `result:${resourceId}`
 const inputHandleId = (inputKey: string) => `input:${inputKey}`
 const outputHandleId = (outputKey: string) => `output:${outputKey}`
@@ -48,6 +49,7 @@ const resourceNodeByResourceId = (nodes: CanvasNode[]) => {
       resourceNodes.set(node.data.resourceId, {
         nodeId: node.id,
         sourceHandleId: resourceHandleId(node.data.resourceId),
+        targetHandleId: resourceTargetHandleId(node.data.resourceId),
       })
     }
   }

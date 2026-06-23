@@ -275,8 +275,8 @@ describe('buildCanvasFlowEdges', () => {
       },
     ])
     expect(buildCanvasFlowEdges(state).filter((edge) => edge.className === 'asset-lineage-edge').map((edge) => edge.targetHandle)).toEqual([
-      undefined,
-      undefined,
+      'resource-target:res_output',
+      'resource-target:res_output',
     ])
   })
 })

@@ -156,7 +156,12 @@ describe('NodeViews', () => {
       </ReactFlowProvider>,
     )
 
+    const hiddenLineageAnchor = container.querySelector('[data-handleid="resource-target:res_image"]')
+
     expect(container.querySelector('.asset-lineage-target-handle')).toBeNull()
+    expect(hiddenLineageAnchor).not.toBeNull()
+    expect(hiddenLineageAnchor).toHaveClass('asset-lineage-anchor-handle')
+    expect(hiddenLineageAnchor).not.toHaveAttribute('data-slot-handle')
     expect(container.querySelector('[data-handleid="resource:res_image"]')).not.toBeNull()
   })
 

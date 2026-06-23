@@ -125,7 +125,9 @@ type WorkbenchNodeData = {
 const inputHandleId = (inputKey: string) => `input:${inputKey}`
 const outputHandleId = (outputKey: string) => `output:${outputKey}`
 const resourceHandleId = (resourceId: string) => `resource:${resourceId}`
+const resourceTargetHandleId = (resourceId: string) => `resource-target:${resourceId}`
 const resultHandleId = (resourceId: string) => `result:${resourceId}`
+const hiddenLineageAnchorStyle: CSSProperties = { opacity: 0, pointerEvents: 'none' }
 const activeResultStatuses = new Set(['pending', 'queued', 'running', 'fetching_outputs'])
 const visibleAssetStatuses = new Set(['pending', 'queued', 'running', 'fetching_outputs', 'failed'])
 const liveAssetDurationStatuses = activeResultStatuses
@@ -1914,13 +1916,25 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
         selected={Boolean(selected)}
       />
       {resource ? (
-        <Handle
-          data-slot-handle={resourceHandleId(resource.id)}
-          id={resourceHandleId(resource.id)}
-          position={Position.Right}
-          type="source"
-          onPointerDown={commitActiveTextControl}
-        />
+        <>
+          <Handle
+            aria-hidden="true"
+            className="asset-lineage-anchor-handle"
+            id={resourceTargetHandleId(resource.id)}
+            isConnectable={false}
+            position={Position.Left}
+            style={hiddenLineageAnchorStyle}
+            tabIndex={-1}
+            type="target"
+          />
+          <Handle
+            data-slot-handle={resourceHandleId(resource.id)}
+            id={resourceHandleId(resource.id)}
+            position={Position.Right}
+            type="source"
+            onPointerDown={commitActiveTextControl}
+          />
+        </>
       ) : null}
       <EditableNodeTitle
         actions={nodeReferenceBadge(nodeData)}
