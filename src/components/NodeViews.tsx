@@ -128,6 +128,8 @@ const resultHandleId = (resourceId: string) => `result:${resourceId}`
 const activeResultStatuses = new Set(['pending', 'queued', 'running', 'fetching_outputs'])
 const visibleAssetStatuses = new Set(['pending', 'queued', 'running', 'fetching_outputs', 'failed'])
 const liveAssetDurationStatuses = activeResultStatuses
+const RESOURCE_NODE_MIN_WIDTH = 360
+const RESOURCE_NODE_MIN_HEIGHT = 280
 
 const commitActiveTextControl = () => {
   const activeElement = document.activeElement
@@ -1897,7 +1899,13 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
         void replaceFromFile(file)
       }}
     >
-      <SelectedResizeControl id={id} minHeight={120} minWidth={190} nodeData={nodeData} selected={Boolean(selected)} />
+      <SelectedResizeControl
+        id={id}
+        minHeight={RESOURCE_NODE_MIN_HEIGHT}
+        minWidth={RESOURCE_NODE_MIN_WIDTH}
+        nodeData={nodeData}
+        selected={Boolean(selected)}
+      />
       {resource ? (
         <Handle
           data-slot-handle={resourceHandleId(resource.id)}

@@ -61,6 +61,17 @@ describe('canvas resource UI CSS', () => {
     expect(boundedPlaceholderBlock).toContain('min-height: 0')
   })
 
+  it('keeps long resource metadata labels inside the node chrome', () => {
+    const metaBlock = cssBlock('.resource-node-meta')
+    const functionChipBlock = cssBlock('.asset-function-chip')
+
+    expect(metaBlock).toContain('overflow: hidden')
+    expect(functionChipBlock).toContain('flex: 1 1 auto')
+    expect(functionChipBlock).toContain('min-width: 0')
+    expect(functionChipBlock).toContain('max-width: 58%')
+    expect(functionChipBlock).toContain('text-overflow: ellipsis')
+  })
+
   it('lets text result previews fill the available result card area', () => {
     const block = cssBlock('.result-preview-card .resource-preview-text')
 

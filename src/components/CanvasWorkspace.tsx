@@ -484,8 +484,8 @@ const defaultFunctionHeight = (functionDef: GenerationFunction | undefined) => {
 }
 
 const MENU_NODE_GAP = 96
-const DEFAULT_ASSET_NODE_WIDTH = 230
-const DEFAULT_ASSET_NODE_HEIGHT = 180
+const DEFAULT_ASSET_NODE_WIDTH = 360
+const DEFAULT_ASSET_NODE_HEIGHT = 280
 
 const defaultNodeSize = (node: CanvasNode, functionsById: Record<string, GenerationFunction>) => {
   if (node.type === 'function') {
@@ -505,6 +505,12 @@ const defaultNodeSize = (node: CanvasNode, functionsById: Record<string, Generat
 export const flowNodeStyle = (node: CanvasNode, functionsById: Record<string, GenerationFunction>) => {
   const defaultSize = defaultNodeSize(node, functionsById)
   const size = storedNodeSize(node)
+  if (node.type === 'resource') {
+    return {
+      width: Math.max(size?.width ?? defaultSize.width, DEFAULT_ASSET_NODE_WIDTH),
+      height: Math.max(size?.height ?? defaultSize.height ?? DEFAULT_ASSET_NODE_HEIGHT, DEFAULT_ASSET_NODE_HEIGHT),
+    }
+  }
   return {
     width: size?.width ?? defaultSize.width,
     ...(size?.height ?? defaultSize.height

@@ -123,7 +123,21 @@ describe('CanvasWorkspace helpers', () => {
       {},
     )
 
-    expect(style).toEqual({ width: 230, height: 180 })
+    expect(style).toEqual({ width: 360, height: 280 })
+  })
+
+  it('clamps stored resource node sizes to the minimum usable asset card size', () => {
+    const style = flowNodeStyle(
+      {
+        id: 'asset_1',
+        type: 'resource',
+        position: { x: 0, y: 0 },
+        data: { resourceId: 'res_1', size: { width: 220, height: 140 } },
+      },
+      {},
+    )
+
+    expect(style).toEqual({ width: 360, height: 280 })
   })
 
   it('prefills function popup inputs from selected assets in function input order', () => {

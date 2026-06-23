@@ -2645,13 +2645,23 @@ textarea[aria-invalid="true"] {
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
+  overflow: hidden;
+}
+
+.resource-node-meta > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .resource-node-meta .result-status-chip {
+  flex: 0 0 auto;
   margin-left: auto;
 }
 
 .resource-run-duration {
+  flex: 0 0 auto;
   min-height: 24px;
   padding: 3px 8px;
   border: 1px solid rgba(148, 163, 184, 0.24);
@@ -2665,6 +2675,8 @@ textarea[aria-invalid="true"] {
 }
 
 .asset-function-chip {
+  flex: 1 1 auto;
+  min-width: 0;
   max-width: 58%;
   min-height: 28px;
   padding: 4px 9px;
