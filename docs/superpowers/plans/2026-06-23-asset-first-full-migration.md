@@ -253,12 +253,12 @@ Expected: pass until `canvasEdges` is fully replaced, then delete old tests.
 - Create: `src/components/functions/OutputPreviewStrip.tsx`
 - Create tests beside each component.
 
-- [ ] **Step 1: Write failing tests for automatic compatible slot fill**
-- [ ] **Step 2: Implement Input Tray**
-- [ ] **Step 3: Implement Slot Mapping**
-- [ ] **Step 4: Implement provider parameter sections**
-- [ ] **Step 5: Implement output strip with pending/final previews**
-- [ ] **Step 6: Wire modal submit to `RunFunctionCommand`**
+- [x] **Step 1: Write failing tests for automatic compatible slot fill**
+- [x] **Step 2: Implement Input Tray**
+- [x] **Step 3: Implement Slot Mapping**
+- [x] **Step 4: Implement provider parameter sections**
+- [x] **Step 5: Implement output strip with pending/final previews**
+- [x] **Step 6: Wire modal submit to `RunFunctionCommand`**
 
 Run: `npm test -- --run src/components/functions`
 
