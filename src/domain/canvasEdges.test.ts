@@ -264,7 +264,6 @@ describe('buildCanvasFlowEdges', () => {
         source: 'node_prompt',
         sourceHandle: 'resource:res_prompt',
         target: 'node_output',
-        targetHandle: 'asset-input:res_output',
         label: 'prompt',
       },
       {
@@ -272,9 +271,12 @@ describe('buildCanvasFlowEdges', () => {
         source: 'node_image',
         sourceHandle: 'resource:res_image',
         target: 'node_output',
-        targetHandle: 'asset-input:res_output',
         label: 'image',
       },
+    ])
+    expect(buildCanvasFlowEdges(state).filter((edge) => edge.className === 'asset-lineage-edge').map((edge) => edge.targetHandle)).toEqual([
+      undefined,
+      undefined,
     ])
   })
 })

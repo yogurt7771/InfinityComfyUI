@@ -3243,11 +3243,18 @@ textarea[aria-invalid="true"] {
 
 .resource-preview-trigger {
   display: grid;
+  align-self: stretch;
+  justify-self: stretch;
+  place-items: center;
+  width: 100%;
+  max-width: 100%;
   min-height: 0;
   min-width: 0;
+  box-sizing: border-box;
   overflow: hidden;
   margin-top: 10px;
   border-radius: 8px;
+  background: var(--media-preview-surface);
   cursor: zoom-in;
   outline: none;
 }
@@ -3260,8 +3267,12 @@ textarea[aria-invalid="true"] {
 .resource-preview-trigger .resource-preview-video {
   width: 100%;
   height: 100%;
+  max-width: 100%;
   max-height: none;
   margin-top: 0;
+  aspect-ratio: auto;
+  object-fit: contain;
+  object-position: center;
 }
 
 .resource-preview-trigger .resource-preview-audio {

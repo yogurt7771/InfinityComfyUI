@@ -124,7 +124,6 @@ type WorkbenchNodeData = {
 const inputHandleId = (inputKey: string) => `input:${inputKey}`
 const outputHandleId = (outputKey: string) => `output:${outputKey}`
 const resourceHandleId = (resourceId: string) => `resource:${resourceId}`
-const assetInputHandleId = (resourceId: string) => `asset-input:${resourceId}`
 const resultHandleId = (resourceId: string) => `result:${resourceId}`
 const activeResultStatuses = new Set(['pending', 'queued', 'running', 'fetching_outputs'])
 const visibleAssetStatuses = new Set(['pending', 'queued', 'running', 'fetching_outputs', 'failed'])
@@ -1900,23 +1899,13 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
     >
       <SelectedResizeControl id={id} minHeight={120} minWidth={190} nodeData={nodeData} selected={Boolean(selected)} />
       {resource ? (
-        <>
-          <Handle
-            className="asset-lineage-target-handle"
-            data-slot-handle={assetInputHandleId(resource.id)}
-            id={assetInputHandleId(resource.id)}
-            position={Position.Left}
-            type="target"
-            onPointerDown={commitActiveTextControl}
-          />
-          <Handle
-            data-slot-handle={resourceHandleId(resource.id)}
-            id={resourceHandleId(resource.id)}
-            position={Position.Right}
-            type="source"
-            onPointerDown={commitActiveTextControl}
-          />
-        </>
+        <Handle
+          data-slot-handle={resourceHandleId(resource.id)}
+          id={resourceHandleId(resource.id)}
+          position={Position.Right}
+          type="source"
+          onPointerDown={commitActiveTextControl}
+        />
       ) : null}
       <EditableNodeTitle
         actions={nodeReferenceBadge(nodeData)}

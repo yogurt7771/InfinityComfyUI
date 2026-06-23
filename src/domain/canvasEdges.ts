@@ -21,7 +21,6 @@ const resultResourceIds = (node: CanvasNode) => {
 }
 
 const resourceHandleId = (resourceId: string) => `resource:${resourceId}`
-const assetInputHandleId = (resourceId: string) => `asset-input:${resourceId}`
 const resultHandleId = (resourceId: string) => `result:${resourceId}`
 const inputHandleId = (inputKey: string) => `input:${inputKey}`
 const outputHandleId = (outputKey: string) => `output:${outputKey}`
@@ -42,14 +41,13 @@ const edgeSourceHandle = (edge: CanvasEdge, nodes: CanvasNode[]) => {
 }
 
 const resourceNodeByResourceId = (nodes: CanvasNode[]) => {
-  const resourceNodes = new Map<string, { nodeId: string; sourceHandleId: string; targetHandleId: string }>()
+  const resourceNodes = new Map<string, { nodeId: string; sourceHandleId: string; targetHandleId?: string }>()
 
   for (const node of nodes) {
     if (node.type === 'resource' && typeof node.data.resourceId === 'string') {
       resourceNodes.set(node.data.resourceId, {
         nodeId: node.id,
         sourceHandleId: resourceHandleId(node.data.resourceId),
-        targetHandleId: assetInputHandleId(node.data.resourceId),
       })
     }
   }
@@ -185,7 +183,7 @@ export function buildCanvasFlowEdges(project: ProjectState): Edge[] {
             source: source.nodeId,
             sourceHandle: source.sourceHandleId,
             target: target.nodeId,
-            targetHandle: target.targetHandleId,
+            ...(target.targetHandleId ? { targetHandle: target.targetHandleId } : {}),
             animated: false,
             label: inputKey,
             type: 'default',

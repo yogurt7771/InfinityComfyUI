@@ -138,6 +138,28 @@ describe('NodeViews', () => {
     expect(onUpdateTextResourceValue).toHaveBeenCalledWith('res_text', '编辑 prompt\nsecond line')
   })
 
+  it('renders resource nodes without a left-side target slot', () => {
+    const props = {
+      id: 'node_image',
+      selected: false,
+      data: {
+        ...baseNodeData,
+        resourcesById: { res_image: outputResource },
+        resourceId: 'res_image',
+        title: 'Reference Image',
+      },
+    } as unknown as ComponentProps<typeof ResourceNodeView>
+
+    const { container } = render(
+      <ReactFlowProvider>
+        <ResourceNodeView {...props} />
+      </ReactFlowProvider>,
+    )
+
+    expect(container.querySelector('.asset-lineage-target-handle')).toBeNull()
+    expect(container.querySelector('[data-handleid="resource:res_image"]')).not.toBeNull()
+  })
+
   it('shows running state on pending function output asset nodes', () => {
     const pendingOutput: Resource = {
       id: 'res_pending_image',
