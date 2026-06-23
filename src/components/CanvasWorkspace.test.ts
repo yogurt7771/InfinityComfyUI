@@ -5,6 +5,7 @@ import type { ProjectState } from '../domain/types'
 import {
   buildComfyMinimapLayout,
   buildFunctionRunInputDraft,
+  functionRunFloatingMenuReset,
   pickableResourceRefsForInput,
   visibleCanvasNodes,
   minimapPointToFlowPosition,
@@ -157,6 +158,16 @@ describe('CanvasWorkspace helpers', () => {
       negative_prompt: { resourceId: 'res_text', type: 'text' },
       scale_by: 7,
       image: { resourceId: 'res_image', type: 'image' },
+    })
+  })
+
+  it('closes every floating menu when opening a function run dialog', () => {
+    expect(functionRunFloatingMenuReset()).toEqual({
+      addMenu: null,
+      quickToolbar: undefined,
+      functionNodeMenu: undefined,
+      groupNodeMenu: undefined,
+      inputPickMode: undefined,
     })
   })
 

@@ -118,6 +118,14 @@ type FunctionInputPickMode = {
   inputType: ResourceType
 }
 
+export const functionRunFloatingMenuReset = () => ({
+  addMenu: null as AddNodeMenuState | null,
+  quickToolbar: undefined as QuickToolbarState | undefined,
+  functionNodeMenu: undefined as FunctionNodeMenuState | undefined,
+  groupNodeMenu: undefined as GroupNodeMenuState | undefined,
+  inputPickMode: undefined as FunctionInputPickMode | undefined,
+})
+
 const nodeTypes: NodeTypes = {
   resource: ResourceNodeView,
   function: FunctionNodeView,
@@ -1051,6 +1059,23 @@ function CanvasSurface() {
     [selectNode],
   )
 
+  const closeFunctionRunFloatingMenus = useCallback(() => {
+    const reset = functionRunFloatingMenuReset()
+    setAddMenu(reset.addMenu)
+    setQuickToolbar(reset.quickToolbar)
+    setFunctionNodeMenu(reset.functionNodeMenu)
+    setGroupNodeMenu(reset.groupNodeMenu)
+    setInputPickMode(reset.inputPickMode)
+  }, [])
+
+  const openFunctionRunDialog = useCallback(
+    (dialog: FunctionRunDialogState) => {
+      closeFunctionRunFloatingMenus()
+      setFunctionRunDialog(dialog)
+    },
+    [closeFunctionRunFloatingMenus],
+  )
+
   const inputPickableRefs = useMemo(
     () => (inputPickMode ? pickableResourceRefsForInput(project, inputPickMode.inputType) : []),
     [inputPickMode, project],
@@ -1073,7 +1098,7 @@ function CanvasSurface() {
         (node) => node.type === 'resource' && node.data.resourceId === resourceId,
       )
       const sourceWidth = sourceNode ? Number(flowNodeStyle(sourceNode, project.functions).width) : DEFAULT_ASSET_NODE_WIDTH
-      setFunctionRunDialog({
+      openFunctionRunDialog({
         functionId,
         inputValues: functionRunInputsFromTask(task),
         runCount: Number((task.paramsSnapshot as { runCount?: unknown } | undefined)?.runCount ?? functionDef.runtimeDefaults?.runCount ?? 1),
@@ -1085,7 +1110,7 @@ function CanvasSurface() {
           : { x: 0, y: 0 },
       })
     },
-    [project.canvas.nodes, project.functions, project.resources, project.tasks],
+    [openFunctionRunDialog, project.canvas.nodes, project.functions, project.resources, project.tasks],
   )
 
   useEffect(() => {
@@ -1765,9 +1790,7 @@ function CanvasSurface() {
     if (!functionDef) return
     const inputValues = buildFunctionRunInputDraft(functionDef, project.resources, resourceRefsForFunctionMenu())
     const position = placedNodePosition(defaultFunctionWidth(functionDef)) ?? addMenu.flow
-    setInputPickMode(undefined)
-    setFunctionRunDialog({ functionId, inputValues, runCount: functionDef.runtimeDefaults?.runCount ?? 1, position })
-    setAddMenu(null)
+    openFunctionRunDialog({ functionId, inputValues, runCount: functionDef.runtimeDefaults?.runCount ?? 1, position })
   }
 
   const createAssetFromMenu = (type: ResourceType) => {
@@ -2159,13 +2182,12 @@ function CanvasSurface() {
                   project.resources,
                   uniqueResourceRefs(sourceResourceRefs(quickToolbar.sourceNodeId)),
                 )
-                setFunctionRunDialog({
+                openFunctionRunDialog({
                   functionId: fn.id,
                   inputValues,
                   runCount: fn.runtimeDefaults?.runCount ?? 1,
                   position: commandPositionForSourceNode(quickToolbar.sourceNodeId),
                 })
-                setQuickToolbar(undefined)
               }}
             >
               <LocalQuickActionIcon kind={fn.localTransform?.kind} />
