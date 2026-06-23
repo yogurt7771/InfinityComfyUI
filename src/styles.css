@@ -222,6 +222,11 @@ select:focus-visible {
   padding: 12px 9px;
 }
 
+.assets-dock-stack {
+  display: grid;
+  gap: 10px;
+}
+
 .assets-dock-button {
   position: relative;
   width: 46px;
@@ -878,6 +883,100 @@ div.server-list-item {
   grid-column: 1 / -1;
   color: var(--muted);
   font-size: 12px;
+}
+
+.history-popover {
+  top: 68px;
+}
+
+.history-dock-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.history-dock-actions button {
+  min-height: 36px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border-radius: 9px;
+  font-size: 13px;
+}
+
+.operation-history-list {
+  gap: 8px;
+}
+
+.history-command-row {
+  width: 100%;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+.history-command-row-redo {
+  opacity: 0.72;
+}
+
+.history-command-main {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.history-command-main strong,
+.history-command-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-command-main small {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.history-command-main small span {
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: var(--teal-dark);
+  background: rgba(94, 234, 212, 0.16);
+}
+
+.history-command-assets {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.history-command-asset {
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
+  padding: 2px;
+  border-radius: 9px;
+  overflow: hidden;
+}
+
+.history-command-asset .asset-thumb-image,
+.history-command-asset .asset-thumb-icon,
+.history-command-asset .asset-thumb-text {
+  width: 100%;
+  height: 100%;
+  border-radius: 7px;
 }
 
 .settings-section .section-manage-button {

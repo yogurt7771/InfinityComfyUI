@@ -83,6 +83,7 @@ type WorkbenchNodeData = {
   requestOutputs?: FunctionOutputDef[]
   missingInputKeys?: string[]
   resources?: Array<{ resourceId: string; type: string }>
+  childNodeIds?: string[]
   sourceFunctionNodeId?: string
   error?: {
     code?: string
@@ -2245,13 +2246,16 @@ export const ResultGroupNodeView = memo(({ id, data, selected }: NodeProps) => {
 
 export const GroupNodeView = memo(({ id, data, selected }: NodeProps) => {
   const nodeData = data as WorkbenchNodeData
+  const childCount = Array.isArray(nodeData.childNodeIds) ? nodeData.childNodeIds.length : 0
+  const title = typeof nodeData.title === 'string' ? nodeData.title : 'Group'
 
   return (
     <div className="canvas-node group-node">
       <SelectedResizeControl id={id} minHeight={90} minWidth={180} nodeData={nodeData} selected={Boolean(selected)} />
       <div className="node-title">
         <Layers size={16} />
-        <span>Group</span>
+        <span>{title}</span>
+        {childCount > 0 ? <small>{childCount} nodes</small> : null}
         {nodeReferenceBadge(nodeData)}
       </div>
     </div>

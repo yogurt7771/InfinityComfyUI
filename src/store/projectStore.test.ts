@@ -1763,6 +1763,154 @@ describe('project store actions', () => {
     )
   })
 
+  it('persists visual operation history and supports redo after undo', () => {
+    const ids = ['res_1']
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now: () => '2026-05-09T00:00:00.000Z',
+      randomInt: () => 1,
+    })
+
+    slice.getState().addTextResourceAtPosition('Prompt', 'warm kitchen', { x: 100, y: 120 })
+
+    expect(slice.getState().project.history).toBeDefined()
+    expect(slice.getState().project.history?.undoStack).toEqual([
+      expect.objectContaining({
+        label: 'Create text asset',
+        transactionType: 'asset',
+        preview: expect.objectContaining({
+          title: 'Create text asset',
+          assetIds: ['res_1'],
+          nodeIds: ['node_res_1'],
+        }),
+      }),
+    ])
+
+    slice.getState().undoLastProjectChange()
+
+    expect(slice.getState().project.resources).not.toHaveProperty('res_1')
+    expect(slice.getState().project.history?.undoStack).toHaveLength(0)
+    expect(slice.getState().project.history?.redoStack).toHaveLength(1)
+
+    slice.getState().redoProjectChange()
+
+    expect(slice.getState().project.resources.res_1.value).toBe('warm kitchen')
+    expect(slice.getState().project.history?.undoStack).toHaveLength(1)
+    expect(slice.getState().project.history?.redoStack).toHaveLength(0)
+  })
+
+  it('groups selected canvas nodes, ungroups them, and records both commands', () => {
+    const ids = ['res_1', 'res_2', 'group_1']
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now: () => '2026-05-09T00:00:00.000Z',
+      randomInt: () => 1,
+    })
+
+    slice.getState().addTextResourceAtPosition('Prompt 1', 'first', { x: 100, y: 120 })
+    slice.getState().addTextResourceAtPosition('Prompt 2', 'second', { x: 320, y: 120 })
+    slice.getState().selectNodes(['node_res_1', 'node_res_2'])
+
+    const groupNodeId = slice.getState().groupSelectedNodes()
+
+    expect(groupNodeId).toBe('node_group_1')
+    expect(slice.getState().selectedNodeIds).toEqual(['node_group_1'])
+    expect(slice.getState().project.canvas.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'node_group_1',
+          type: 'group',
+          data: expect.objectContaining({
+            title: 'Group',
+            childNodeIds: ['node_res_1', 'node_res_2'],
+          }),
+        }),
+      ]),
+    )
+    expect(slice.getState().project.history?.undoStack.at(-1)).toEqual(
+      expect.objectContaining({
+        label: 'Group selection',
+        transactionType: 'group',
+        preview: expect.objectContaining({
+          nodeIds: ['node_group_1', 'node_res_1', 'node_res_2'],
+          assetIds: ['res_1', 'res_2'],
+        }),
+      }),
+    )
+
+    slice.getState().ungroupNode('node_group_1')
+
+    expect(slice.getState().project.canvas.nodes.some((node) => node.id === 'node_group_1')).toBe(false)
+    expect(slice.getState().project.canvas.nodes.map((node) => node.id)).toEqual(
+      expect.arrayContaining(['node_res_1', 'node_res_2']),
+    )
+    expect(slice.getState().project.history?.undoStack.at(-1)).toEqual(
+      expect.objectContaining({
+        label: 'Ungroup',
+        transactionType: 'group',
+      }),
+    )
+
+    slice.getState().undoLastProjectChange()
+    expect(slice.getState().project.canvas.nodes.some((node) => node.id === 'node_group_1')).toBe(true)
+  })
+
+  it('saves a selected subgraph as a template and creates grouped template instances', () => {
+    const ids = ['res_1', 'res_2', 'template_1', 'res_3', 'res_4', 'group_1']
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now: () => '2026-05-09T00:00:00.000Z',
+      randomInt: () => 1,
+    })
+
+    slice.getState().addTextResourceAtPosition('Prompt 1', 'first', { x: 100, y: 120 })
+    slice.getState().addTextResourceAtPosition('Prompt 2', 'second', { x: 320, y: 120 })
+    slice.getState().selectNodes(['node_res_1', 'node_res_2'])
+
+    const templateId = slice.getState().saveTemplateFromSelection('Prompt Pair')
+
+    expect(templateId).toBe('template_1')
+    expect(slice.getState().project.templates?.template_1).toEqual(
+      expect.objectContaining({
+        id: 'template_1',
+        name: 'Prompt Pair',
+        nodes: expect.arrayContaining([
+          expect.objectContaining({ id: 'node_res_1' }),
+          expect.objectContaining({ id: 'node_res_2' }),
+        ]),
+      }),
+    )
+
+    const groupNodeId = slice.getState().instantiateTemplate('template_1', { x: 600, y: 300 })
+
+    expect(groupNodeId).toBe('node_group_1')
+    expect(slice.getState().project.canvas.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'node_res_3', position: { x: 600, y: 300 } }),
+        expect.objectContaining({ id: 'node_res_4', position: { x: 820, y: 300 } }),
+        expect.objectContaining({
+          id: 'node_group_1',
+          type: 'group',
+          data: expect.objectContaining({
+            title: 'Prompt Pair',
+            childNodeIds: ['node_res_3', 'node_res_4'],
+          }),
+        }),
+      ]),
+    )
+    expect(slice.getState().project.resources.res_3).toMatchObject({
+      name: 'Prompt 1 Copy',
+      value: 'first',
+      source: { kind: 'duplicated', parentResourceId: 'res_1' },
+    })
+    expect(slice.getState().project.history?.undoStack.at(-1)).toEqual(
+      expect.objectContaining({
+        label: 'Create template instance',
+        transactionType: 'template',
+      }),
+    )
+  })
+
   it('clears function resource bindings when deleting the source resource node', () => {
     const ids = ['res_1', 'fn_1', 'node_fn_1']
     const slice = createProjectSlice({

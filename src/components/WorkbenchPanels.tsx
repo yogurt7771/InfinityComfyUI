@@ -3,10 +3,13 @@ import JSZip from 'jszip'
 import {
   Download,
   FileInput,
+  History,
   Image as ImageIcon,
   Network,
   Plus,
   Route,
+  RotateCcw,
+  RotateCw,
   Settings,
   Trash2,
   Upload,
@@ -3030,10 +3033,17 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
 export function LeftPanel() {
   const project = useProjectStore((state) => state.project)
   const selectNode = useProjectStore((state) => state.selectNode)
+  const undoLastProjectChange = useProjectStore((state) => state.undoLastProjectChange)
+  const redoProjectChange = useProjectStore((state) => state.redoProjectChange)
   const [assetsOpen, setAssetsOpen] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const [previewResource, setPreviewResource] = useState<Resource | undefined>()
   const previewTimerRef = useRef<number | undefined>(undefined)
   const resources = Object.values(project.resources)
+  const historyEntries = [
+    ...(project.history?.undoStack ?? []).toReversed().map((entry) => ({ entry, stack: 'undo' as const })),
+    ...(project.history?.redoStack ?? []).toReversed().map((entry) => ({ entry, stack: 'redo' as const })),
+  ]
   const focusResourceNode = (resource: Resource) => {
     setPreviewResource(undefined)
     const nodeId = resourceOwnerNodeId(project, resource)
@@ -3051,25 +3061,47 @@ export function LeftPanel() {
 
   return (
     <aside
-      className={`assets-dock ${assetsOpen ? 'is-open' : ''}`}
+      className={`assets-dock ${assetsOpen || historyOpen ? 'is-open' : ''}`}
       aria-label="Assets panel"
-      onMouseLeave={() => setAssetsOpen(false)}
+      onMouseLeave={() => {
+        setAssetsOpen(false)
+        setHistoryOpen(false)
+      }}
       onKeyDown={(event) => {
         if (event.key === 'Escape') {
           setAssetsOpen(false)
+          setHistoryOpen(false)
         }
       }}
     >
-      <button
-        type="button"
-        className="assets-dock-button"
-        aria-label="Assets"
-        aria-expanded={assetsOpen}
-        aria-controls="assets-popover"
-        onClick={() => setAssetsOpen((value) => !value)}
-      >
-        <FileInput size={20} />
-      </button>
+      <div className="assets-dock-stack">
+        <button
+          type="button"
+          className="assets-dock-button"
+          aria-label="Assets"
+          aria-expanded={assetsOpen}
+          aria-controls="assets-popover"
+          onClick={() => {
+            setAssetsOpen((value) => !value)
+            setHistoryOpen(false)
+          }}
+        >
+          <FileInput size={20} />
+        </button>
+        <button
+          type="button"
+          className="assets-dock-button"
+          aria-label="History"
+          aria-expanded={historyOpen}
+          aria-controls="history-popover"
+          onClick={() => {
+            setHistoryOpen((value) => !value)
+            setAssetsOpen(false)
+          }}
+        >
+          <History size={20} />
+        </button>
+      </div>
       {assetsOpen ? (
         <section id="assets-popover" className="side-panel left-panel asset-popover" aria-label="Assets popover">
           <div className="panel-title asset-popover-title">
@@ -3112,6 +3144,73 @@ export function LeftPanel() {
               ))
             ) : (
               <div className="empty-list">No assets</div>
+            )}
+          </div>
+        </section>
+      ) : null}
+      {historyOpen ? (
+        <section id="history-popover" className="side-panel left-panel asset-popover history-popover" aria-label="History popover">
+          <div className="panel-title asset-popover-title">
+            <History size={16} />
+            <h2>History</h2>
+            <span>{historyEntries.length}</span>
+          </div>
+          <div className="history-dock-actions">
+            <button type="button" aria-label="Undo last operation" onClick={undoLastProjectChange}>
+              <RotateCcw size={15} />
+              <span>Undo</span>
+            </button>
+            <button type="button" aria-label="Redo last operation" onClick={redoProjectChange}>
+              <RotateCw size={15} />
+              <span>Redo</span>
+            </button>
+          </div>
+          <div className="item-list asset-list operation-history-list" aria-label="Operation history list">
+            {historyEntries.length > 0 ? (
+              historyEntries.map(({ entry, stack }) => {
+                const assetIds = entry.preview.assetIds ?? entry.affectedIds.assetIds ?? []
+                const previewResources = assetIds.map((resourceId) => project.resources[resourceId]).filter((item): item is Resource => Boolean(item))
+                const focusNodeId = (entry.preview.nodeIds ?? entry.affectedIds.nodeIds ?? []).find((nodeId) =>
+                  project.canvas.nodes.some((node) => node.id === nodeId),
+                )
+
+                return (
+                  <article
+                    key={`${stack}-${entry.id}`}
+                    className={`history-command-row history-command-row-${stack}`}
+                    onDoubleClick={() => {
+                      if (!focusNodeId) return
+                      selectNode(focusNodeId)
+                      window.dispatchEvent(new CustomEvent('infinity-focus-node', { detail: { nodeId: focusNodeId } }))
+                    }}
+                  >
+                    <div className="history-command-main">
+                      <strong>{entry.preview.title || entry.label}</strong>
+                      <small>
+                        {entry.preview.subtitle ?? entry.transactionType}
+                        <span>{stack === 'redo' ? 'redo' : 'undo'}</span>
+                      </small>
+                    </div>
+                    {previewResources.length > 0 ? (
+                      <div className="history-command-assets" aria-label={`${entry.label} assets`}>
+                        {previewResources.slice(0, 4).map((resource) => (
+                          <button
+                            key={resource.id}
+                            type="button"
+                            className="history-command-asset"
+                            aria-label={`Preview ${resourceLabel(resource)}`}
+                            onClick={() => setPreviewResource(resource)}
+                          >
+                            <ResourceListPreview resource={resource} />
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </article>
+                )
+              })
+            ) : (
+              <div className="empty-list">No history</div>
             )}
           </div>
         </section>

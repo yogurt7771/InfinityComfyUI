@@ -60,6 +60,7 @@ import type { MediaResourcePayload, MediaResourceKind } from '../domain/resource
 import type {
   CanvasEdge,
   CanvasNode,
+  CanvasTemplate,
   ComfyEndpointConfig,
   ComfyUiWorkflow,
   ComfyWorkflowEditorMetadata,
@@ -77,6 +78,10 @@ import type {
   OpenAILlmConfig,
   PendingResourceRef,
   PrimitiveInputValue,
+  ProjectHistoryPreview,
+  ProjectHistorySnapshot,
+  ProjectHistoryState,
+  ProjectTransactionType,
   ProjectState,
   RequestFunctionConfig,
   Resource,
@@ -291,6 +296,7 @@ export type ProjectStoreState = {
   rerunResultNode: (nodeId: string) => Promise<void>
   cancelResultRun: (nodeId: string) => void
   undoLastProjectChange: () => void
+  redoProjectChange: () => void
   connectNodes: (sourceNodeId: string, targetNodeId: string, options?: ConnectNodesOptions) => void
   deleteEdges: (edgeIds: string[]) => void
   updateNodePosition: (nodeId: string, position: { x: number; y: number }) => void
@@ -299,6 +305,10 @@ export type ProjectStoreState = {
   renameNode: (nodeId: string, title: string) => void
   deleteSelectedNode: () => void
   deleteNode: (nodeId: string) => void
+  groupSelectedNodes: () => string | undefined
+  ungroupNode: (nodeId: string) => void
+  saveTemplateFromSelection: (name?: string) => string | undefined
+  instantiateTemplate: (templateId: string, position?: { x: number; y: number }) => string | undefined
   duplicateSelectedNode: () => void
   duplicateNodes: (nodeIds: string[]) => void
   selectNode: (nodeId?: string, mode?: NodeSelectionMode) => void
@@ -328,6 +338,135 @@ const defaultDeps: ProjectStoreDeps = {
     pollIntervalMs: 1000,
   },
 }
+
+const PROJECT_HISTORY_SCHEMA_VERSION = '1.0.0'
+const PROJECT_HISTORY_LIMIT = 100
+
+const emptyProjectHistory = (): ProjectHistoryState => ({
+  schemaVersion: PROJECT_HISTORY_SCHEMA_VERSION,
+  undoStack: [],
+  redoStack: [],
+})
+
+const ensureProjectHistory = (project: ProjectState): ProjectState =>
+  project.history
+    ? project
+    : {
+        ...project,
+        history: emptyProjectHistory(),
+      }
+
+const projectHistorySnapshot = (project: ProjectState): ProjectHistorySnapshot => {
+  const snapshot = structuredClone(project)
+  delete snapshot.history
+  return withoutBuiltInProjectFunctions(snapshot) as ProjectHistorySnapshot
+}
+
+const historySnapshotKey = (snapshot: ProjectHistorySnapshot) => JSON.stringify(snapshot)
+
+const historyEntryId = (history: ProjectHistoryState, now: string) =>
+  `history_${history.undoStack.length + history.redoStack.length + 1}_${now.replace(/\W/g, '')}`
+
+const uniqueHistoryIds = (ids: Array<string | undefined>) => [...new Set(ids.filter((id): id is string => Boolean(id)))]
+
+const nodeResourceIds = (project: ProjectState, nodeIds: string[]) => {
+  const ids = new Set<string>()
+  const nodesById = new Map(project.canvas.nodes.map((node) => [node.id, node]))
+
+  const visit = (nodeId: string) => {
+    const node = nodesById.get(nodeId)
+    if (!node) return
+
+    if (node.type === 'resource' && typeof node.data.resourceId === 'string') {
+      ids.add(node.data.resourceId)
+      return
+    }
+
+    if (node.type === 'result_group' && Array.isArray(node.data.resources)) {
+      for (const resource of node.data.resources) {
+        if (typeof resource === 'object' && resource !== null && 'resourceId' in resource) {
+          ids.add(String((resource as { resourceId: unknown }).resourceId))
+        }
+      }
+      return
+    }
+
+    if (node.type === 'group' && Array.isArray(node.data.childNodeIds)) {
+      for (const childNodeId of node.data.childNodeIds) visit(String(childNodeId))
+    }
+  }
+
+  for (const nodeId of nodeIds) visit(nodeId)
+  return [...ids]
+}
+
+const projectWithRecordedHistory = (
+  beforeProject: ProjectState,
+  nextProject: ProjectState,
+  now: string,
+  options: {
+    label: string
+    transactionType: ProjectTransactionType
+    preview: ProjectHistoryPreview
+    nodeIds?: string[]
+    assetIds?: string[]
+    groupIds?: string[]
+    templateIds?: string[]
+  },
+): ProjectState => {
+  const before = ensureProjectHistory(beforeProject)
+  const next = ensureProjectHistory(nextProject)
+  const beforeSnapshot = projectHistorySnapshot(before)
+  const afterSnapshot = projectHistorySnapshot(next)
+  if (historySnapshotKey(beforeSnapshot) === historySnapshotKey(afterSnapshot)) return next
+
+  const history = before.history ?? emptyProjectHistory()
+  const nodeIds = uniqueHistoryIds(options.nodeIds ?? options.preview.nodeIds ?? [])
+  const assetIds = uniqueHistoryIds([
+    ...(options.assetIds ?? []),
+    ...(options.preview.assetIds ?? []),
+    ...nodeResourceIds(next, nodeIds),
+    ...nodeResourceIds(before, nodeIds),
+  ])
+  const groupIds = uniqueHistoryIds(options.groupIds ?? options.preview.groupIds ?? [])
+  const templateIds = uniqueHistoryIds(options.templateIds ?? options.preview.templateIds ?? [])
+  const entry = {
+    id: historyEntryId(history, now),
+    label: options.label,
+    transactionType: options.transactionType,
+    createdAt: now,
+    affectedIds: {
+      assetIds,
+      nodeIds,
+      groupIds,
+      templateIds,
+    },
+    preview: {
+      ...options.preview,
+      assetIds,
+      nodeIds,
+      groupIds,
+      templateIds,
+    },
+    before: beforeSnapshot,
+    after: afterSnapshot,
+  }
+
+  return {
+    ...next,
+    history: {
+      schemaVersion: PROJECT_HISTORY_SCHEMA_VERSION,
+      undoStack: [...history.undoStack, entry].slice(-PROJECT_HISTORY_LIMIT),
+      redoStack: [],
+    },
+  }
+}
+
+const restoreProjectHistorySnapshot = (
+  snapshot: ProjectHistorySnapshot,
+  history: ProjectHistoryState,
+  now: string,
+): ProjectState => withBuiltInFunctions({ ...structuredClone(snapshot), history }, now)
 
 const initialProject = (now: string, options: ProjectCreateOptions & { id?: string } = {}): ProjectState => {
   const openAiFunction = createOpenAILlmFunction(now)
@@ -361,6 +500,8 @@ const initialProject = (now: string, options: ProjectCreateOptions & { id?: stri
       ...Object.fromEntries(localFunctions.map((fn) => [fn.id, fn])),
     },
     tasks: {},
+    history: emptyProjectHistory(),
+    templates: {},
     comfy: {
       endpoints: [
         {
@@ -416,6 +557,8 @@ const withBuiltInFunctions = (project: ProjectState, now: string): ProjectState 
 
   return {
     ...project,
+    history: project.history ?? emptyProjectHistory(),
+    templates: project.templates ?? {},
     functions: {
       ...project.functions,
       ...builtIns,
@@ -701,6 +844,81 @@ const nodeStoredSize = (node: CanvasNode) => {
   const height = Number((size as { height?: unknown }).height)
   return Number.isFinite(width) && Number.isFinite(height) ? { width, height } : undefined
 }
+
+const canvasNodeEstimatedSize = (node: CanvasNode, functions: Record<string, GenerationFunction>) => {
+  const storedSize = nodeStoredSize(node)
+  if (storedSize) return storedSize
+  if (node.type === 'function') {
+    const functionId = typeof node.data.functionId === 'string' ? node.data.functionId : undefined
+    return functionNodeEstimatedSize(functionId ? functions[functionId] : undefined)
+  }
+  if (node.type === 'result_group') return { width: RESULT_NODE_ESTIMATED_WIDTH, height: 180 }
+  if (node.type === 'group') return { width: 260, height: 180 }
+  return { width: 230, height: 180 }
+}
+
+const groupBoundsForNodes = (nodes: CanvasNode[], functions: Record<string, GenerationFunction>) => {
+  const padding = 32
+  const boxes = nodes.map((node) => {
+    const size = canvasNodeEstimatedSize(node, functions)
+    return {
+      left: node.position.x,
+      top: node.position.y,
+      right: node.position.x + size.width,
+      bottom: node.position.y + size.height,
+    }
+  })
+  const left = Math.min(...boxes.map((box) => box.left)) - padding
+  const top = Math.min(...boxes.map((box) => box.top)) - padding
+  const right = Math.max(...boxes.map((box) => box.right)) + padding
+  const bottom = Math.max(...boxes.map((box) => box.bottom)) + padding
+  return {
+    position: { x: left, y: top },
+    size: { width: Math.max(240, right - left), height: Math.max(160, bottom - top) },
+  }
+}
+
+const groupChildNodeIds = (node: CanvasNode) =>
+  Array.isArray(node.data.childNodeIds)
+    ? node.data.childNodeIds.filter((childNodeId): childNodeId is string => typeof childNodeId === 'string')
+    : []
+
+const mediaAssetId = (resource: Resource) =>
+  typeof resource.value === 'object' && resource.value !== null && 'assetId' in resource.value
+    ? String((resource.value as { assetId: unknown }).assetId)
+    : undefined
+
+const selectedTemplateNodeIds = (nodes: CanvasNode[], selectedIds: string[]) => {
+  const nodesById = new Map(nodes.map((node) => [node.id, node]))
+  const ids: string[] = []
+  for (const nodeId of uniqueIds(selectedIds)) {
+    const node = nodesById.get(nodeId)
+    if (!node) continue
+    if (node.type === 'group') {
+      ids.push(...groupChildNodeIds(node))
+    } else {
+      ids.push(node.id)
+    }
+  }
+  return uniqueIds(ids).filter((nodeId) => nodesById.has(nodeId))
+}
+
+const resourceIdsForNodes = (nodes: CanvasNode[]) =>
+  uniqueIds(
+    nodes.flatMap((node) => {
+      if (node.type === 'resource' && typeof node.data.resourceId === 'string') return [node.data.resourceId]
+      if (node.type === 'result_group' && Array.isArray(node.data.resources)) {
+        return node.data.resources
+          .map((resource) =>
+            typeof resource === 'object' && resource !== null && 'resourceId' in resource
+              ? String((resource as { resourceId: unknown }).resourceId)
+              : undefined,
+          )
+          .filter((resourceId): resourceId is string => Boolean(resourceId))
+      }
+      return []
+    }),
+  )
 
 const nextResultNodePosition = (nodes: CanvasNode[], functionNode: CanvasNode, functionDef?: GenerationFunction) => {
   const existingResultNodes = nodes.filter(
@@ -3969,11 +4187,6 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       return projectId
     }
 
-    const undoStackWithSnapshot = (state: ProjectStoreState) => [
-      ...state.undoStack.slice(-49),
-      structuredClone(state.project),
-    ]
-
     const deleteNodesFromState = (state: ProjectStoreState, nodeIds: string[], now: string) => {
       const requestedNodeIds = new Set(nodeIds.filter(Boolean))
       if (requestedNodeIds.size === 0) return state
@@ -3983,10 +4196,14 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
       const nodeIdsToDelete = new Set<string>(targetNodes.map((node) => node.id))
       for (const targetNode of targetNodes) {
-        if (targetNode.type !== 'function') continue
-        for (const node of state.project.canvas.nodes) {
-          if (node.type === 'result_group' && node.data.sourceFunctionNodeId === targetNode.id) {
-            nodeIdsToDelete.add(node.id)
+        if (targetNode.type === 'group') {
+          for (const childNodeId of groupChildNodeIds(targetNode)) nodeIdsToDelete.add(childNodeId)
+        }
+        if (targetNode.type === 'function') {
+          for (const node of state.project.canvas.nodes) {
+            if (node.type === 'result_group' && node.data.sourceFunctionNodeId === targetNode.id) {
+              nodeIdsToDelete.add(node.id)
+            }
           }
         }
       }
@@ -4054,9 +4271,9 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
       return {
         ...selectedState(selectedNodeIds),
-        undoStack: undoStackWithSnapshot(state),
-        project: {
-          ...state.project,
+        undoStack: [],
+        project: projectWithRecordedHistory(state.project, {
+          ...ensureProjectHistory(state.project),
           project: { ...state.project.project, updatedAt: now },
           canvas: {
             ...state.project.canvas,
@@ -4069,7 +4286,18 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             Object.entries(state.project.resources).filter(([resourceId]) => !resourceIdsToDelete.has(resourceId)),
           ),
           tasks: Object.fromEntries(Object.entries(state.project.tasks).filter(([taskId]) => !taskIdsToDelete.has(taskId))),
-        },
+        }, now, {
+          label: targetNodes.length > 1 ? 'Delete nodes' : 'Delete node',
+          transactionType: 'canvas',
+          nodeIds: [...nodeIdsToDelete],
+          assetIds: [...resourceIdsToDelete],
+          preview: {
+            title: targetNodes.length > 1 ? 'Delete nodes' : 'Delete node',
+            subtitle: `${nodeIdsToDelete.size} nodes`,
+            nodeIds: [...nodeIdsToDelete],
+            assetIds: [...resourceIdsToDelete],
+          },
+        }),
       }
     }
 
@@ -4250,14 +4478,28 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         data: { resourceId, resourceType: 'text' },
       }
 
-      set((state) => ({
-        project: {
-          ...state.project,
+      set((state) => {
+        const nextProject = {
+          ...ensureProjectHistory(state.project),
           project: { ...state.project.project, updatedAt: now },
           resources: { ...state.project.resources, [resourceId]: resource },
           canvas: { ...state.project.canvas, nodes: [...state.project.canvas.nodes, node] },
-        },
-      }))
+        }
+        return {
+          project: projectWithRecordedHistory(state.project, nextProject, now, {
+            label: 'Create text asset',
+            transactionType: 'asset',
+            nodeIds: [nodeId],
+            assetIds: [resourceId],
+            preview: {
+              title: 'Create text asset',
+              subtitle: name,
+              nodeIds: [nodeId],
+              assetIds: [resourceId],
+            },
+          }),
+        }
+      })
       return nodeId
     },
 
@@ -4286,14 +4528,28 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           data: { resourceId, resourceType: type },
         }
 
-        set((state) => ({
-          project: {
-            ...state.project,
+        set((state) => {
+          const nextProject = {
+            ...ensureProjectHistory(state.project),
             project: { ...state.project.project, updatedAt: now },
             resources: { ...state.project.resources, [resourceId]: resource },
             canvas: { ...state.project.canvas, nodes: [...state.project.canvas.nodes, node] },
-          },
-        }))
+          }
+          return {
+            project: projectWithRecordedHistory(state.project, nextProject, now, {
+              label: 'Create number asset',
+              transactionType: 'asset',
+              nodeIds: [nodeId],
+              assetIds: [resourceId],
+              preview: {
+                title: 'Create number asset',
+                subtitle: resource.name,
+                nodeIds: [nodeId],
+                assetIds: [resourceId],
+              },
+            }),
+          }
+        })
         return nodeId
       }
 
@@ -4320,10 +4576,9 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         data: { resourceId, resourceType: type },
       }
 
-      set((state) => ({
-        ...selectedState([nodeId]),
-        project: {
-          ...state.project,
+      set((state) => {
+        const nextProject = {
+          ...ensureProjectHistory(state.project),
           project: { ...state.project.project, updatedAt: now },
           assets: {
             ...state.project.assets,
@@ -4338,8 +4593,23 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           },
           resources: { ...state.project.resources, [resourceId]: resource },
           canvas: { ...state.project.canvas, nodes: [...state.project.canvas.nodes, node] },
-        },
-      }))
+        }
+        return {
+          ...selectedState([nodeId]),
+          project: projectWithRecordedHistory(state.project, nextProject, now, {
+            label: `Create ${type} asset`,
+            transactionType: 'asset',
+            nodeIds: [nodeId],
+            assetIds: [resourceId],
+            preview: {
+              title: `Create ${type} asset`,
+              subtitle: name,
+              nodeIds: [nodeId],
+              assetIds: [resourceId],
+            },
+          }),
+        }
+      })
       return nodeId
     },
 
@@ -5587,8 +5857,29 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
     undoLastProjectChange: () => {
       set((state) => {
+        const currentProject = ensureProjectHistory(state.project)
+        const history = currentProject.history ?? emptyProjectHistory()
+        const entry = history.undoStack.at(-1)
+        if (entry) {
+          const nextHistory: ProjectHistoryState = {
+            schemaVersion: PROJECT_HISTORY_SCHEMA_VERSION,
+            undoStack: history.undoStack.slice(0, -1),
+            redoStack: [...history.redoStack, entry].slice(-PROJECT_HISTORY_LIMIT),
+          }
+          const project = restoreProjectHistorySnapshot(entry.before, nextHistory, runtime.now())
+          return {
+            project,
+            projectLibrary: {
+              ...state.projectLibrary,
+              [project.project.id]: project,
+            },
+            undoStack: [],
+            ...selectedState([]),
+          }
+        }
+
         const previousProject = state.undoStack.at(-1)
-        if (!previousProject) return state
+        if (!previousProject) return { ...state, project: currentProject }
         const project = withBuiltInFunctions(structuredClone(previousProject), runtime.now())
         return {
           project,
@@ -5597,6 +5888,31 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             [project.project.id]: project,
           },
           undoStack: state.undoStack.slice(0, -1),
+          ...selectedState([]),
+        }
+      })
+    },
+
+    redoProjectChange: () => {
+      set((state) => {
+        const currentProject = ensureProjectHistory(state.project)
+        const history = currentProject.history ?? emptyProjectHistory()
+        const entry = history.redoStack.at(-1)
+        if (!entry) return { ...state, project: currentProject }
+
+        const nextHistory: ProjectHistoryState = {
+          schemaVersion: PROJECT_HISTORY_SCHEMA_VERSION,
+          undoStack: [...history.undoStack, entry].slice(-PROJECT_HISTORY_LIMIT),
+          redoStack: history.redoStack.slice(0, -1),
+        }
+        const project = restoreProjectHistorySnapshot(entry.after, nextHistory, runtime.now())
+        return {
+          project,
+          projectLibrary: {
+            ...state.projectLibrary,
+            [project.project.id]: project,
+          },
+          undoStack: [],
           ...selectedState([]),
         }
       })
@@ -5646,9 +5962,9 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         type: 'resource_to_input',
       }
 
-      set((current) => ({
-        project: {
-          ...current.project,
+      set((current) => {
+        const nextProject = {
+          ...ensureProjectHistory(current.project),
           project: { ...current.project.project, updatedAt: now },
           canvas: {
             ...current.project.canvas,
@@ -5682,8 +5998,22 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
               edge,
             ],
           },
-        },
-      }))
+        }
+        return {
+          project: projectWithRecordedHistory(current.project, nextProject, now, {
+            label: 'Connect asset',
+            transactionType: 'connection',
+            nodeIds: [sourceNodeId, targetNodeId],
+            assetIds: sourceResource ? [sourceResource.id] : [],
+            preview: {
+              title: 'Connect asset',
+              subtitle: inputKey,
+              nodeIds: [sourceNodeId, targetNodeId],
+              assetIds: sourceResource ? [sourceResource.id] : [],
+            },
+          }),
+        }
+      })
     },
 
     deleteEdges: (edgeIds) => {
@@ -5715,29 +6045,49 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
         if (explicitEdgeIds.size === 0 && clearedInputsByNode.size === 0) return state
 
-        return {
-          undoStack: undoStackWithSnapshot(state),
-          project: {
-            ...state.project,
-            project: { ...state.project.project, updatedAt: now },
-            canvas: {
-              ...state.project.canvas,
-              nodes: state.project.canvas.nodes.map((node) => {
-                const inputKeys = clearedInputsByNode.get(node.id)
-                if (!inputKeys || node.type !== 'function') return node
-                const inputValues = { ...((node.data.inputValues ?? {}) as RuntimeInputValues) }
-                for (const inputKey of inputKeys) delete inputValues[inputKey]
-                return {
-                  ...node,
-                  data: {
-                    ...node.data,
-                    inputValues,
-                  },
-                }
-              }),
-              edges: state.project.canvas.edges.filter((edge) => !explicitEdgeIds.has(edge.id)),
-            },
+        const nextProject = {
+          ...ensureProjectHistory(state.project),
+          project: { ...state.project.project, updatedAt: now },
+          canvas: {
+            ...state.project.canvas,
+            nodes: state.project.canvas.nodes.map((node) => {
+              const inputKeys = clearedInputsByNode.get(node.id)
+              if (!inputKeys || node.type !== 'function') return node
+              const inputValues = { ...((node.data.inputValues ?? {}) as RuntimeInputValues) }
+              for (const inputKey of inputKeys) delete inputValues[inputKey]
+              return {
+                ...node,
+                data: {
+                  ...node.data,
+                  inputValues,
+                },
+              }
+            }),
+            edges: state.project.canvas.edges.filter((edge) => !explicitEdgeIds.has(edge.id)),
           },
+        }
+
+        return {
+          undoStack: [],
+          project: projectWithRecordedHistory(state.project, nextProject, now, {
+            label: 'Disconnect asset',
+            transactionType: 'connection',
+            nodeIds: uniqueHistoryIds([
+              ...state.project.canvas.edges
+                .filter((edge) => explicitEdgeIds.has(edge.id))
+                .flatMap((edge) => [edge.source.nodeId, edge.target.nodeId]),
+              ...clearedInputsByNode.keys(),
+            ]),
+            assetIds: uniqueHistoryIds(
+              state.project.canvas.edges
+                .filter((edge) => explicitEdgeIds.has(edge.id))
+                .map((edge) => edge.source.resourceId),
+            ),
+            preview: {
+              title: 'Disconnect asset',
+              subtitle: `${explicitEdgeIds.size + clearedInputsByNode.size} bindings`,
+            },
+          }),
         }
       })
     },
@@ -5749,23 +6099,61 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
     updateNodePositions: (positionsByNodeId) => {
       const now = runtime.now()
       set((state) => {
+        const expandedPositions = { ...positionsByNodeId }
+        for (const node of state.project.canvas.nodes) {
+          if (node.type !== 'group') continue
+          const nextGroupPosition = positionsByNodeId[node.id]
+          if (!nextGroupPosition) continue
+          const delta = {
+            x: nextGroupPosition.x - node.position.x,
+            y: nextGroupPosition.y - node.position.y,
+          }
+          if (delta.x === 0 && delta.y === 0) continue
+          for (const childNodeId of groupChildNodeIds(node)) {
+            const childNode = state.project.canvas.nodes.find((item) => item.id === childNodeId)
+            if (!childNode || positionsByNodeId[childNodeId]) continue
+            expandedPositions[childNodeId] = {
+              x: childNode.position.x + delta.x,
+              y: childNode.position.y + delta.y,
+            }
+          }
+        }
+
         const hasPositionChange = state.project.canvas.nodes.some((node) => {
-          const nextPosition = positionsByNodeId[node.id]
+          const nextPosition = expandedPositions[node.id]
           return Boolean(nextPosition && (node.position.x !== nextPosition.x || node.position.y !== nextPosition.y))
         })
         if (!hasPositionChange) return state
 
-        return {
-          project: {
-            ...state.project,
-            project: { ...state.project.project, updatedAt: now },
-            canvas: {
-              ...state.project.canvas,
-              nodes: state.project.canvas.nodes.map((node) =>
-                positionsByNodeId[node.id] ? { ...node, position: positionsByNodeId[node.id] } : node,
-              ),
-            },
+        const movedNodeIds = Object.keys(expandedPositions).filter((nodeId) =>
+          state.project.canvas.nodes.some((node) => {
+            const nextPosition = expandedPositions[nodeId]
+            return node.id === nodeId && nextPosition && (node.position.x !== nextPosition.x || node.position.y !== nextPosition.y)
+          }),
+        )
+        const nextProject = {
+          ...ensureProjectHistory(state.project),
+          project: { ...state.project.project, updatedAt: now },
+          canvas: {
+            ...state.project.canvas,
+            nodes: state.project.canvas.nodes.map((node) =>
+              expandedPositions[node.id] ? { ...node, position: expandedPositions[node.id] } : node,
+            ),
           },
+        }
+
+        return {
+          project: projectWithRecordedHistory(state.project, nextProject, now, {
+            label: movedNodeIds.length > 1 ? 'Move nodes' : 'Move node',
+            transactionType: 'canvas',
+            nodeIds: movedNodeIds,
+            groupIds: movedNodeIds.filter((nodeId) => state.project.canvas.nodes.some((node) => node.id === nodeId && node.type === 'group')),
+            preview: {
+              title: movedNodeIds.length > 1 ? 'Move nodes' : 'Move node',
+              subtitle: `${movedNodeIds.length} nodes`,
+              nodeIds: movedNodeIds,
+            },
+          }),
         }
       })
     },
@@ -5868,6 +6256,325 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
     deleteNode: (nodeId) => {
       const now = runtime.now()
       set((state) => deleteNodesFromState(state, [nodeId], now))
+    },
+
+    groupSelectedNodes: () => {
+      const state = get()
+      const selectedIds = state.selectedNodeIds.length
+        ? state.selectedNodeIds
+        : state.selectedNodeId
+          ? [state.selectedNodeId]
+          : []
+      const childNodes = selectedIds
+        .map((nodeId) => state.project.canvas.nodes.find((node) => node.id === nodeId))
+        .filter((node): node is CanvasNode => Boolean(node && node.type !== 'group'))
+      if (childNodes.length < 2) return undefined
+
+      const groupId = runtime.idFactory()
+      const groupNodeId = `node_${groupId}`
+      const now = runtime.now()
+      const bounds = groupBoundsForNodes(childNodes, state.project.functions)
+      const childNodeIds = childNodes.map((node) => node.id)
+      const groupNode: CanvasNode = {
+        id: groupNodeId,
+        type: 'group',
+        position: bounds.position,
+        data: {
+          title: 'Group',
+          childNodeIds,
+          collapsed: false,
+          color: '#14b8a6',
+          size: bounds.size,
+        },
+      }
+
+      set((current) => {
+        const nextProject = {
+          ...ensureProjectHistory(current.project),
+          project: { ...current.project.project, updatedAt: now },
+          canvas: {
+            ...current.project.canvas,
+            nodes: [...current.project.canvas.nodes, groupNode],
+          },
+        }
+        return {
+          ...selectedState([groupNodeId]),
+          undoStack: [],
+          project: projectWithRecordedHistory(current.project, nextProject, now, {
+            label: 'Group selection',
+            transactionType: 'group',
+            nodeIds: [groupNodeId, ...childNodeIds],
+            groupIds: [groupNodeId],
+            preview: {
+              title: 'Group selection',
+              subtitle: `${childNodeIds.length} nodes`,
+              nodeIds: [groupNodeId, ...childNodeIds],
+              groupIds: [groupNodeId],
+            },
+          }),
+        }
+      })
+
+      return groupNodeId
+    },
+
+    ungroupNode: (nodeId) => {
+      const now = runtime.now()
+      set((state) => {
+        const groupNode = state.project.canvas.nodes.find((node) => node.id === nodeId && node.type === 'group')
+        if (!groupNode) return state
+
+        const childNodeIds = groupChildNodeIds(groupNode)
+        const nextProject = {
+          ...ensureProjectHistory(state.project),
+          project: { ...state.project.project, updatedAt: now },
+          canvas: {
+            ...state.project.canvas,
+            nodes: state.project.canvas.nodes.filter((node) => node.id !== nodeId),
+          },
+        }
+
+        return {
+          ...selectedState(childNodeIds),
+          undoStack: [],
+          project: projectWithRecordedHistory(state.project, nextProject, now, {
+            label: 'Ungroup',
+            transactionType: 'group',
+            nodeIds: [nodeId, ...childNodeIds],
+            groupIds: [nodeId],
+            preview: {
+              title: 'Ungroup',
+              subtitle: String(groupNode.data.title ?? 'Group'),
+              nodeIds: [nodeId, ...childNodeIds],
+              groupIds: [nodeId],
+            },
+          }),
+        }
+      })
+    },
+
+    saveTemplateFromSelection: (name) => {
+      const state = get()
+      const selectedIds = state.selectedNodeIds.length
+        ? state.selectedNodeIds
+        : state.selectedNodeId
+          ? [state.selectedNodeId]
+          : []
+      const templateNodeIds = selectedTemplateNodeIds(state.project.canvas.nodes, selectedIds)
+      if (templateNodeIds.length === 0) return undefined
+
+      const selectedNodeSet = new Set(templateNodeIds)
+      const nodes = state.project.canvas.nodes
+        .filter((node) => selectedNodeSet.has(node.id))
+        .map((node) => structuredClone(node))
+      const edges = state.project.canvas.edges
+        .filter((edge) => selectedNodeSet.has(edge.source.nodeId) && selectedNodeSet.has(edge.target.nodeId))
+        .map((edge) => structuredClone(edge))
+      const resourceIds = resourceIdsForNodes(nodes)
+      const resources = Object.fromEntries(
+        resourceIds
+          .map((resourceId) => state.project.resources[resourceId])
+          .filter((resource): resource is Resource => Boolean(resource))
+          .map((resource) => [resource.id, structuredClone(resource)]),
+      )
+      const assetIds = uniqueIds(Object.values(resources).map(mediaAssetId).filter((assetId): assetId is string => Boolean(assetId)))
+      const assets = Object.fromEntries(
+        assetIds
+          .map((assetId) => state.project.assets[assetId])
+          .filter((asset): asset is NonNullable<typeof asset> => Boolean(asset))
+          .map((asset) => [asset.id, structuredClone(asset)]),
+      )
+      const templateId = runtime.idFactory()
+      const now = runtime.now()
+      const template: CanvasTemplate = {
+        id: templateId,
+        name: name?.trim() || 'Template',
+        createdAt: now,
+        updatedAt: now,
+        nodes,
+        edges,
+        resources,
+        assets,
+        inputResourceIds: resourceIds,
+        outputResourceIds: resourceIds,
+      }
+
+      set((current) => {
+        const nextProject = {
+          ...ensureProjectHistory(current.project),
+          project: { ...current.project.project, updatedAt: now },
+          templates: {
+            ...(current.project.templates ?? {}),
+            [templateId]: template,
+          },
+        }
+        return {
+          project: projectWithRecordedHistory(current.project, nextProject, now, {
+            label: 'Save template',
+            transactionType: 'template',
+            nodeIds: templateNodeIds,
+            assetIds: resourceIds,
+            templateIds: [templateId],
+            preview: {
+              title: 'Save template',
+              subtitle: template.name,
+              nodeIds: templateNodeIds,
+              assetIds: resourceIds,
+              templateIds: [templateId],
+            },
+          }),
+        }
+      })
+
+      return templateId
+    },
+
+    instantiateTemplate: (templateId, position) => {
+      const state = get()
+      const template = state.project.templates?.[templateId]
+      if (!template || template.nodes.length === 0) return undefined
+
+      const now = runtime.now()
+      const minX = Math.min(...template.nodes.map((node) => node.position.x))
+      const minY = Math.min(...template.nodes.map((node) => node.position.y))
+      const targetPosition = position ?? { x: minX + 48, y: minY + 48 }
+      const offset = { x: targetPosition.x - minX, y: targetPosition.y - minY }
+      const nodeIdMap = new Map<string, string>()
+      const resourceIdMap = new Map<string, string>()
+      const clonedResources: Record<string, Resource> = {}
+      const clonedAssets: Record<string, NonNullable<CanvasTemplate['assets'][string]>> = {}
+
+      for (const resource of Object.values(template.resources)) {
+        const nextResourceId = runtime.idFactory()
+        resourceIdMap.set(resource.id, nextResourceId)
+        const originalAssetId = mediaAssetId(resource)
+        const value = structuredClone(resource.value)
+        if (originalAssetId && typeof value === 'object' && value !== null && 'assetId' in value) {
+          const sourceAsset = template.assets[originalAssetId]
+          const nextAssetId = runtime.idFactory()
+          ;(value as { assetId: string }).assetId = nextAssetId
+          if (sourceAsset) {
+            clonedAssets[nextAssetId] = {
+              ...structuredClone(sourceAsset),
+              id: nextAssetId,
+              createdAt: now,
+            }
+          }
+        }
+        clonedResources[nextResourceId] = {
+          ...structuredClone(resource),
+          id: nextResourceId,
+          name: `${resource.name ?? 'Resource'} Copy`,
+          value,
+          source: {
+            kind: 'duplicated',
+            parentResourceId: resource.id,
+          },
+          metadata: {
+            ...resource.metadata,
+            createdAt: now,
+          },
+        }
+      }
+
+      const clonedNodes = template.nodes.map((node) => {
+        const clonedNode = structuredClone(node)
+        let nextNodeId: string
+        if (node.type === 'resource' && typeof node.data.resourceId === 'string') {
+          const nextResourceId = resourceIdMap.get(node.data.resourceId)
+          nextNodeId = nextResourceId ? `node_${nextResourceId}` : `node_${runtime.idFactory()}`
+          clonedNode.data = {
+            ...clonedNode.data,
+            resourceId: nextResourceId ?? clonedNode.data.resourceId,
+          }
+        } else {
+          nextNodeId = `node_${runtime.idFactory()}`
+        }
+        nodeIdMap.set(node.id, nextNodeId)
+        clonedNode.id = nextNodeId
+        clonedNode.position = {
+          x: node.position.x + offset.x,
+          y: node.position.y + offset.y,
+        }
+        return clonedNode
+      })
+
+      const clonedEdges: CanvasEdge[] = template.edges
+        .flatMap((edge): CanvasEdge[] => {
+          const sourceNodeId = nodeIdMap.get(edge.source.nodeId)
+          const targetNodeId = nodeIdMap.get(edge.target.nodeId)
+          if (!sourceNodeId || !targetNodeId) return []
+          const sourceResourceId = edge.source.resourceId ? resourceIdMap.get(edge.source.resourceId) : undefined
+          const sourceHandleId = sourceResourceId
+            ? edge.source.handleId.replace(edge.source.resourceId ?? '', sourceResourceId)
+            : edge.source.handleId
+          return [{
+            ...structuredClone(edge),
+            id: `edge_${sourceNodeId}_${targetNodeId}_${edge.target.inputKey}`,
+            source: {
+              ...edge.source,
+              nodeId: sourceNodeId,
+              handleId: sourceHandleId,
+              ...(sourceResourceId ? { resourceId: sourceResourceId } : {}),
+            },
+            target: {
+              ...edge.target,
+              nodeId: targetNodeId,
+            },
+          }]
+        })
+
+      const groupId = runtime.idFactory()
+      const groupNodeId = `node_${groupId}`
+      const bounds = groupBoundsForNodes(clonedNodes, state.project.functions)
+      const childNodeIds = clonedNodes.map((node) => node.id)
+      const groupNode: CanvasNode = {
+        id: groupNodeId,
+        type: 'group',
+        position: bounds.position,
+        data: {
+          title: template.name,
+          childNodeIds,
+          collapsed: false,
+          color: '#14b8a6',
+          size: bounds.size,
+        },
+      }
+
+      set((current) => {
+        const nextProject = {
+          ...ensureProjectHistory(current.project),
+          project: { ...current.project.project, updatedAt: now },
+          assets: { ...current.project.assets, ...clonedAssets },
+          resources: { ...current.project.resources, ...clonedResources },
+          canvas: {
+            ...current.project.canvas,
+            nodes: [...current.project.canvas.nodes, ...clonedNodes, groupNode],
+            edges: [...current.project.canvas.edges, ...clonedEdges],
+          },
+        }
+        return {
+          ...selectedState([groupNodeId]),
+          project: projectWithRecordedHistory(current.project, nextProject, now, {
+            label: 'Create template instance',
+            transactionType: 'template',
+            nodeIds: [groupNodeId, ...childNodeIds],
+            assetIds: Object.keys(clonedResources),
+            groupIds: [groupNodeId],
+            templateIds: [templateId],
+            preview: {
+              title: 'Create template instance',
+              subtitle: template.name,
+              nodeIds: [groupNodeId, ...childNodeIds],
+              assetIds: Object.keys(clonedResources),
+              groupIds: [groupNodeId],
+              templateIds: [templateId],
+            },
+          }),
+        }
+      })
+
+      return groupNodeId
     },
 
     duplicateSelectedNode: () => {

@@ -345,6 +345,58 @@ export type CanvasState = {
   }
 }
 
+export type ProjectTransactionType = 'asset' | 'canvas' | 'connection' | 'group' | 'template' | 'run' | 'settings'
+
+export type ProjectHistoryStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'canceled'
+
+export type ProjectHistoryPreview = {
+  title: string
+  subtitle?: string
+  assetIds?: string[]
+  nodeIds?: string[]
+  groupIds?: string[]
+  templateIds?: string[]
+  status?: ProjectHistoryStatus
+}
+
+export type ProjectHistorySnapshot = Omit<ProjectState, 'history'>
+
+export type ProjectHistoryEntry = {
+  id: string
+  label: string
+  transactionType: ProjectTransactionType
+  createdAt: string
+  affectedIds: {
+    assetIds?: string[]
+    nodeIds?: string[]
+    groupIds?: string[]
+    templateIds?: string[]
+  }
+  preview: ProjectHistoryPreview
+  before: ProjectHistorySnapshot
+  after: ProjectHistorySnapshot
+}
+
+export type ProjectHistoryState = {
+  schemaVersion: string
+  undoStack: ProjectHistoryEntry[]
+  redoStack: ProjectHistoryEntry[]
+}
+
+export type CanvasTemplate = {
+  id: string
+  name: string
+  description?: string
+  createdAt: string
+  updatedAt: string
+  nodes: CanvasNode[]
+  edges: CanvasEdge[]
+  resources: Record<string, Resource>
+  assets: Record<string, AssetRecord>
+  inputResourceIds: string[]
+  outputResourceIds: string[]
+}
+
 export type ComfyEndpointConfig = {
   id: string
   name: string
@@ -438,6 +490,8 @@ export type ProjectState = {
   assets: Record<string, AssetRecord>
   functions: Record<string, GenerationFunction>
   tasks: Record<string, ExecutionTask>
+  history?: ProjectHistoryState
+  templates?: Record<string, CanvasTemplate>
   comfy: {
     endpoints: ComfyEndpointConfig[]
     scheduler: SchedulerConfig

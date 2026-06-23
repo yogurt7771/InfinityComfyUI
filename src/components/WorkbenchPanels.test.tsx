@@ -185,6 +185,60 @@ describe('LeftPanel', () => {
     expect(screen.queryByLabelText('Asset list')).not.toBeInTheDocument()
   })
 
+  it('shows visual operation history with asset previews and undo/redo actions', () => {
+    const project = panelProject()
+    const projectSnapshot = structuredClone(project)
+    delete projectSnapshot.history
+    project.history = {
+      schemaVersion: '1.0.0',
+      undoStack: [
+        {
+          id: 'history_1',
+          label: 'Create image asset',
+          transactionType: 'asset',
+          createdAt: '2026-05-09T00:00:00.000Z',
+          affectedIds: { assetIds: ['res_image'], nodeIds: ['node_image_asset'] },
+          preview: {
+            title: 'Create image asset',
+            subtitle: 'Render.png',
+            assetIds: ['res_image'],
+            nodeIds: ['node_image_asset'],
+          },
+          before: projectSnapshot,
+          after: projectSnapshot,
+        },
+      ],
+      redoStack: [],
+    }
+    projectStore.setState({
+      project,
+      projectLibrary: { [project.project.id]: project },
+      selectedNodeId: undefined,
+      selectedNodeIds: [],
+    } as unknown as Partial<ReturnType<typeof projectStore.getState>>)
+
+    const undoSpy = vi.spyOn(projectStore.getState(), 'undoLastProjectChange')
+    const redoSpy = vi.spyOn(projectStore.getState(), 'redoProjectChange')
+
+    render(<LeftPanel />)
+
+    expect(screen.getByRole('button', { name: 'History' })).toBeVisible()
+    expect(screen.queryByLabelText('Operation history list')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+
+    const historyList = screen.getByLabelText('Operation history list')
+    expect(within(historyList).getByText('Create image asset')).toBeVisible()
+    expect(within(historyList).getByText('Render.png')).toBeVisible()
+    expect(within(historyList).getByRole('img', { name: 'Render.png' })).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Undo last operation' }))
+    expect(undoSpy).toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Redo last operation' }))
+    expect(redoSpy).toHaveBeenCalled()
+  })
+
   it('opens asset list resources in a preview modal', () => {
     vi.useFakeTimers()
     try {

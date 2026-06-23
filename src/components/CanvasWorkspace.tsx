@@ -92,6 +92,13 @@ type FunctionNodeMenuState = {
   top: number
 }
 
+type GroupNodeMenuState = {
+  kind: 'selection' | 'group'
+  nodeId?: string
+  left: number
+  top: number
+}
+
 type FunctionEditorState = {
   nodeId: string
   functionId: string
@@ -794,6 +801,11 @@ function CanvasSurface() {
   const deleteNode = useProjectStore((state) => state.deleteNode)
   const deleteSelectedNode = useProjectStore((state) => state.deleteSelectedNode)
   const undoLastProjectChange = useProjectStore((state) => state.undoLastProjectChange)
+  const redoProjectChange = useProjectStore((state) => state.redoProjectChange)
+  const groupSelectedNodes = useProjectStore((state) => state.groupSelectedNodes)
+  const ungroupNode = useProjectStore((state) => state.ungroupNode)
+  const saveTemplateFromSelection = useProjectStore((state) => state.saveTemplateFromSelection)
+  const instantiateTemplate = useProjectStore((state) => state.instantiateTemplate)
   const duplicateSelectedNode = useProjectStore((state) => state.duplicateSelectedNode)
   const duplicateNodes = useProjectStore((state) => state.duplicateNodes)
   const { screenToFlowPosition, setCenter } = useReactFlow()
@@ -801,6 +813,7 @@ function CanvasSurface() {
   const [localActionDialog, setLocalActionDialog] = useState<LocalActionDialogState | null>(null)
   const [quickToolbar, setQuickToolbar] = useState<QuickToolbarState>()
   const [functionNodeMenu, setFunctionNodeMenu] = useState<FunctionNodeMenuState>()
+  const [groupNodeMenu, setGroupNodeMenu] = useState<GroupNodeMenuState>()
   const [functionEditor, setFunctionEditor] = useState<FunctionEditorState>()
   const [comparePair, setComparePair] = useState<CompareImagePair | null>(null)
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([])
@@ -808,6 +821,7 @@ function CanvasSurface() {
   const addMenuRef = useRef<HTMLDivElement | null>(null)
   const quickToolbarRef = useRef<HTMLDivElement | null>(null)
   const functionNodeMenuRef = useRef<HTMLDivElement | null>(null)
+  const groupNodeMenuRef = useRef<HTMLDivElement | null>(null)
   const addMenuSearchRef = useRef<HTMLInputElement | null>(null)
   const canvasRef = useRef<HTMLElement | null>(null)
   const connectionStart = useRef<ConnectionStartState | null>(null)
@@ -1003,6 +1017,13 @@ function CanvasSurface() {
         return
       }
 
+      if (((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'z') || ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'y')) {
+        event.preventDefault()
+        redoProjectChange()
+        setSelectedEdgeIds([])
+        return
+      }
+
       if (event.key === 'Delete' || event.key === 'Backspace') {
         event.preventDefault()
         const domNodeIds = selectedDomNodeIds()
@@ -1019,6 +1040,7 @@ function CanvasSurface() {
         setAddMenu(null)
         setQuickToolbar(undefined)
         setFunctionNodeMenu(undefined)
+        setGroupNodeMenu(undefined)
         selectNode(undefined)
         setSelectedEdgeIds([])
       }
@@ -1064,6 +1086,7 @@ function CanvasSurface() {
     selectNode,
     selectedDomNodeIds,
     selectedEdgeIds,
+    redoProjectChange,
     undoLastProjectChange,
   ])
 
@@ -1192,6 +1215,21 @@ function CanvasSurface() {
     menu.style.top = `${top}px`
   }, [functionNodeMenu])
 
+  useLayoutEffect(() => {
+    if (!groupNodeMenu) return
+
+    const menu = groupNodeMenuRef.current
+    if (!menu) return
+
+    const margin = 8
+    const rect = menu.getBoundingClientRect()
+    const left = Math.min(Math.max(groupNodeMenu.left, margin), Math.max(margin, window.innerWidth - rect.width - margin))
+    const top = Math.min(Math.max(groupNodeMenu.top, margin), Math.max(margin, window.innerHeight - rect.height - margin))
+
+    menu.style.left = `${left}px`
+    menu.style.top = `${top}px`
+  }, [groupNodeMenu])
+
   const activeLocalActionFunction = localActionDialog ? project.functions[localActionDialog.functionId] : undefined
 
   const connectionResourceType = (sourceNodeId: string | undefined, sourceHandleId?: string | null) => {
@@ -1264,6 +1302,7 @@ function CanvasSurface() {
   ) => {
     setQuickToolbar(undefined)
     setFunctionNodeMenu(undefined)
+    setGroupNodeMenu(undefined)
     setAddMenuQuery('')
     setAddMenu({
       screen: { x: clientX, y: clientY },
@@ -1278,8 +1317,35 @@ function CanvasSurface() {
     event.stopPropagation()
     setAddMenu(null)
     setFunctionNodeMenu(undefined)
+    setGroupNodeMenu(undefined)
 
     const canvasNode = project.canvas.nodes.find((item) => item.id === node.id)
+    if (canvasNode?.type === 'group') {
+      selectNode(node.id)
+      setSelectedEdgeIds([])
+      setQuickToolbar(undefined)
+      setGroupNodeMenu({
+        kind: 'group',
+        nodeId: node.id,
+        left: event.clientX,
+        top: event.clientY,
+      })
+      return
+    }
+
+    const selectedIds = activeSelectedNodeIds.includes(node.id) ? activeSelectedNodeIds : [node.id]
+    if (selectedIds.length > 1) {
+      if (!activeSelectedNodeIds.includes(node.id)) selectNodes(selectedIds)
+      setSelectedEdgeIds([])
+      setQuickToolbar(undefined)
+      setGroupNodeMenu({
+        kind: 'selection',
+        left: event.clientX,
+        top: event.clientY,
+      })
+      return
+    }
+
     if (canvasNode?.type === 'function') {
       selectNode(node.id)
       setSelectedEdgeIds([])
@@ -1316,6 +1382,7 @@ function CanvasSurface() {
     const functionId = ensureEditableFunctionForNode(nodeId, scope)
     if (!functionId) return
     setFunctionNodeMenu(undefined)
+    setGroupNodeMenu(undefined)
     setQuickToolbar(undefined)
     setFunctionEditor({ nodeId, functionId })
   }
@@ -1350,6 +1417,9 @@ function CanvasSurface() {
   ].filter((item) => assetTypeAllowedInMenu(item.type))
   const filteredAddMenuAssets = addMenuAssetOptions.filter((item) => addMenuItemMatches(item.label, addMenuQuery))
   const filteredAddMenuFunctions = addMenuFunctions.filter((fn) => addMenuItemMatches(fn.name, addMenuQuery))
+  const filteredAddMenuTemplates = Object.values(project.templates ?? {}).filter((template) =>
+    addMenuItemMatches(template.name, addMenuQuery),
+  )
 
   useLayoutEffect(() => {
     if (!addMenu) return
@@ -1395,6 +1465,19 @@ function CanvasSurface() {
       })
     }
     setAddMenu(null)
+  }
+
+  const createTemplateFromMenu = (templateId: string) => {
+    if (!addMenu) return
+    instantiateTemplate(templateId, addMenu.flow)
+    setAddMenu(null)
+  }
+
+  const saveSelectionAsTemplate = () => {
+    const name = window.prompt('Template name', 'Template')
+    if (name === null) return
+    saveTemplateFromSelection(name)
+    setGroupNodeMenu(undefined)
   }
 
   const createTextAtPoint = (text: string, clientX: number, clientY: number) => {
@@ -1564,6 +1647,7 @@ function CanvasSurface() {
           setSelectedEdgeIds([])
           setQuickToolbar(undefined)
           setFunctionNodeMenu(undefined)
+          setGroupNodeMenu(undefined)
         }}
         onSelectionEnd={() => {
           selectionBoxActive.current = false
@@ -1585,6 +1669,7 @@ function CanvasSurface() {
           setSelectedEdgeIds([edge.id])
           setQuickToolbar(undefined)
           setFunctionNodeMenu(undefined)
+          setGroupNodeMenu(undefined)
           selectNode(undefined)
         }}
         onConnectStart={(_, params) => {
@@ -1641,6 +1726,7 @@ function CanvasSurface() {
           setSelectedEdgeIds([])
           setQuickToolbar(undefined)
           setFunctionNodeMenu(undefined)
+          setGroupNodeMenu(undefined)
           if (suppressNextNodeClick.current) {
             suppressNextNodeClick.current = false
             return
@@ -1668,6 +1754,7 @@ function CanvasSurface() {
           setAddMenu(null)
           setQuickToolbar(undefined)
           setFunctionNodeMenu(undefined)
+          setGroupNodeMenu(undefined)
         }}
         zoomOnDoubleClick={false}
         deleteKeyCode={null}
@@ -1709,12 +1796,17 @@ function CanvasSurface() {
               {item.label}
             </button>
           ))}
+          {filteredAddMenuTemplates.map((template) => (
+            <button key={template.id} role="menuitem" type="button" onClick={() => createTemplateFromMenu(template.id)}>
+              Template: {template.name}
+            </button>
+          ))}
           {filteredAddMenuFunctions.map((fn) => (
             <button key={fn.id} role="menuitem" type="button" onClick={() => createFunctionFromMenu(fn.id)}>
               {fn.name}
             </button>
           ))}
-          {filteredAddMenuAssets.length === 0 && filteredAddMenuFunctions.length === 0 ? (
+          {filteredAddMenuAssets.length === 0 && filteredAddMenuTemplates.length === 0 && filteredAddMenuFunctions.length === 0 ? (
             <div className="add-node-empty">No matching nodes</div>
           ) : null}
         </div>
@@ -1776,6 +1868,69 @@ function CanvasSurface() {
             <Layers size={16} />
             <span>Edit All Nodes</span>
           </button>
+        </div>
+      ) : null}
+      {groupNodeMenu ? (
+        <div
+          ref={groupNodeMenuRef}
+          aria-label="Group actions"
+          className="resource-quick-actions group-node-actions nodrag nopan"
+          style={{
+            left: groupNodeMenu.left,
+            top: groupNodeMenu.top,
+          }}
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          {groupNodeMenu.kind === 'selection' ? (
+            <>
+            <button
+              type="button"
+              aria-label="Group Selection"
+              title="Group selection"
+              onClick={() => {
+                groupSelectedNodes()
+                setGroupNodeMenu(undefined)
+              }}
+            >
+              <Layers size={16} />
+              <span>Group Selection</span>
+            </button>
+            <button
+              type="button"
+              aria-label="Save Selection as Template"
+              title="Save selection as template"
+              onClick={saveSelectionAsTemplate}
+            >
+              <Layers size={16} />
+              <span>Save as Template</span>
+            </button>
+            </>
+          ) : null}
+          {groupNodeMenu.kind === 'group' && groupNodeMenu.nodeId ? (
+            <>
+            <button
+              type="button"
+              aria-label="Ungroup"
+              title="Ungroup"
+              onClick={() => {
+                if (groupNodeMenu.nodeId) ungroupNode(groupNodeMenu.nodeId)
+                setGroupNodeMenu(undefined)
+              }}
+            >
+              <Scissors size={16} />
+              <span>Ungroup</span>
+            </button>
+            <button
+              type="button"
+              aria-label="Save Group as Template"
+              title="Save group as template"
+              onClick={saveSelectionAsTemplate}
+            >
+              <Layers size={16} />
+              <span>Save as Template</span>
+            </button>
+            </>
+          ) : null}
         </div>
       ) : null}
       {localActionDialog && activeLocalActionFunction ? (
