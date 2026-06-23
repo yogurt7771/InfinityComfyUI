@@ -312,6 +312,7 @@ export type ProjectStoreState = {
   renameNode: (nodeId: string, title: string) => void
   deleteSelectedNode: () => void
   deleteNode: (nodeId: string) => void
+  deleteNodes: (nodeIds: string[]) => void
   groupSelectedNodes: () => string | undefined
   ungroupNode: (nodeId: string) => void
   saveTemplateFromSelection: (name?: string) => string | undefined
@@ -6992,6 +6993,11 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
     deleteNode: (nodeId) => {
       const now = runtime.now()
       set((state) => deleteNodesFromState(state, [nodeId], now))
+    },
+
+    deleteNodes: (nodeIds) => {
+      const now = runtime.now()
+      set((state) => deleteNodesFromState(state, nodeIds, now))
     },
 
     groupSelectedNodes: () => {

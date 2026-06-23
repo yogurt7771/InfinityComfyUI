@@ -1026,6 +1026,7 @@ function CanvasSurface() {
   const updateNodeSize = useProjectStore((state) => state.updateNodeSize)
   const renameNode = useProjectStore((state) => state.renameNode)
   const deleteNode = useProjectStore((state) => state.deleteNode)
+  const deleteNodes = useProjectStore((state) => state.deleteNodes)
   const deleteSelectedNode = useProjectStore((state) => state.deleteSelectedNode)
   const undoLastProjectChange = useProjectStore((state) => state.undoLastProjectChange)
   const redoProjectChange = useProjectStore((state) => state.redoProjectChange)
@@ -1333,7 +1334,7 @@ function CanvasSurface() {
         event.preventDefault()
         const domNodeIds = selectedDomNodeIds()
         if (domNodeIds.length > 1 || (domNodeIds.length > 0 && activeSelectedNodeIds.length === 0)) {
-          for (const nodeId of domNodeIds) deleteNode(nodeId)
+          deleteNodes(domNodeIds)
         } else if (selectedEdgeIds.length > 0) {
           deleteEdges(selectedEdgeIds)
           setSelectedEdgeIds([])
@@ -1390,6 +1391,7 @@ function CanvasSurface() {
     activeSelectedNodeIds,
     deleteEdges,
     deleteNode,
+    deleteNodes,
     deleteSelectedNode,
     duplicateNodes,
     duplicateSelectedNode,

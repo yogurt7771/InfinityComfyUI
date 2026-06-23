@@ -2080,6 +2080,43 @@ describe('project store actions', () => {
     expect(slice.getState().project.resources).not.toHaveProperty('res_2')
   })
 
+  it('records a multi-node delete as one history entry', () => {
+    const ids = ['res_1', 'res_2', 'fn_1', 'node_fn_1']
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now: () => '2026-05-09T00:00:00.000Z',
+      randomInt: () => 1,
+    })
+
+    slice.getState().addTextResourceAtPosition('Prompt 1', 'first', { x: 100, y: 120 })
+    slice.getState().addTextResourceAtPosition('Prompt 2', 'second', { x: 320, y: 120 })
+    addTestWorkflowFunction(slice)
+    slice.getState().addFunctionNode('fn_1')
+    slice.getState().connectNodes('node_res_1', 'node_fn_1')
+    const beforeHistoryLength = slice.getState().project.history?.undoStack.length ?? 0
+
+    slice.getState().deleteNodes(['node_res_1', 'node_res_2', 'node_fn_1'])
+
+    const state = slice.getState()
+    expect(state.project.canvas.nodes).toEqual([])
+    expect(state.project.canvas.edges).toEqual([])
+    expect(state.project.resources).not.toHaveProperty('res_1')
+    expect(state.project.resources).not.toHaveProperty('res_2')
+    expect(state.project.history?.undoStack).toHaveLength(beforeHistoryLength + 1)
+    expect(state.project.history?.undoStack.at(-1)).toEqual(
+      expect.objectContaining({
+        label: 'Delete nodes',
+        transactionType: 'canvas',
+        preview: expect.objectContaining({
+          title: 'Delete nodes',
+          subtitle: '3 nodes',
+          nodeIds: expect.arrayContaining(['node_res_1', 'node_res_2', 'node_fn_1']),
+          assetIds: expect.arrayContaining(['res_1', 'res_2']),
+        }),
+      }),
+    )
+  })
+
   it('renames node titles and duplicates the selected node with offset position', () => {
     const ids = ['res_1', 'res_copy_1']
     const slice = createProjectSlice({
