@@ -152,10 +152,10 @@ Expected: pass.
 - Create: `src/domain/commands/assetCommands.test.ts`
 - Modify: `src/store/projectStore.ts`
 
-- [ ] **Step 1: Write failing tests for create/update/delete asset commands**
-- [ ] **Step 2: Implement create asset command that adds resource, optional asset record, and asset canvas node**
-- [ ] **Step 3: Implement delete assets command that removes selected asset nodes and lineage edges in one transaction**
-- [ ] **Step 4: Implement move/resize asset commands**
+- [x] **Step 1: Write failing tests for create/update/delete asset commands**
+- [x] **Step 2: Implement create asset command that adds resource, optional asset record, and asset canvas node**
+- [x] **Step 3: Implement delete assets command that removes selected asset nodes and lineage edges in one transaction**
+- [x] **Step 4: Implement move/resize asset commands**
 - [ ] **Step 5: Wire store actions to asset commands without changing UI yet**
 
 Run: `npm test -- --run src/domain/commands/assetCommands.test.ts src/store/projectStore.test.ts`
