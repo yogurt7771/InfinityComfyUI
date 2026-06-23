@@ -4,6 +4,7 @@ import { buildNodeReferenceMap } from '../domain/nodeReferences'
 import type { ProjectState } from '../domain/types'
 import {
   buildComfyMinimapLayout,
+  flowNodeStyle,
   buildFunctionRunInputDraft,
   functionRunFloatingMenuReset,
   pickableResourceRefsForInput,
@@ -114,6 +115,15 @@ describe('CanvasWorkspace helpers', () => {
     ]
 
     expect(visibleCanvasNodes(nodes).map((node) => node.id)).toEqual(['asset_1', 'group_1'])
+  })
+
+  it('gives resource nodes a default height so media previews have a viewport before resizing', () => {
+    const style = flowNodeStyle(
+      { id: 'asset_1', type: 'resource', position: { x: 0, y: 0 }, data: { resourceId: 'res_1' } },
+      {},
+    )
+
+    expect(style).toEqual({ width: 230, height: 180 })
   })
 
   it('prefills function popup inputs from selected assets in function input order', () => {
