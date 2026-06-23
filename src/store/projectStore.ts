@@ -400,6 +400,76 @@ const nodeResourceIds = (project: ProjectState, nodeIds: string[]) => {
   return [...ids]
 }
 
+const outputResourceNodeId = (resultNodeId: string, resourceId: string) => `output_node_${resultNodeId}_${resourceId}`
+
+const materializeResultResourceNodes = (project: ProjectState): ProjectState => {
+  const existingResourceNodeIds = new Set(
+    project.canvas.nodes
+      .filter((node) => node.type === 'resource' && typeof node.data.resourceId === 'string')
+      .map((node) => String(node.data.resourceId)),
+  )
+  const existingNodeIds = new Set(project.canvas.nodes.map((node) => node.id))
+  const materializedNodes: CanvasNode[] = []
+
+  for (const resultNode of project.canvas.nodes) {
+    if (resultNode.type !== 'result_group' || !Array.isArray(resultNode.data.resources)) continue
+
+    const refs = resultNode.data.resources.filter((ref, index, allRefs): ref is ResourceRef => {
+      if (typeof ref !== 'object' || ref === null || !('resourceId' in ref)) return false
+      const resourceId = String((ref as { resourceId: unknown }).resourceId)
+      return (
+        allRefs.findIndex(
+          (item) =>
+            typeof item === 'object' &&
+            item !== null &&
+            'resourceId' in item &&
+            String((item as { resourceId: unknown }).resourceId) === resourceId,
+        ) === index
+      )
+    })
+
+    refs.forEach((ref, index) => {
+      const resource = project.resources[ref.resourceId]
+      if (!resource || existingResourceNodeIds.has(ref.resourceId)) return
+
+      let nodeId = outputResourceNodeId(resultNode.id, ref.resourceId)
+      let suffix = 1
+      while (existingNodeIds.has(nodeId)) {
+        suffix += 1
+        nodeId = `${outputResourceNodeId(resultNode.id, ref.resourceId)}_${suffix}`
+      }
+
+      existingResourceNodeIds.add(ref.resourceId)
+      existingNodeIds.add(nodeId)
+      materializedNodes.push({
+        id: nodeId,
+        type: 'resource',
+        position: {
+          x: resultNode.position.x + (index % 3) * 260,
+          y: resultNode.position.y + Math.floor(index / 3) * 230,
+        },
+        data: {
+          resourceId: ref.resourceId,
+          sourceResultNodeId: resultNode.id,
+          sourceFunctionNodeId:
+            typeof resultNode.data.sourceFunctionNodeId === 'string' ? resultNode.data.sourceFunctionNodeId : undefined,
+          taskId: typeof resultNode.data.taskId === 'string' ? resultNode.data.taskId : undefined,
+        },
+      })
+    })
+  }
+
+  return materializedNodes.length
+    ? {
+        ...project,
+        canvas: {
+          ...project.canvas,
+          nodes: [...project.canvas.nodes, ...materializedNodes],
+        },
+      }
+    : project
+}
+
 const projectWithRecordedHistory = (
   beforeProject: ProjectState,
   nextProject: ProjectState,
@@ -555,7 +625,7 @@ const withBuiltInFunctions = (project: ProjectState, now: string): ProjectState 
     ]),
   ) as Record<string, GenerationFunction>
 
-  return {
+  return materializeResultResourceNodes({
     ...project,
     history: project.history ?? emptyProjectHistory(),
     templates: project.templates ?? {},
@@ -563,7 +633,7 @@ const withBuiltInFunctions = (project: ProjectState, now: string): ProjectState 
       ...project.functions,
       ...builtIns,
     },
-  }
+  })
 }
 
 const activeJobs = (tasks: Record<string, ExecutionTask>) =>
@@ -1440,6 +1510,41 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           .filter((assetId): assetId is string => Boolean(assetId)),
       )
 
+    const outputResourceNodesForRefs = (
+      refs: ResourceRef[],
+      resources: Record<string, Resource>,
+      resultNodeId: string,
+      nodes: CanvasNode[],
+    ) => {
+      const resultNode = nodes.find((node) => node.id === resultNodeId)
+      const existingResourceNodeIds = new Set(
+        nodes
+          .filter((node) => node.type === 'resource' && typeof node.data.resourceId === 'string')
+          .map((node) => String(node.data.resourceId)),
+      )
+      const baseX = resultNode ? resultNode.position.x : 0
+      const baseY = resultNode ? resultNode.position.y : 0
+      const uniqueRefs = refs.filter((ref, index) => refs.findIndex((item) => item.resourceId === ref.resourceId) === index)
+
+      return uniqueRefs
+        .filter((ref) => resources[ref.resourceId] && !existingResourceNodeIds.has(ref.resourceId))
+        .map((ref, index): CanvasNode => ({
+          id: outputResourceNodeId(resultNodeId, ref.resourceId),
+          type: 'resource',
+          position: {
+            x: baseX + (index % 3) * 260,
+            y: baseY + Math.floor(index / 3) * 230,
+          },
+          data: {
+            resourceId: ref.resourceId,
+            sourceResultNodeId: resultNodeId,
+            sourceFunctionNodeId:
+              typeof resultNode?.data.sourceFunctionNodeId === 'string' ? resultNode.data.sourceFunctionNodeId : undefined,
+            taskId: typeof resultNode?.data.taskId === 'string' ? resultNode.data.taskId : undefined,
+          },
+        }))
+    }
+
     const resetResultNodeForRetry = (resultNodeId: string, taskId: string, now: string) => {
       set((current) => {
         const resultNode = current.project.canvas.nodes.find((node) => node.id === resultNodeId && node.type === 'result_group')
@@ -1476,20 +1581,27 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
             canvas: {
               ...current.project.canvas,
-              nodes: current.project.canvas.nodes.map((node) =>
-                node.id === resultNodeId
-                  ? {
-                      ...node,
-                      data: {
-                        ...node.data,
-                        resources: [],
-                        status: 'queued',
-                        error: undefined,
-                        completedAt: undefined,
-                      },
-                    }
-                  : node,
-              ),
+              nodes: current.project.canvas.nodes
+                .filter(
+                  (node) =>
+                    node.type !== 'resource' ||
+                    typeof node.data.resourceId !== 'string' ||
+                    !resourceIdsToRemove.has(node.data.resourceId),
+                )
+                .map((node) =>
+                  node.id === resultNodeId
+                    ? {
+                        ...node,
+                        data: {
+                          ...node.data,
+                          resources: [],
+                          status: 'queued',
+                          error: undefined,
+                          completedAt: undefined,
+                        },
+                      }
+                    : node,
+                ),
             },
           },
         }
@@ -1736,6 +1848,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
         if (taskWasCanceled(item.taskId)) return
         const completedAt = runtime.now()
+        const outputResourceNodes = outputResourceNodesForRefs(
+          resourceRefs,
+          { ...get().project.resources, ...newResources },
+          item.resultNodeId,
+          get().project.canvas.nodes,
+        )
         set((current) => ({
           project: {
             ...current.project,
@@ -1755,19 +1873,22 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
             canvas: {
               ...current.project.canvas,
-              nodes: current.project.canvas.nodes.map((node) =>
-                node.id === item.resultNodeId
-                  ? {
-                      ...node,
-                      data: {
-                        ...node.data,
-                        resources: resourceRefs,
-                        status: 'succeeded',
-                        completedAt,
-                      },
-                    }
-                  : node,
-              ),
+              nodes: [
+                ...current.project.canvas.nodes.map((node) =>
+                  node.id === item.resultNodeId
+                    ? {
+                        ...node,
+                        data: {
+                          ...node.data,
+                          resources: resourceRefs,
+                          status: 'succeeded',
+                          completedAt,
+                        },
+                      }
+                    : node,
+                ),
+                ...outputResourceNodes,
+              ],
             },
           },
         }))
@@ -1923,6 +2044,13 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         }
 
         if (taskWasCanceled(item.taskId)) return
+        const resourceRefs: ResourceRef[] = [{ resourceId, type: 'text' }]
+        const outputResourceNodes = outputResourceNodesForRefs(
+          resourceRefs,
+          { ...get().project.resources, [resourceId]: resource },
+          item.resultNodeId,
+          get().project.canvas.nodes,
+        )
         set((current) => ({
           project: {
             ...current.project,
@@ -1934,26 +2062,29 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
                 ...current.project.tasks[item.taskId]!,
                 status: 'succeeded',
                 compiledWorkflowSnapshot: {},
-                outputRefs: { [outputKey]: [{ resourceId, type: 'text' }] },
+                outputRefs: { [outputKey]: resourceRefs },
                 updatedAt: runtime.now(),
                 completedAt,
               },
             },
             canvas: {
               ...current.project.canvas,
-              nodes: current.project.canvas.nodes.map((node) =>
-                node.id === item.resultNodeId
-                  ? {
-                      ...node,
-                      data: {
-                        ...node.data,
-                        resources: [{ resourceId, type: 'text' }],
-                        status: 'succeeded',
-                        completedAt,
-                      },
-                    }
-                  : node,
-              ),
+              nodes: [
+                ...current.project.canvas.nodes.map((node) =>
+                  node.id === item.resultNodeId
+                    ? {
+                        ...node,
+                        data: {
+                          ...node.data,
+                          resources: resourceRefs,
+                          status: 'succeeded',
+                          completedAt,
+                        },
+                      }
+                    : node,
+                ),
+                ...outputResourceNodes,
+              ],
             },
           },
         }))
@@ -2107,6 +2238,13 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         }
 
         if (taskWasCanceled(item.taskId)) return
+        const resourceRefs: ResourceRef[] = [{ resourceId, type: 'text' }]
+        const outputResourceNodes = outputResourceNodesForRefs(
+          resourceRefs,
+          { ...get().project.resources, [resourceId]: resource },
+          item.resultNodeId,
+          get().project.canvas.nodes,
+        )
         set((current) => ({
           project: {
             ...current.project,
@@ -2118,26 +2256,29 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
                 ...current.project.tasks[item.taskId]!,
                 status: 'succeeded',
                 compiledWorkflowSnapshot: {},
-                outputRefs: { [outputKey]: [{ resourceId, type: 'text' }] },
+                outputRefs: { [outputKey]: resourceRefs },
                 updatedAt: runtime.now(),
                 completedAt,
               },
             },
             canvas: {
               ...current.project.canvas,
-              nodes: current.project.canvas.nodes.map((node) =>
-                node.id === item.resultNodeId
-                  ? {
-                      ...node,
-                      data: {
-                        ...node.data,
-                        resources: [{ resourceId, type: 'text' }],
-                        status: 'succeeded',
-                        completedAt,
-                      },
-                    }
-                  : node,
-              ),
+              nodes: [
+                ...current.project.canvas.nodes.map((node) =>
+                  node.id === item.resultNodeId
+                    ? {
+                        ...node,
+                        data: {
+                          ...node.data,
+                          resources: resourceRefs,
+                          status: 'succeeded',
+                          completedAt,
+                        },
+                      }
+                    : node,
+                ),
+                ...outputResourceNodes,
+              ],
             },
           },
         }))
@@ -2325,6 +2466,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         }
 
         if (taskWasCanceled(item.taskId)) return
+        const outputResourceNodes = outputResourceNodesForRefs(
+          resourceRefs,
+          { ...get().project.resources, ...newResources },
+          item.resultNodeId,
+          get().project.canvas.nodes,
+        )
         set((current) => ({
           project: {
             ...current.project,
@@ -2344,19 +2491,22 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
             canvas: {
               ...current.project.canvas,
-              nodes: current.project.canvas.nodes.map((node) =>
-                node.id === item.resultNodeId
-                  ? {
-                      ...node,
-                      data: {
-                        ...node.data,
-                        resources: resourceRefs,
-                        status: 'succeeded',
-                        completedAt,
-                      },
-                    }
-                  : node,
-              ),
+              nodes: [
+                ...current.project.canvas.nodes.map((node) =>
+                  node.id === item.resultNodeId
+                    ? {
+                        ...node,
+                        data: {
+                          ...node.data,
+                          resources: resourceRefs,
+                          status: 'succeeded',
+                          completedAt,
+                        },
+                      }
+                    : node,
+                ),
+                ...outputResourceNodes,
+              ],
             },
           },
         }))
@@ -2535,6 +2685,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         }
 
         if (taskWasCanceled(item.taskId)) return
+        const outputResourceNodes = outputResourceNodesForRefs(
+          resourceRefs,
+          { ...get().project.resources, ...newResources },
+          item.resultNodeId,
+          get().project.canvas.nodes,
+        )
         set((current) => ({
           project: {
             ...current.project,
@@ -2554,19 +2710,22 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
             canvas: {
               ...current.project.canvas,
-              nodes: current.project.canvas.nodes.map((node) =>
-                node.id === item.resultNodeId
-                  ? {
-                      ...node,
-                      data: {
-                        ...node.data,
-                        resources: resourceRefs,
-                        status: 'succeeded',
-                        completedAt,
-                      },
-                    }
-                  : node,
-              ),
+              nodes: [
+                ...current.project.canvas.nodes.map((node) =>
+                  node.id === item.resultNodeId
+                    ? {
+                        ...node,
+                        data: {
+                          ...node.data,
+                          resources: resourceRefs,
+                          status: 'succeeded',
+                          completedAt,
+                        },
+                      }
+                    : node,
+                ),
+                ...outputResourceNodes,
+              ],
             },
           },
         }))
@@ -2861,6 +3020,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           outputRefsByKey[outputItem.key] = refs
         }
 
+        const outputResourceNodes = outputResourceNodesForRefs(
+          resourceRefs,
+          { ...get().project.resources, ...newResources },
+          item.resultNodeId,
+          get().project.canvas.nodes,
+        )
         set((current) => ({
           project: {
             ...current.project,
@@ -2879,11 +3044,14 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
             canvas: {
               ...current.project.canvas,
-              nodes: current.project.canvas.nodes.map((node) =>
-                node.id === item.resultNodeId
-                  ? { ...node, data: { ...node.data, resources: resourceRefs, status: 'succeeded', completedAt } }
-                  : node,
-              ),
+              nodes: [
+                ...current.project.canvas.nodes.map((node) =>
+                  node.id === item.resultNodeId
+                    ? { ...node, data: { ...node.data, resources: resourceRefs, status: 'succeeded', completedAt } }
+                    : node,
+                ),
+                ...outputResourceNodes,
+              ],
             },
           },
         }))
@@ -3017,6 +3185,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           outputRefsByKey[output.key] = refs
         }
 
+        const outputResourceNodes = outputResourceNodesForRefs(
+          resourceRefs,
+          { ...get().project.resources, ...newResources },
+          item.resultNodeId,
+          get().project.canvas.nodes,
+        )
         set((current) => ({
           project: {
             ...current.project,
@@ -3035,11 +3209,14 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
             canvas: {
               ...current.project.canvas,
-              nodes: current.project.canvas.nodes.map((node) =>
-                node.id === item.resultNodeId
-                  ? { ...node, data: { ...node.data, resources: resourceRefs, status: 'succeeded', completedAt } }
-                  : node,
-              ),
+              nodes: [
+                ...current.project.canvas.nodes.map((node) =>
+                  node.id === item.resultNodeId
+                    ? { ...node, data: { ...node.data, resources: resourceRefs, status: 'succeeded', completedAt } }
+                    : node,
+                ),
+                ...outputResourceNodes,
+              ],
             },
           },
         }))
@@ -5395,8 +5572,17 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         }
 
         if (resource) nextResources[resource.id] = resource
+        const outputResourceNodes =
+          resource && outputRef && status === 'succeeded'
+            ? outputResourceNodesForRefs(
+                [outputRef],
+                { ...state.project.resources, ...nextResources },
+                resultNodeId,
+                [...state.project.canvas.nodes, ...nextNodes, resultNode],
+              )
+            : []
         nextTasks[taskId] = task
-        nextNodes.push(resultNode)
+        nextNodes.push(resultNode, ...outputResourceNodes)
       }
 
       set((current) => ({

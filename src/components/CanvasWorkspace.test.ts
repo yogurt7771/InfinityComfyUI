@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { targetInputInitialResourceValue } from '../domain/inputInitialValue'
 import { buildNodeReferenceMap } from '../domain/nodeReferences'
 import type { ProjectState } from '../domain/types'
-import { buildComfyMinimapLayout, minimapPointToFlowPosition, sameFlowEdgesForSync } from './CanvasWorkspace'
+import { buildComfyMinimapLayout, visibleCanvasNodes, minimapPointToFlowPosition, sameFlowEdgesForSync } from './CanvasWorkspace'
 
 const projectWithOptionalInput = (inputValues: Record<string, unknown> = {}): ProjectState => ({
   schemaVersion: '1.0.0',
@@ -95,6 +95,17 @@ describe('CanvasWorkspace helpers', () => {
 
     expect(sameFlowEdgesForSync(previous, next)).toBe(true)
     expect(sameFlowEdgesForSync(previous, [{ ...next[0], selected: true }])).toBe(false)
+  })
+
+  it('keeps function and run nodes out of the visible canvas surface', () => {
+    const nodes: ProjectState['canvas']['nodes'] = [
+      { id: 'asset_1', type: 'resource', position: { x: 0, y: 0 }, data: { resourceId: 'res_1' } },
+      { id: 'node_fn', type: 'function', position: { x: 260, y: 0 }, data: { functionId: 'fn_render' } },
+      { id: 'node_run', type: 'result_group', position: { x: 520, y: 0 }, data: { taskId: 'task_1' } },
+      { id: 'group_1', type: 'group', position: { x: -40, y: -40 }, data: { childNodeIds: ['asset_1'] } },
+    ]
+
+    expect(visibleCanvasNodes(nodes).map((node) => node.id)).toEqual(['asset_1', 'group_1'])
   })
 
   it('builds incoming and outgoing node reference summaries from canvas edges', () => {

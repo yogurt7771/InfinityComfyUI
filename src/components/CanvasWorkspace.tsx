@@ -112,6 +112,14 @@ const nodeTypes: NodeTypes = {
   default: EmptyNodeView,
 }
 
+export const visibleCanvasNodes = (nodes: CanvasNode[]) =>
+  nodes.filter((node) => node.type === 'resource' || node.type === 'group')
+
+const visibleFlowEdges = (edges: Edge[], visibleNodes: CanvasNode[]) => {
+  const visibleNodeIds = new Set(visibleNodes.map((node) => node.id))
+  return edges.filter((edge) => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target))
+}
+
 const inputKeyFromHandle = (handleId?: string | null) =>
   handleId?.startsWith('input:') ? handleId.slice('input:'.length) : undefined
 
@@ -867,7 +875,7 @@ function CanvasSurface() {
 
   const flowNodes = useMemo<Node[]>(
     () =>
-      project.canvas.nodes.map((node) => ({
+      visibleCanvasNodes(project.canvas.nodes).map((node) => ({
         id: node.id,
         type: node.type,
         position: node.position,
@@ -932,7 +940,8 @@ function CanvasSurface() {
   )
 
   const flowEdges = useMemo<Edge[]>(() => {
-    return buildCanvasFlowEdges(project).map((edge) => ({
+    const visibleNodes = visibleCanvasNodes(project.canvas.nodes)
+    return visibleFlowEdges(buildCanvasFlowEdges(project), visibleNodes).map((edge) => ({
       ...edge,
       selected: selectedEdgeIds.includes(edge.id),
     }))

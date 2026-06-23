@@ -6,7 +6,7 @@ import { GEMINI_LLM_FUNCTION_ID } from '../domain/geminiLlm'
 import { OPENAI_IMAGE_FUNCTION_ID } from '../domain/openaiImage'
 import { GEMINI_IMAGE_FUNCTION_ID } from '../domain/geminiImage'
 import { REQUEST_FUNCTION_ID } from '../domain/requestFunction'
-import type { GenerationFunction } from '../domain/types'
+import type { GenerationFunction, ProjectState } from '../domain/types'
 
 describe('project store actions', () => {
   const flushPromises = async () => {
@@ -666,6 +666,82 @@ describe('project store actions', () => {
     ])
     expect(openAiImageFunction.openaiImage?.baseUrl).toBe('https://image-proxy.local/v1')
     expect(geminiImageFunction.geminiImage?.baseUrl).toBe('https://gemini-proxy.local/v1beta')
+  })
+
+  it('materializes legacy result outputs as visible resource nodes when importing a project', () => {
+    const slice = createProjectSlice({ now: () => '2026-05-09T00:00:00.000Z' })
+    const project: ProjectState = {
+      ...slice.getState().project,
+      canvas: {
+        nodes: [
+          {
+            id: 'node_result_1',
+            type: 'result_group',
+            position: { x: 320, y: 180 },
+            data: {
+              sourceFunctionNodeId: 'node_fn_1',
+              functionId: 'fn_1',
+              taskId: 'task_1',
+              resources: [{ resourceId: 'res_image_1', type: 'image' }],
+              status: 'succeeded',
+            },
+          },
+        ],
+        edges: [],
+        viewport: { x: 0, y: 0, zoom: 1 },
+      },
+      resources: {
+        res_image_1: {
+          id: 'res_image_1',
+          type: 'image',
+          name: 'Result image',
+          value: {
+            assetId: 'asset_1',
+            url: 'data:image/png;base64,abc',
+            filename: 'result.png',
+            mimeType: 'image/png',
+            sizeBytes: 3,
+          },
+          source: {
+            kind: 'function_output',
+            functionNodeId: 'node_fn_1',
+            resultGroupNodeId: 'node_result_1',
+            taskId: 'task_1',
+            outputKey: 'image',
+          },
+        },
+      },
+      assets: {
+        asset_1: {
+          id: 'asset_1',
+          name: 'result.png',
+          mimeType: 'image/png',
+          sizeBytes: 3,
+          blobUrl: 'data:image/png;base64,abc',
+          createdAt: '2026-05-09T00:00:00.000Z',
+        },
+      },
+    }
+
+    slice.getState().importProject({ project })
+
+    expect(
+      slice
+        .getState()
+        .project.canvas.nodes.filter((node) => node.type === 'resource')
+        .map((node) => ({ id: node.id, position: node.position, data: node.data })),
+    ).toEqual([
+      {
+        id: 'output_node_node_result_1_res_image_1',
+        position: { x: 320, y: 180 },
+        data: {
+          resourceId: 'res_image_1',
+          sourceResultNodeId: 'node_result_1',
+          sourceFunctionNodeId: 'node_fn_1',
+          taskId: 'task_1',
+        },
+      },
+    ])
   })
 
   it('does not update or delete built-in functions through function management actions', () => {
@@ -2358,6 +2434,17 @@ describe('project store actions', () => {
       { resourceId: 'res_video_1', type: 'video' },
       { resourceId: 'res_audio_1', type: 'audio' },
       { resourceId: 'res_text_1', type: 'text' },
+    ])
+    expect(
+      state.project.canvas.nodes
+        .filter((node) => node.type === 'resource')
+        .map((node) => ({ resourceId: node.data.resourceId, sourceResultNodeId: node.data.sourceResultNodeId })),
+    ).toEqual([
+      { resourceId: 'res_1', sourceResultNodeId: undefined },
+      { resourceId: 'res_img_1', sourceResultNodeId: 'node_result_1' },
+      { resourceId: 'res_video_1', sourceResultNodeId: 'node_result_1' },
+      { resourceId: 'res_audio_1', sourceResultNodeId: 'node_result_1' },
+      { resourceId: 'res_text_1', sourceResultNodeId: 'node_result_1' },
     ])
   })
 
