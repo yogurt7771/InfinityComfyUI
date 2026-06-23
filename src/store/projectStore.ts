@@ -84,6 +84,7 @@ import type {
   ProjectTransactionType,
   ProjectState,
   RequestFunctionConfig,
+  AssetRecord,
   Resource,
   ResourceRef,
   ResourceType,
@@ -347,6 +348,7 @@ const defaultDeps: ProjectStoreDeps = {
 
 const PROJECT_HISTORY_SCHEMA_VERSION = '1.0.0'
 const PROJECT_HISTORY_LIMIT = 100
+const PROJECT_PERSIST_IDLE_MS = 5000
 
 const emptyProjectHistory = (): ProjectHistoryState => ({
   schemaVersion: PROJECT_HISTORY_SCHEMA_VERSION,
@@ -362,10 +364,55 @@ const ensureProjectHistory = (project: ProjectState): ProjectState =>
         history: emptyProjectHistory(),
       }
 
+const isMediaResourceValue = (value: Resource['value']): value is MediaResourceValue =>
+  typeof value === 'object' && value !== null && 'assetId' in value
+
+const compactHistoryAssetRecord = (asset: AssetRecord): AssetRecord => {
+  const { blobUrl, ...metadata } = asset
+  return metadata
+}
+
+const compactHistoryResource = (resource: Resource): Resource => {
+  if (!isMediaResourceValue(resource.value)) return resource
+  const { thumbnailUrl, ...valueWithoutThumbnail } = resource.value
+  return {
+    ...resource,
+    value: {
+      ...valueWithoutThumbnail,
+      url: '',
+    },
+  }
+}
+
+const compactHistoryResources = (resources: Record<string, Resource>) =>
+  Object.fromEntries(Object.entries(resources).map(([resourceId, resource]) => [resourceId, compactHistoryResource(resource)]))
+
+const compactHistoryAssets = (assets: Record<string, AssetRecord>) =>
+  Object.fromEntries(Object.entries(assets).map(([assetId, asset]) => [assetId, compactHistoryAssetRecord(asset)]))
+
+const compactHistoryTemplates = (templates: ProjectState['templates']) =>
+  Object.fromEntries(
+    Object.entries(templates ?? {}).map(([templateId, template]) => [
+      templateId,
+      {
+        ...template,
+        resources: compactHistoryResources(template.resources),
+        assets: compactHistoryAssets(template.assets),
+      },
+    ]),
+  )
+
+const compactHistoryProjectAssets = (project: ProjectHistorySnapshot): ProjectHistorySnapshot => ({
+  ...project,
+  resources: compactHistoryResources(project.resources),
+  assets: compactHistoryAssets(project.assets),
+  templates: compactHistoryTemplates(project.templates),
+})
+
 const projectHistorySnapshot = (project: ProjectState): ProjectHistorySnapshot => {
   const snapshot = structuredClone(project)
   delete snapshot.history
-  return withoutBuiltInProjectFunctions(snapshot) as ProjectHistorySnapshot
+  return compactHistoryProjectAssets(withoutBuiltInProjectFunctions(snapshot) as ProjectHistorySnapshot)
 }
 
 const historySnapshotKey = (snapshot: ProjectHistorySnapshot) => JSON.stringify(snapshot)
@@ -496,7 +543,39 @@ const restoreProjectHistorySnapshot = (
   snapshot: ProjectHistorySnapshot,
   history: ProjectHistoryState,
   now: string,
-): ProjectState => withBuiltInFunctions({ ...structuredClone(snapshot), history }, now)
+  assetLibrary: Record<string, AssetRecord> = {},
+): ProjectState => {
+  const restored = structuredClone(snapshot)
+  const assets = {
+    ...assetLibrary,
+    ...Object.fromEntries(
+      Object.entries(restored.assets).map(([assetId, asset]) => [
+        assetId,
+        {
+          ...asset,
+          blobUrl: asset.blobUrl ?? assetLibrary[assetId]?.blobUrl,
+        },
+      ]),
+    ),
+  }
+  const resources = Object.fromEntries(
+    Object.entries(restored.resources).map(([resourceId, resource]) => {
+      if (!isMediaResourceValue(resource.value)) return [resourceId, resource]
+      const asset = assets[resource.value.assetId]
+      return [
+        resourceId,
+        {
+          ...resource,
+          value: {
+            ...resource.value,
+            url: resource.value.url || asset?.blobUrl || '',
+          },
+        },
+      ]
+    }),
+  )
+  return withBuiltInFunctions({ ...restored, assets, resources, history }, now)
+}
 
 const initialProject = (now: string, options: ProjectCreateOptions & { id?: string } = {}): ProjectState => {
   const openAiFunction = createOpenAILlmFunction(now)
@@ -6523,7 +6602,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             undoStack: history.undoStack.slice(0, -1),
             redoStack: [...history.redoStack, entry].slice(-PROJECT_HISTORY_LIMIT),
           }
-          const project = restoreProjectHistorySnapshot(entry.before, nextHistory, runtime.now())
+          const project = restoreProjectHistorySnapshot(entry.before, nextHistory, runtime.now(), currentProject.assets)
           return {
             project,
             projectLibrary: {
@@ -6562,7 +6641,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           undoStack: [...history.undoStack, entry].slice(-PROJECT_HISTORY_LIMIT),
           redoStack: history.redoStack.slice(0, -1),
         }
-        const project = restoreProjectHistorySnapshot(entry.after, nextHistory, runtime.now())
+        const project = restoreProjectHistorySnapshot(entry.after, nextHistory, runtime.now(), currentProject.assets)
         return {
           project,
           projectLibrary: {
@@ -7595,11 +7674,41 @@ const loadIndexedDbProjectLibrary = () =>
     .catch(() => undefined)
 
 const startIndexedDbProjectPersistence = () => {
-  void loadIndexedDbProjectLibrary()
+  let saveTimer: number | undefined
+  let loadSettled = false
+  let pendingSaveState: ProjectStoreState | undefined
 
-  projectStore.subscribe((state) => {
+  const saveProjectLibrary = (state: ProjectStoreState) => {
     void setIdb(PROJECT_STORAGE_KEY, withoutBuiltInProjectFunctions(state.project)).catch(() => undefined)
     void setIdb(PROJECT_LIBRARY_STORAGE_KEY, serializeProjectLibrary(state)).catch(() => undefined)
+  }
+
+  const scheduleSaveProjectLibrary = (state: ProjectStoreState) => {
+    if (!loadSettled) {
+      pendingSaveState = state
+      return
+    }
+
+    if (saveTimer !== undefined) window.clearTimeout(saveTimer)
+    saveTimer = window.setTimeout(() => {
+      saveTimer = undefined
+      saveProjectLibrary(state)
+    }, PROJECT_PERSIST_IDLE_MS)
+  }
+
+  void loadIndexedDbProjectLibrary().finally(() => {
+    loadSettled = true
+    const stateToSave = pendingSaveState
+    pendingSaveState = undefined
+    if (stateToSave) scheduleSaveProjectLibrary(stateToSave)
+  })
+
+  projectStore.subscribe((state) => scheduleSaveProjectLibrary(state))
+
+  window.addEventListener('beforeunload', () => {
+    if (!loadSettled) return
+    if (saveTimer !== undefined) window.clearTimeout(saveTimer)
+    saveProjectLibrary(projectStore.getState())
   })
 }
 
@@ -7621,7 +7730,7 @@ const startDesktopProjectPersistence = (storage: DesktopProjectStorage) => {
     saveTimer = window.setTimeout(() => {
       saveTimer = undefined
       void saveProjectLibrary(state)
-    }, 250)
+    }, PROJECT_PERSIST_IDLE_MS)
   }
 
   void storage

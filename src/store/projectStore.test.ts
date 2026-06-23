@@ -1843,6 +1843,45 @@ describe('project store actions', () => {
     expect(slice.getState().project.history?.redoStack).toHaveLength(0)
   })
 
+  it('keeps media blob urls out of history snapshots and rehydrates them on redo', () => {
+    const ids = ['res_image', 'asset_image']
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now: () => '2026-05-09T00:00:00.000Z',
+      randomInt: () => 1,
+    })
+    const imageUrl = 'data:image/png;base64,AAA'
+    const thumbUrl = 'data:image/png;base64,THUMB'
+
+    slice.getState().addMediaResourceAtPosition(
+      'image',
+      'Render.png',
+      {
+        url: imageUrl,
+        filename: 'render.png',
+        mimeType: 'image/png',
+        sizeBytes: 3,
+        width: 64,
+        height: 64,
+        thumbnailUrl: thumbUrl,
+      },
+      { x: 100, y: 120 },
+    )
+
+    const entryJson = JSON.stringify(slice.getState().project.history?.undoStack.at(-1))
+    expect(entryJson).not.toContain(imageUrl)
+    expect(entryJson).not.toContain(thumbUrl)
+
+    slice.getState().undoLastProjectChange()
+    expect(slice.getState().project.resources).not.toHaveProperty('res_image')
+    expect(slice.getState().project.assets.asset_image.blobUrl).toBe(imageUrl)
+
+    slice.getState().redoProjectChange()
+    const mediaValue = slice.getState().project.resources.res_image.value
+    expect(typeof mediaValue === 'object' && mediaValue !== null && 'url' in mediaValue ? mediaValue.url : undefined).toBe(imageUrl)
+    expect(slice.getState().project.assets.asset_image.blobUrl).toBe(imageUrl)
+  })
+
   it('groups selected canvas nodes, ungroups them, and records both commands', () => {
     const ids = ['res_1', 'res_2', 'group_1']
     const slice = createProjectSlice({

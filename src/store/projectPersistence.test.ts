@@ -7,7 +7,7 @@ describe('desktop project persistence', () => {
     Reflect.deleteProperty(window, 'infinityComfyUIStorage')
   })
 
-  it('loads through the Electron bridge and saves the active project library after changes', async () => {
+  it('loads through the Electron bridge and saves the active project library after 5 idle seconds', async () => {
     vi.useFakeTimers()
     const loadProjectLibrary = vi.fn().mockResolvedValue(undefined)
     const saveProjectLibrary = vi.fn().mockResolvedValue({ ok: true, rootPath: 'C:/Infinity/projects' })
@@ -27,7 +27,11 @@ describe('desktop project persistence', () => {
     expect(loadProjectLibrary).toHaveBeenCalledTimes(1)
 
     projectStore.getState().updateProjectMetadata({ name: 'Desktop Saved Project' })
-    await vi.advanceTimersByTimeAsync(350)
+    await vi.advanceTimersByTimeAsync(4999)
+
+    expect(saveProjectLibrary).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(1)
 
     const savedLibrary = saveProjectLibrary.mock.calls.at(-1)?.[0]
     expect(savedLibrary).toMatchObject({
@@ -63,7 +67,7 @@ describe('desktop project persistence', () => {
     savedProject.project.name = 'Saved Desktop Project'
 
     projectStore.getState().updateProjectMetadata({ name: 'Unsaved Startup Default' })
-    await vi.advanceTimersByTimeAsync(350)
+    await vi.advanceTimersByTimeAsync(5000)
 
     expect(saveProjectLibrary).not.toHaveBeenCalled()
 
@@ -75,7 +79,7 @@ describe('desktop project persistence', () => {
     })
     await Promise.resolve()
     await Promise.resolve()
-    await vi.advanceTimersByTimeAsync(350)
+    await vi.advanceTimersByTimeAsync(5000)
 
     expect(projectStore.getState().project.project.id).toBe(savedProject.project.id)
     const savedLibrary = saveProjectLibrary.mock.calls.at(-1)?.[0]

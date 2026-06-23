@@ -239,6 +239,70 @@ describe('LeftPanel', () => {
     expect(redoSpy).toHaveBeenCalled()
   })
 
+  it('refreshes the open operation history list after an idle delay', () => {
+    vi.useFakeTimers()
+    try {
+      const project = panelProject()
+      const projectSnapshot = structuredClone(project)
+      delete projectSnapshot.history
+      project.history = {
+        schemaVersion: '1.0.0',
+        undoStack: [
+          {
+            id: 'history_1',
+            label: 'Create first asset',
+            transactionType: 'asset',
+            createdAt: '2026-05-09T00:00:00.000Z',
+            affectedIds: { assetIds: ['res_image'], nodeIds: [] },
+            preview: { title: 'Create first asset', subtitle: 'Render.png', assetIds: ['res_image'] },
+            before: projectSnapshot,
+            after: projectSnapshot,
+          },
+        ],
+        redoStack: [],
+      }
+      projectStore.setState({
+        project,
+        projectLibrary: { [project.project.id]: project },
+        selectedNodeId: undefined,
+        selectedNodeIds: [],
+      } as unknown as Partial<ReturnType<typeof projectStore.getState>>)
+
+      render(<LeftPanel />)
+      fireEvent.click(screen.getByRole('button', { name: 'History' }))
+
+      expect(screen.getByText('Create first asset')).toBeVisible()
+
+      const nextProject = structuredClone(project)
+      nextProject.history?.undoStack.push({
+        id: 'history_2',
+        label: 'Create second asset',
+        transactionType: 'asset',
+        createdAt: '2026-05-09T00:00:05.000Z',
+        affectedIds: { assetIds: ['res_text'], nodeIds: [] },
+        preview: { title: 'Create second asset', subtitle: 'Prompt', assetIds: ['res_text'] },
+        before: projectSnapshot,
+        after: projectSnapshot,
+      })
+      act(() => {
+        projectStore.setState({
+          project: nextProject,
+          projectLibrary: { [nextProject.project.id]: nextProject },
+        } as unknown as Partial<ReturnType<typeof projectStore.getState>>)
+      })
+
+      expect(screen.queryByText('Create second asset')).not.toBeInTheDocument()
+
+      act(() => {
+        vi.advanceTimersByTime(5000)
+      })
+
+      expect(screen.getByText('Create second asset')).toBeVisible()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('opens asset list resources in a preview modal', () => {
     vi.useFakeTimers()
     try {

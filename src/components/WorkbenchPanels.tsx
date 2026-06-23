@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import JSZip from 'jszip'
 import {
   Download,
@@ -73,6 +73,7 @@ const outputSources: FunctionOutputDef['extract']['source'][] = [
 const requestInputTargets: NonNullable<FunctionInputDef['bind']['requestTarget']>[] = ['url_param', 'header', 'body']
 
 const activeTaskStatuses = new Set<ExecutionTask['status']>(['pending', 'queued', 'running', 'fetching_outputs'])
+const HISTORY_LIST_IDLE_MS = 5000
 
 const commitActiveTextControl = () => {
   const activeElement = document.activeElement
@@ -382,6 +383,40 @@ const inputTargetNodeId = (project: ProjectState, task: ExecutionTask, input: Ex
   if (resource?.source.functionNodeId) return resource.source.functionNodeId
   return undefined
 }
+
+type HistoryDockRow = {
+  id: string
+  entryId: string
+  label: string
+  title: string
+  subtitle: string
+  stack: 'undo' | 'redo'
+  assetIds: string[]
+  nodeIds: string[]
+}
+
+const buildHistoryDockRows = (project: ProjectState): HistoryDockRow[] => [
+  ...(project.history?.undoStack ?? []).toReversed().map((entry) => ({
+    id: `undo-${entry.id}`,
+    entryId: entry.id,
+    label: entry.label,
+    title: entry.preview.title || entry.label,
+    subtitle: entry.preview.subtitle ?? entry.transactionType,
+    stack: 'undo' as const,
+    assetIds: entry.preview.assetIds ?? entry.affectedIds.assetIds ?? [],
+    nodeIds: entry.preview.nodeIds ?? entry.affectedIds.nodeIds ?? [],
+  })),
+  ...(project.history?.redoStack ?? []).toReversed().map((entry) => ({
+    id: `redo-${entry.id}`,
+    entryId: entry.id,
+    label: entry.label,
+    title: entry.preview.title || entry.label,
+    subtitle: entry.preview.subtitle ?? entry.transactionType,
+    stack: 'redo' as const,
+    assetIds: entry.preview.assetIds ?? entry.affectedIds.assetIds ?? [],
+    nodeIds: entry.preview.nodeIds ?? entry.affectedIds.nodeIds ?? [],
+  })),
+]
 
 function RunInspector({
   project,
@@ -3041,13 +3076,13 @@ export function LeftPanel() {
   const redoProjectChange = useProjectStore((state) => state.redoProjectChange)
   const [assetsOpen, setAssetsOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [historyRows, setHistoryRows] = useState<HistoryDockRow[]>([])
   const [previewResource, setPreviewResource] = useState<Resource | undefined>()
   const previewTimerRef = useRef<number | undefined>(undefined)
+  const historyRefreshTimerRef = useRef<number | undefined>(undefined)
   const resources = Object.values(project.resources)
-  const historyEntries = [
-    ...(project.history?.undoStack ?? []).toReversed().map((entry) => ({ entry, stack: 'undo' as const })),
-    ...(project.history?.redoStack ?? []).toReversed().map((entry) => ({ entry, stack: 'redo' as const })),
-  ]
+  const historyCount = (project.history?.undoStack.length ?? 0) + (project.history?.redoStack.length ?? 0)
+  const refreshHistoryRows = useCallback(() => setHistoryRows(buildHistoryDockRows(project)), [project])
   const focusResourceNode = (resource: Resource) => {
     setPreviewResource(undefined)
     const nodeId = resourceOwnerNodeId(project, resource)
@@ -3062,6 +3097,27 @@ export function LeftPanel() {
     },
     [],
   )
+  useEffect(() => {
+    if (!historyOpen) {
+      if (historyRefreshTimerRef.current !== undefined) {
+        window.clearTimeout(historyRefreshTimerRef.current)
+        historyRefreshTimerRef.current = undefined
+      }
+      return
+    }
+
+    if (historyRefreshTimerRef.current !== undefined) window.clearTimeout(historyRefreshTimerRef.current)
+    historyRefreshTimerRef.current = window.setTimeout(() => {
+      refreshHistoryRows()
+      historyRefreshTimerRef.current = undefined
+    }, HISTORY_LIST_IDLE_MS)
+
+    return () => {
+      if (historyRefreshTimerRef.current === undefined) return
+      window.clearTimeout(historyRefreshTimerRef.current)
+      historyRefreshTimerRef.current = undefined
+    }
+  }, [historyOpen, project, refreshHistoryRows])
 
   return (
     <aside
@@ -3099,7 +3155,11 @@ export function LeftPanel() {
           aria-expanded={historyOpen}
           aria-controls="history-popover"
           onClick={() => {
-            setHistoryOpen((value) => !value)
+            setHistoryOpen((value) => {
+              const nextOpen = !value
+              if (nextOpen) setHistoryRows(buildHistoryDockRows(project))
+              return nextOpen
+            })
             setAssetsOpen(false)
           }}
         >
@@ -3157,7 +3217,7 @@ export function LeftPanel() {
           <div className="panel-title asset-popover-title">
             <History size={16} />
             <h2>History</h2>
-            <span>{historyEntries.length}</span>
+            <span>{historyOpen ? historyRows.length : historyCount}</span>
           </div>
           <div className="history-dock-actions">
             <button type="button" aria-label="Undo last operation" onClick={undoLastProjectChange}>
@@ -3170,18 +3230,17 @@ export function LeftPanel() {
             </button>
           </div>
           <div className="item-list asset-list operation-history-list" aria-label="Operation history list">
-            {historyEntries.length > 0 ? (
-              historyEntries.map(({ entry, stack }) => {
-                const assetIds = entry.preview.assetIds ?? entry.affectedIds.assetIds ?? []
-                const previewResources = assetIds.map((resourceId) => project.resources[resourceId]).filter((item): item is Resource => Boolean(item))
-                const focusNodeId = (entry.preview.nodeIds ?? entry.affectedIds.nodeIds ?? []).find((nodeId) =>
+            {historyRows.length > 0 ? (
+              historyRows.map((row) => {
+                const previewResources = row.assetIds.map((resourceId) => project.resources[resourceId]).filter((item): item is Resource => Boolean(item))
+                const focusNodeId = row.nodeIds.find((nodeId) =>
                   project.canvas.nodes.some((node) => node.id === nodeId),
                 )
 
                 return (
                   <article
-                    key={`${stack}-${entry.id}`}
-                    className={`history-command-row history-command-row-${stack}`}
+                    key={row.id}
+                    className={`history-command-row history-command-row-${row.stack}`}
                     onDoubleClick={() => {
                       if (!focusNodeId) return
                       selectNode(focusNodeId)
@@ -3189,14 +3248,14 @@ export function LeftPanel() {
                     }}
                   >
                     <div className="history-command-main">
-                      <strong>{entry.preview.title || entry.label}</strong>
+                      <strong>{row.title}</strong>
                       <small>
-                        {entry.preview.subtitle ?? entry.transactionType}
-                        <span>{stack === 'redo' ? 'redo' : 'undo'}</span>
+                        {row.subtitle}
+                        <span>{row.stack === 'redo' ? 'redo' : 'undo'}</span>
                       </small>
                     </div>
                     {previewResources.length > 0 ? (
-                      <div className="history-command-assets" aria-label={`${entry.label} assets`}>
+                      <div className="history-command-assets" aria-label={`${row.label} assets`}>
                         {previewResources.slice(0, 4).map((resource) => (
                           <button
                             key={resource.id}
