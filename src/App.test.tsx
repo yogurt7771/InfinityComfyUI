@@ -3,6 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { projectStore } from './store/projectStore'
 
+vi.mock('./components/canvas/CanvasWorkspace', () => ({
+  CanvasWorkspace: () => <section aria-label="Mock asset canvas" />,
+}))
+
 describe('App', () => {
   const originalCheckComfyEndpointStatuses = projectStore.getState().checkComfyEndpointStatuses
 

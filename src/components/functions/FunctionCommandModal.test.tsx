@@ -131,4 +131,37 @@ describe('FunctionCommandModal', () => {
     expect(screen.getByText('Expected outputs')).toBeInTheDocument()
     expect(screen.getByTestId('expected-output-image')).toHaveTextContent('image')
   })
+
+  it('assigns a picked canvas resource to the requested slot', () => {
+    const onRun = vi.fn()
+    const picked = resource('res_picked_image', 'image', {
+      assetId: 'asset_picked',
+      url: '/picked.png',
+      filename: 'picked.png',
+      mimeType: 'image/png',
+      sizeBytes: 1,
+    })
+
+    render(
+      <FunctionCommandModal
+        functionDef={functionDef()}
+        candidateResources={[]}
+        pickedResource={{ pickId: 'pick_1', inputKey: 'image', resource: picked }}
+        onClose={() => undefined}
+        onRun={onRun}
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText('prompt input'), { target: { value: 'use picked image' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Run function' }))
+
+    expect(onRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inputValues: expect.objectContaining({
+          image: { resourceId: 'res_picked_image', type: 'image' },
+          prompt: 'use picked image',
+        }),
+      }),
+    )
+  })
 })

@@ -1,8 +1,8 @@
-import { Background, Controls, ReactFlow, ReactFlowProvider, type NodeTypes } from '@xyflow/react'
+import { Background, Controls, ReactFlow, ReactFlowProvider, useReactFlow, type NodeTypes } from '@xyflow/react'
 import { useMemo, useState } from 'react'
 import { createAssetLineageEdge, type AssetGraphNode, type AssetLineageEdge } from '../../domain/assetGraph'
 import { buildAssetGraphProjection } from '../../domain/assetGraphProjection'
-import type { CanvasNode, ProjectState, ResourceRef, ResourceType } from '../../domain/types'
+import type { CanvasNode, ProjectState, Resource, ResourceRef, ResourceType } from '../../domain/types'
 import { useProjectStore } from '../../store/projectStore'
 import { FunctionCommandModal } from '../functions/FunctionCommandModal'
 import { AssetNodeView } from './AssetNodeView'
@@ -15,6 +15,16 @@ export const assetCanvasNodeTypes: NodeTypes = {
   group: GroupNodeView,
 }
 
+type AssetGraphSelectionNode = {
+  type?: string
+  data?: unknown
+}
+
+type ContextMenuState = {
+  client: { x: number; y: number }
+  flow: { x: number; y: number }
+}
+
 const isResourceRef = (value: unknown): value is ResourceRef =>
   typeof value === 'object' &&
   value !== null &&
@@ -22,6 +32,9 @@ const isResourceRef = (value: unknown): value is ResourceRef =>
   typeof (value as { resourceId?: unknown }).resourceId === 'string'
 
 const numberFromData = (value: unknown, fallback: number) => (typeof value === 'number' && Number.isFinite(value) ? value : fallback)
+
+const resourceIdFromNodeData = (data: unknown) =>
+  data && typeof data === 'object' && 'resourceId' in data && typeof data.resourceId === 'string' ? data.resourceId : undefined
 
 const legacyResourceNodeToAssetNode = (node: CanvasNode, project: ProjectState): AssetGraphNode | undefined => {
   const resourceId = typeof node.data.resourceId === 'string' ? node.data.resourceId : undefined
@@ -99,11 +112,27 @@ export function projectToAssetGraph(project: ProjectState): { nodes: AssetGraphN
   }
 }
 
+export function selectedResourcesForAssetNodes(project: ProjectState, selectedNodes: AssetGraphSelectionNode[]) {
+  const resourceIds = selectedNodes
+    .filter((node) => node.type === 'asset')
+    .map((node) => resourceIdFromNodeData(node.data))
+    .filter((resourceId): resourceId is string => Boolean(resourceId))
+  return resourceIds.map((resourceId) => project.resources[resourceId]).filter((resource): resource is ProjectState['resources'][string] => Boolean(resource))
+}
+
 function CanvasSurface() {
   const project = useProjectStore((state) => state.project)
-  const [contextMenuPosition, setContextMenuPosition] = useState<{ x: number; y: number }>()
+  const runFunctionAtPosition = useProjectStore((state) => state.runFunctionAtPosition)
+  const { screenToFlowPosition } = useReactFlow()
+  const [contextMenuPosition, setContextMenuPosition] = useState<ContextMenuState>()
   const [commandFunctionId, setCommandFunctionId] = useState<string>()
   const [pickMode, setPickMode] = useState<{ inputKey: string; inputType?: ResourceType }>()
+  const [selectedResourceIds, setSelectedResourceIds] = useState<string[]>([])
+  const [pickedResource, setPickedResource] = useState<{
+    pickId: string
+    inputKey: string
+    resource: Resource
+  }>()
   const graph = useMemo(() => projectToAssetGraph(project), [project])
   const projection = useMemo(() => buildAssetGraphProjection(graph), [graph])
   const nodes = useMemo(
@@ -123,6 +152,13 @@ function CanvasSurface() {
   )
 
   const commandFunction = commandFunctionId ? project.functions[commandFunctionId] : undefined
+  const candidateResources = useMemo(
+    () =>
+      selectedResourceIds
+        .map((resourceId) => project.resources[resourceId])
+        .filter((resource): resource is Resource => Boolean(resource)),
+    [project.resources, selectedResourceIds],
+  )
 
   return (
     <section className="canvas-workspace asset-only-canvas-workspace" aria-label="Asset canvas workspace">
@@ -133,16 +169,35 @@ function CanvasSurface() {
         fitView
         onPaneContextMenu={(event) => {
           event.preventDefault()
-          setContextMenuPosition({ x: event.clientX, y: event.clientY })
+          setContextMenuPosition({
+            client: { x: event.clientX, y: event.clientY },
+            flow: screenToFlowPosition({ x: event.clientX, y: event.clientY }),
+          })
         }}
         onPaneClick={() => setContextMenuPosition(undefined)}
+        onNodeClick={(_, node) => {
+          if (!pickMode || node.type !== 'asset') return
+          const resourceId = resourceIdFromNodeData(node.data)
+          if (!resourceId) return
+          const resource = project.resources[resourceId]
+          if (!resource || (pickMode.inputType && resource.type !== pickMode.inputType)) return
+          setPickedResource({
+            pickId: `${pickMode.inputKey}:${resource.id}:${Date.now()}`,
+            inputKey: pickMode.inputKey,
+            resource,
+          })
+          setPickMode(undefined)
+        }}
+        onSelectionChange={({ nodes: selectedNodes }) => {
+          setSelectedResourceIds(selectedResourcesForAssetNodes(project, selectedNodes as AssetGraphSelectionNode[]).map((resource) => resource.id))
+        }}
       >
         <Background />
         <Controls />
       </ReactFlow>
       <CanvasContextMenus
         functions={Object.values(project.functions)}
-        position={contextMenuPosition}
+        position={contextMenuPosition?.client}
         onRunFunction={(functionId) => {
           setContextMenuPosition(undefined)
           setCommandFunctionId(functionId)
@@ -156,13 +211,23 @@ function CanvasSurface() {
       {commandFunction ? (
         <FunctionCommandModal
           functionDef={commandFunction}
-          candidateResources={[]}
+          candidateResources={candidateResources}
+          pickedResource={pickedResource}
           onClose={() => setCommandFunctionId(undefined)}
           onPickSlot={(inputKey) => {
             const input = commandFunction.inputs.find((item) => item.key === inputKey)
             setPickMode({ inputKey, inputType: input?.type })
           }}
-          onRun={() => setCommandFunctionId(undefined)}
+          onRun={(request) => {
+            void runFunctionAtPosition(
+              request.functionId,
+              request.inputValues,
+              contextMenuPosition?.flow ?? { x: 0, y: 0 },
+              commandFunction.runtimeDefaults?.runCount ?? 1,
+            )
+            setCommandFunctionId(undefined)
+            setPickMode(undefined)
+          }}
         />
       ) : null}
     </section>

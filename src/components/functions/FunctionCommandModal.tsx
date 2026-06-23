@@ -1,5 +1,5 @@
 import { Play, X } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { GenerationFunction, PrimitiveInputValue, Resource, ResourceRef } from '../../domain/types'
 import { FunctionParameters } from './FunctionParameters'
 import { InputTray } from './InputTray'
@@ -16,6 +16,11 @@ export type FunctionCommandRunRequest = {
 type FunctionCommandModalProps = {
   functionDef: GenerationFunction
   candidateResources: Resource[]
+  pickedResource?: {
+    pickId: string
+    inputKey: string
+    resource: Resource
+  }
   pendingOutputs?: Resource[]
   onClose: () => void
   onPickSlot?: (inputKey: string) => void
@@ -42,6 +47,7 @@ const moveResource = (resources: Resource[], resourceId: string, direction: 'up'
 export function FunctionCommandModal({
   functionDef,
   candidateResources,
+  pickedResource,
   pendingOutputs,
   onClose,
   onPickSlot,
@@ -62,6 +68,24 @@ export function FunctionCommandModal({
       return next
     })
   }
+
+  useEffect(() => {
+    setResources(candidateResources)
+    const nextAssignments = autoAssignFunctionInputs(functionDef.inputs, candidateResources)
+    setAssignments(nextAssignments)
+    setPrimitiveValues(initialPrimitiveValues(functionDef, nextAssignments))
+  }, [candidateResources, functionDef])
+
+  useEffect(() => {
+    if (!pickedResource) return
+    setResources((current) =>
+      current.some((resource) => resource.id === pickedResource.resource.id) ? current : [...current, pickedResource.resource],
+    )
+    setAssignment(pickedResource.inputKey, {
+      resourceId: pickedResource.resource.id,
+      type: pickedResource.resource.type,
+    })
+  }, [pickedResource?.pickId])
 
   const run = () => {
     const inputValues: Record<string, PrimitiveInputValue | ResourceRef> = {}

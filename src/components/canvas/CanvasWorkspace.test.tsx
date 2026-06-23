@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ProjectState } from '../../domain/types'
-import { assetCanvasNodeTypes, projectToAssetGraph } from './CanvasWorkspace'
+import { assetCanvasNodeTypes, projectToAssetGraph, selectedResourcesForAssetNodes } from './CanvasWorkspace'
 
 const project = (): ProjectState => ({
   schemaVersion: '1.0.0',
@@ -109,5 +109,17 @@ describe('asset canvas workspace', () => {
         targetResourceId: 'res_output',
       },
     ])
+  })
+
+  it('uses selected asset nodes as function command input candidates', () => {
+    const sourceProject = project()
+
+    expect(
+      selectedResourcesForAssetNodes(sourceProject, [
+        { type: 'asset', data: { resourceId: 'res_prompt' } },
+        { type: 'group', data: {} },
+        { type: 'asset', data: { resourceId: 'missing_resource' } },
+      ]).map((resource) => resource.id),
+    ).toEqual(['res_prompt'])
   })
 })

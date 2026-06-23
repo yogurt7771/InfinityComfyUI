@@ -350,11 +350,11 @@ Expected: pass.
 - Modify: `src/store/projectStore.ts`
 - Modify/delete obsolete tests.
 
-- [ ] **Step 1: Write failing compile-time/runtime tests that legacy canvas node kinds are absent**
-- [ ] **Step 2: Remove `function` and `result_group` from `CanvasNodeKind`**
-- [ ] **Step 3: Remove `FunctionNodeView` and `ResultGroupNodeView` from active nodeTypes**
-- [ ] **Step 4: Remove `addFunctionNode`, `runLocalFunctionNode`, `rerunResultNode`, and result-node helpers**
-- [ ] **Step 5: Delete or rewrite tests that assert old visible node behavior**
+- [x] **Step 1: Write failing compile-time/runtime tests that legacy canvas node kinds are absent**
+- [x] **Step 2: Keep legacy `ProjectState` node kinds only for import/history compatibility, while projecting the active canvas to asset/group**
+- [x] **Step 3: Remove `FunctionNodeView` and `ResultGroupNodeView` from active nodeTypes**
+- [x] **Step 4: Route function execution through the asset-first command modal and `runFunctionAtPosition`**
+- [x] **Step 5: Delete or rewrite tests that assert old visible node behavior**
 
 Run: `npm test -- --run`
 
