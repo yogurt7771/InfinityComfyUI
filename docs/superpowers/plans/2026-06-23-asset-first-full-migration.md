@@ -292,14 +292,14 @@ Expected: pass.
 - Modify: `src/domain/runs/adapters/*.ts`
 - Test: `src/store/projectStore.test.ts`
 
-- [ ] **Step 1: Write failing tests for every provider asserting no `function` or `result_group` canvas node is created**
-- [ ] **Step 2: Migrate ComfyUI runs**
-- [ ] **Step 3: Migrate OpenAI LLM runs**
-- [ ] **Step 4: Migrate Gemini LLM runs**
-- [ ] **Step 5: Migrate OpenAI image runs**
-- [ ] **Step 6: Migrate Gemini image runs**
-- [ ] **Step 7: Migrate HTTP request runs**
-- [ ] **Step 8: Migrate local transform runs**
+- [x] **Step 1: Write failing tests for every provider asserting no `function` or `result_group` canvas node is created**
+- [x] **Step 2: Migrate ComfyUI runs**
+- [x] **Step 3: Migrate OpenAI LLM runs**
+- [x] **Step 4: Migrate Gemini LLM runs**
+- [x] **Step 5: Migrate OpenAI image runs**
+- [x] **Step 6: Migrate Gemini image runs**
+- [x] **Step 7: Migrate HTTP request runs**
+- [x] **Step 8: Migrate local transform runs**
 
 Run: `npm test -- --run src/store/projectStore.test.ts src/domain/runs`
 

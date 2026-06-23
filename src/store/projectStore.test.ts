@@ -5,7 +5,7 @@ import { createOpenAILlmFunction, OPENAI_LLM_FUNCTION_ID } from '../domain/opena
 import { GEMINI_LLM_FUNCTION_ID } from '../domain/geminiLlm'
 import { OPENAI_IMAGE_FUNCTION_ID } from '../domain/openaiImage'
 import { GEMINI_IMAGE_FUNCTION_ID } from '../domain/geminiImage'
-import { REQUEST_FUNCTION_ID } from '../domain/requestFunction'
+import { createRequestFunction, REQUEST_FUNCTION_ID } from '../domain/requestFunction'
 import { LOCAL_TEXT_TRIM_FUNCTION_ID } from '../domain/localTransforms'
 import type { GenerationFunction } from '../domain/types'
 
@@ -1310,11 +1310,16 @@ describe('project store actions', () => {
       { id: 'node_res_output', resourceId: 'res_output' },
     ])
     expect(state.project.resources.res_output.value).toBe('warm kitchen')
-    expect(state.project.resources.res_output.source).toMatchObject({
+    expect(state.project.resources.res_output.source).toEqual({
       kind: 'function_output',
-      functionNodeId: 'task_1',
-      taskId: 'task_1',
+      runId: 'task_1',
       outputKey: 'text',
+    })
+    expect(state.project.runs!.task_1).toMatchObject({
+      id: 'task_1',
+      provider: 'local_transform',
+      status: 'succeeded',
+      outputRefs: { text: [{ resourceId: 'res_output', type: 'text' }] },
     })
     expect(state.project.tasks.task_1.inputRefs).toEqual({
       text: { resourceId: 'res_input', type: 'text' },
@@ -1322,6 +1327,270 @@ describe('project store actions', () => {
     expect(state.project.tasks.task_1.outputRefs).toEqual({
       text: [{ resourceId: 'res_output', type: 'text' }],
     })
+  })
+
+  it('runs OpenAI LLM from popup inputs as asset-only run snapshots', async () => {
+    const ids = ['task_openai', 'res_text']
+    const originalFetch = globalThis.fetch
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'openai text' } }] }),
+    })
+    globalThis.fetch = fetchMock as typeof fetch
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now: () => '2026-05-08T09:00:00.000Z',
+    })
+
+    try {
+      slice.setState((state) => ({
+        project: {
+          ...state.project,
+          functions: {
+            ...state.project.functions,
+            [OPENAI_LLM_FUNCTION_ID]: {
+              ...state.project.functions[OPENAI_LLM_FUNCTION_ID]!,
+              openai: {
+                baseUrl: 'https://api.openai.com/v1',
+                apiKey: 'sk-test',
+                model: 'gpt-4.1-mini',
+                messages: [{ role: 'user', content: [{ type: 'text', content: 'Say ok' }] }],
+              },
+            },
+          },
+        },
+      }))
+
+      await slice.getState().runFunctionAtPosition(OPENAI_LLM_FUNCTION_ID, {}, { x: 240, y: 0 }, 1)
+
+      const state = slice.getState().project
+      expect(state.canvas.nodes.filter((node) => node.type === 'function' || node.type === 'result_group')).toEqual([])
+      expect(state.tasks.task_openai).toMatchObject({
+        status: 'succeeded',
+        outputRefs: { text: [{ resourceId: 'res_text', type: 'text' }] },
+      })
+      expect(state.runs!.task_openai).toMatchObject({
+        provider: 'openai_llm',
+        status: 'succeeded',
+        outputRefs: { text: [{ resourceId: 'res_text', type: 'text' }] },
+      })
+      expect(state.resources.res_text).toMatchObject({
+        type: 'text',
+        value: 'openai text',
+        source: { kind: 'function_output', runId: 'task_openai', outputKey: 'text' },
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('runs Gemini LLM from popup inputs as asset-only run snapshots', async () => {
+    const ids = ['task_gemini', 'res_text']
+    const originalFetch = globalThis.fetch
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ candidates: [{ content: { parts: [{ text: 'gemini text' }] } }] }),
+    })
+    globalThis.fetch = fetchMock as typeof fetch
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now: () => '2026-05-08T09:00:00.000Z',
+    })
+
+    try {
+      slice.setState((state) => ({
+        project: {
+          ...state.project,
+          functions: {
+            ...state.project.functions,
+            [GEMINI_LLM_FUNCTION_ID]: {
+              ...state.project.functions[GEMINI_LLM_FUNCTION_ID]!,
+              gemini: {
+                baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+                apiKey: 'gemini-test',
+                model: 'gemini-2.5-flash',
+                messages: [{ role: 'user', content: [{ type: 'text', content: 'Say ok' }] }],
+              },
+            },
+          },
+        },
+      }))
+
+      await slice.getState().runFunctionAtPosition(GEMINI_LLM_FUNCTION_ID, {}, { x: 240, y: 0 }, 1)
+
+      const state = slice.getState().project
+      expect(state.canvas.nodes.filter((node) => node.type === 'function' || node.type === 'result_group')).toEqual([])
+      expect(state.runs!.task_gemini).toMatchObject({
+        provider: 'gemini_llm',
+        status: 'succeeded',
+        outputRefs: { text: [{ resourceId: 'res_text', type: 'text' }] },
+      })
+      expect(state.resources.res_text).toMatchObject({
+        type: 'text',
+        value: 'gemini text',
+        source: { kind: 'function_output', runId: 'task_gemini', outputKey: 'text' },
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('runs OpenAI image and Gemini image from popup inputs as asset-only run snapshots', async () => {
+    const ids = ['task_openai_image', 'res_openai_image', 'asset_openai_image', 'task_gemini_image', 'res_gemini_image', 'asset_gemini_image']
+    const originalFetch = globalThis.fetch
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ data: [{ b64_json: 'aW1hZ2U=', output_format: 'png' }] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: 'Z2VtaW5p' } }] } }],
+        }),
+      })
+    globalThis.fetch = fetchMock as typeof fetch
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now: () => '2026-05-08T09:00:00.000Z',
+    })
+
+    try {
+      slice.setState((state) => ({
+        project: {
+          ...state.project,
+          functions: {
+            ...state.project.functions,
+            [OPENAI_IMAGE_FUNCTION_ID]: {
+              ...state.project.functions[OPENAI_IMAGE_FUNCTION_ID]!,
+              openaiImage: {
+                baseUrl: 'https://api.openai.com/v1',
+                apiKey: 'sk-image',
+                model: 'gpt-image-2',
+                size: 'auto',
+                quality: 'auto',
+                background: 'auto',
+                outputFormat: 'png',
+                outputCompression: 100,
+                user: '',
+              },
+            },
+            [GEMINI_IMAGE_FUNCTION_ID]: {
+              ...state.project.functions[GEMINI_IMAGE_FUNCTION_ID]!,
+              geminiImage: {
+                baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+                apiKey: 'gemini-image',
+                model: 'gemini-3.1-flash-image-preview',
+                responseModalities: 'IMAGE',
+                aspectRatio: 'auto',
+                imageSize: 'auto',
+              },
+            },
+          },
+        },
+      }))
+
+      await slice.getState().runFunctionAtPosition(OPENAI_IMAGE_FUNCTION_ID, { prompt: 'make image' }, { x: 240, y: 0 }, 1)
+      await slice.getState().runFunctionAtPosition(GEMINI_IMAGE_FUNCTION_ID, { prompt: 'make image' }, { x: 520, y: 0 }, 1)
+
+      const state = slice.getState().project
+      expect(state.canvas.nodes.filter((node) => node.type === 'function' || node.type === 'result_group')).toEqual([])
+      expect(state.runs!.task_openai_image).toMatchObject({
+        provider: 'openai_image',
+        status: 'succeeded',
+        outputRefs: { image: [{ resourceId: 'res_openai_image', type: 'image' }] },
+      })
+      expect(state.resources.res_openai_image.source).toEqual({
+        kind: 'function_output',
+        runId: 'task_openai_image',
+        outputKey: 'image',
+      })
+      expect(state.runs!.task_gemini_image).toMatchObject({
+        provider: 'gemini_image',
+        status: 'succeeded',
+        outputRefs: { image: [{ resourceId: 'res_gemini_image', type: 'image' }] },
+      })
+      expect(state.resources.res_gemini_image.source).toEqual({
+        kind: 'function_output',
+        runId: 'task_gemini_image',
+        outputKey: 'image',
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('runs HTTP request functions from popup inputs as asset-only run snapshots', async () => {
+    const ids = ['task_request', 'res_request']
+    const originalFetch = globalThis.fetch
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ result: { text: 'request text' } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    globalThis.fetch = fetchMock as typeof fetch
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now: () => '2026-05-08T09:00:00.000Z',
+    })
+    const requestFunction = {
+      ...createRequestFunction('fn_request_popup', 'Popup Request', '2026-05-08T09:00:00.000Z'),
+      request: {
+        url: 'https://api.example.com/render',
+        method: 'POST',
+        headers: {},
+        body: '{"prompt":""}',
+        responseParse: 'json' as const,
+        responseEncoding: 'utf-8',
+      },
+      inputs: [
+        {
+          key: 'prompt',
+          label: 'Prompt',
+          type: 'text' as const,
+          required: true,
+          bind: { path: '$.prompt', requestTarget: 'body' as const },
+          upload: { strategy: 'none' as const },
+        },
+      ],
+      outputs: [
+        {
+          key: 'text',
+          label: 'Text',
+          type: 'text' as const,
+          bind: {},
+          extract: { source: 'response_json_path' as const, path: '$.result.text' },
+        },
+      ],
+    }
+
+    try {
+      slice.setState((state) => ({
+        project: {
+          ...state.project,
+          functions: { ...state.project.functions, [requestFunction.id]: requestFunction },
+        },
+      }))
+
+      await slice.getState().runFunctionAtPosition('fn_request_popup', { prompt: 'kitchen' }, { x: 240, y: 0 }, 1)
+
+      const state = slice.getState().project
+      expect(state.canvas.nodes.filter((node) => node.type === 'function' || node.type === 'result_group')).toEqual([])
+      expect(state.runs!.task_request).toMatchObject({
+        provider: 'http_request',
+        status: 'succeeded',
+        outputRefs: { text: [{ resourceId: 'res_request', type: 'text' }] },
+      })
+      expect(state.resources.res_request).toMatchObject({
+        type: 'text',
+        value: 'request text',
+        source: { kind: 'function_output', runId: 'task_request', outputKey: 'text' },
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 
   it('uses the function node run count and appends result nodes to the right', () => {
