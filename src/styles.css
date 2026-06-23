@@ -1919,7 +1919,7 @@ textarea[aria-invalid="true"] {
   background: #ffffff;
 }
 
-.function-run-field > span {
+.function-run-field-heading > span {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1936,6 +1936,47 @@ textarea[aria-invalid="true"] {
   background: rgba(20, 184, 166, 0.14);
   font-size: 10px;
   text-transform: uppercase;
+}
+
+.function-run-slot-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  gap: 8px;
+  align-items: center;
+}
+
+.function-run-pick-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid rgba(13, 148, 136, 0.34);
+  border-radius: 8px;
+  color: var(--teal-strong);
+  background: rgba(240, 253, 250, 0.92);
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.function-run-pick-button:hover {
+  border-color: rgba(13, 148, 136, 0.64);
+  background: rgba(204, 251, 241, 0.92);
+  box-shadow: 0 8px 22px rgba(13, 148, 136, 0.14);
+}
+
+.function-run-pick-button:focus-visible {
+  outline: 3px solid rgba(20, 184, 166, 0.34);
+  outline-offset: 2px;
+}
+
+.function-run-manual-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
 }
 
 .function-run-field select,
@@ -1968,6 +2009,88 @@ textarea[aria-invalid="true"] {
 
 .function-run-count input {
   width: 72px;
+}
+
+.function-input-pick-strip {
+  position: absolute;
+  top: 96px;
+  left: 50%;
+  z-index: 45;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 38px;
+  gap: 10px;
+  align-items: center;
+  width: min(420px, calc(100vw - 48px));
+  padding: 10px 12px;
+  border: 1px solid rgba(13, 148, 136, 0.34);
+  border-radius: 12px;
+  color: var(--ink);
+  background:
+    linear-gradient(180deg, rgba(240, 253, 250, 0.94), rgba(255, 255, 255, 0.96)),
+    #ffffff;
+  box-shadow: 0 18px 52px rgba(15, 23, 42, 0.2);
+  transform: translateX(-50%);
+}
+
+.function-input-pick-strip > svg {
+  color: var(--teal-strong);
+}
+
+.function-input-pick-strip div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.function-input-pick-strip strong {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.function-input-pick-strip span {
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.function-input-pick-strip button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink-soft);
+  background: rgba(255, 255, 255, 0.82);
+  cursor: pointer;
+}
+
+.workspace-canvas.asset-pick-mode .react-flow__node-resource {
+  transition:
+    opacity 160ms ease,
+    filter 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.workspace-canvas.asset-pick-mode .react-flow__node-resource.asset-pickable {
+  cursor: pointer;
+}
+
+.workspace-canvas.asset-pick-mode .react-flow__node-resource.asset-pickable .resource-node {
+  border-color: rgba(13, 148, 136, 0.86);
+  box-shadow:
+    0 0 0 4px rgba(20, 184, 166, 0.2),
+    0 24px 70px rgba(13, 148, 136, 0.22);
+}
+
+.workspace-canvas.asset-pick-mode .react-flow__node-resource.asset-pick-incompatible {
+  opacity: 0.38;
+  filter: grayscale(0.55);
 }
 
 .compare-toolbar {

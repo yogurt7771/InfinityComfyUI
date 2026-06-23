@@ -301,7 +301,8 @@ The first clean implementation should deliver:
 5. Successful or failed tasks update those same resource nodes.
 6. Asset-to-asset lineage edges are derived from task snapshots.
 7. Generated assets can open the same function modal from their run snapshot.
-8. Tests prove no visible function or result_group nodes are created by function runs.
+8. Function slots can enter Pick Mode to select compatible assets directly from the canvas.
+9. Tests prove no visible function or result_group nodes are created by function runs.
 
 Template run and full group run can build on this after the first slice is stable.
 

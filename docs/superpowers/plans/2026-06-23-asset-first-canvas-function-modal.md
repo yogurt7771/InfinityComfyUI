@@ -44,7 +44,7 @@ Status: completed in this slice.
 
 ## Task 2: Function Command Modal Input Drafts
 
-Status: completed for the first function-command slice.
+Status: completed for the first function-command slice, including Excel-style canvas asset picking.
 
 **Files:**
 - Modify: `src/components/CanvasWorkspace.test.ts`
@@ -55,7 +55,8 @@ Status: completed for the first function-command slice.
 - [ ] Step 2: Add a failing test for leaving unmatched assets in the modal tray model.
 - [x] Step 3: Implement input draft construction from selected resource refs.
 - [x] Step 4: Implement the first Function Command Modal with Input Tray, Slot Mapping, primitive parameter fields, and Run action.
-- [x] Step 5: Run component tests.
+- [x] Step 5: Implement Pick Mode so a slot can select a compatible asset directly from the canvas.
+- [x] Step 6: Run component tests.
 
 ## Task 3: Run Functions Without Visible Function Nodes
 
@@ -121,7 +122,8 @@ Status: completed.
 - [x] Step 5: Verify double-click canvas opens add menu.
 - [x] Step 6: Verify choosing a function opens the modal and no function node appears.
 - [x] Step 7: Verify running a local text function creates visible asset output and asset-to-asset lineage.
-- [x] Step 8: Capture a screenshot for visual inspection.
+- [x] Step 8: Verify slot Pick Mode selects a canvas asset, restores the function modal, and unlocks Run.
+- [x] Step 9: Capture a screenshot for visual inspection.
 
 ## Task 7: Release
 

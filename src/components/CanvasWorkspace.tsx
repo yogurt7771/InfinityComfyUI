@@ -26,7 +26,7 @@ import {
   useReactFlow,
   useViewport,
 } from '@xyflow/react'
-import { CaseSensitive, GitCompareArrows, Grid2X2, Image, Info, Layers, Pencil, Scissors, Shrink, Video, Volume2, X } from 'lucide-react'
+import { CaseSensitive, GitCompareArrows, Grid2X2, Image, Info, Layers, MousePointer2, Pencil, Scissors, Shrink, Video, Volume2, X } from 'lucide-react'
 import { EmptyNodeView, FunctionNodeView, GroupNodeView, ResourceNodeView, ResultGroupNodeView } from './NodeViews'
 import { FunctionManager } from './WorkbenchPanels'
 import { ResourcePreview } from './ResourcePreview'
@@ -42,6 +42,7 @@ import type {
   ExecutionTask,
   GenerationFunction,
   PrimitiveInputValue,
+  ProjectState,
   Resource,
   ResourceRef,
   ResourceType,
@@ -106,7 +107,15 @@ type FunctionEditorState = {
 type FunctionRunDialogState = {
   functionId: string
   inputValues: Record<string, PrimitiveInputValue | ResourceRef>
+  runCount: number
   position: { x: number; y: number }
+}
+
+type FunctionInputPickMode = {
+  functionId: string
+  inputKey: string
+  inputLabel: string
+  inputType: ResourceType
 }
 
 const nodeTypes: NodeTypes = {
@@ -195,6 +204,15 @@ export const buildFunctionRunInputDraft = (
 
   return inputValues
 }
+
+export const pickableResourceRefsForInput = (project: ProjectState, inputType: ResourceType) =>
+  visibleCanvasNodes(project.canvas.nodes).flatMap((node) => {
+    if (node.type !== 'resource' || typeof node.data.resourceId !== 'string') return []
+    const resourceId = node.data.resourceId
+    const resource = project.resources[resourceId]
+    if (!resource || resource.type !== inputType) return []
+    return [{ nodeId: node.id, resourceId, type: resource.type }]
+  })
 
 const addMenuItemMatches = (label: string, query: string) => {
   const tokens = query
@@ -749,19 +767,25 @@ function functionInputSatisfied(value: PrimitiveInputValue | ResourceRef | undef
 
 function FunctionRunDialog({
   functionDef,
-  inputValues,
+  values,
+  runCount,
   resourcesById,
   onClose,
+  onPickInput,
   onRun,
+  onRunCountChange,
+  onValuesChange,
 }: {
   functionDef: GenerationFunction
-  inputValues: Record<string, PrimitiveInputValue | ResourceRef>
+  values: Record<string, PrimitiveInputValue | ResourceRef>
+  runCount: number
   resourcesById: Record<string, Resource>
   onClose: () => void
+  onPickInput: (input: { key: string; label: string; type: ResourceType }) => void
   onRun: (values: Record<string, PrimitiveInputValue | ResourceRef>, runCount: number) => void
+  onRunCountChange: (runCount: number) => void
+  onValuesChange: (values: Record<string, PrimitiveInputValue | ResourceRef>) => void
 }) {
-  const [values, setValues] = useState<Record<string, PrimitiveInputValue | ResourceRef>>(inputValues)
-  const [runCount, setRunCount] = useState(functionDef.runtimeDefaults?.runCount ?? 1)
   const selectedResources = functionDef.inputs
     .map((input) => values[input.key])
     .filter(isResourceRefValue)
@@ -772,18 +796,17 @@ function FunctionRunDialog({
   )
 
   const setResourceValue = (inputKey: string, resourceId: string, type: ResourceType) => {
-    setValues((current) => {
-      if (!resourceId) {
-        const next = { ...current }
-        delete next[inputKey]
-        return next
-      }
-      return { ...current, [inputKey]: { resourceId, type } }
-    })
+    if (!resourceId) {
+      const next = { ...values }
+      delete next[inputKey]
+      onValuesChange(next)
+      return
+    }
+    onValuesChange({ ...values, [inputKey]: { resourceId, type } })
   }
 
   const setPrimitiveValue = (inputKey: string, value: PrimitiveInputValue) => {
-    setValues((current) => ({ ...current, [inputKey]: value }))
+    onValuesChange({ ...values, [inputKey]: value })
   }
 
   return (
@@ -828,27 +851,44 @@ function FunctionRunDialog({
             const resourceValue = isResourceRefValue(value) ? value : undefined
             const matchingResources = Object.values(resourcesById).filter((resource) => resource.type === input.type)
             const primitiveValue = isResourceRefValue(value) ? '' : value
+            const inputLabel = input.label || input.key
             return (
-              <label key={input.key} className="function-run-field">
-                <span>
-                  {input.label || input.key}
-                  {input.required ? <strong>Required</strong> : null}
-                </span>
-                <select
-                  aria-label={`Asset input ${input.label || input.key}`}
-                  value={resourceValue?.resourceId ?? ''}
-                  onChange={(event) => setResourceValue(input.key, event.target.value, input.type)}
-                >
-                  <option value="">Manual / empty</option>
-                  {matchingResources.map((resource) => (
-                    <option key={resource.id} value={resource.id}>
-                      {resource.name ?? resource.id}
-                    </option>
-                  ))}
-                </select>
+              <div key={input.key} className="function-run-field">
+                <div className="function-run-field-heading">
+                  <span>
+                    {inputLabel}
+                    {input.required ? <strong>Required</strong> : null}
+                  </span>
+                </div>
+                <div className="function-run-slot-row">
+                  <select
+                    aria-label={`Asset input ${inputLabel}`}
+                    value={resourceValue?.resourceId ?? ''}
+                    onChange={(event) => setResourceValue(input.key, event.target.value, input.type)}
+                  >
+                    <option value="">Manual / empty</option>
+                    {matchingResources.map((resource) => (
+                      <option key={resource.id} value={resource.id}>
+                        {resource.name ?? resource.id}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    aria-label={`Pick asset for ${inputLabel}`}
+                    className="function-run-pick-button"
+                    title={`Pick ${inputLabel} from canvas`}
+                    onClick={() => onPickInput({ key: input.key, label: inputLabel, type: input.type })}
+                  >
+                    <MousePointer2 aria-hidden="true" size={15} />
+                  </button>
+                </div>
+                {(input.type === 'number' || input.type === 'text') && !resourceValue ? (
+                  <span className="function-run-manual-label">Manual value</span>
+                ) : null}
                 {input.type === 'number' ? (
                   <input
-                    aria-label={`Manual input ${input.label || input.key}`}
+                    aria-label={`Manual input ${inputLabel}`}
                     disabled={Boolean(resourceValue)}
                     inputMode="decimal"
                     type="number"
@@ -857,14 +897,14 @@ function FunctionRunDialog({
                   />
                 ) : input.type === 'text' ? (
                   <textarea
-                    aria-label={`Manual input ${input.label || input.key}`}
+                    aria-label={`Manual input ${inputLabel}`}
                     disabled={Boolean(resourceValue)}
                     rows={3}
                     value={String(primitiveValue ?? '')}
                     onChange={(event) => setPrimitiveValue(input.key, event.target.value)}
                   />
                 ) : null}
-              </label>
+              </div>
             )
           })}
         </div>
@@ -877,7 +917,7 @@ function FunctionRunDialog({
               min={1}
               type="number"
               value={runCount}
-              onChange={(event) => setRunCount(Math.max(1, Math.min(99, Number(event.target.value) || 1)))}
+              onChange={(event) => onRunCountChange(Math.max(1, Math.min(99, Number(event.target.value) || 1)))}
             />
           </label>
           <button type="button" onClick={onClose}>
@@ -898,6 +938,33 @@ function FunctionRunDialog({
           </button>
         </div>
       </section>
+    </div>
+  )
+}
+
+function FunctionInputPickStrip({
+  pickMode,
+  compatibleCount,
+  onCancel,
+}: {
+  pickMode: FunctionInputPickMode
+  compatibleCount: number
+  onCancel: () => void
+}) {
+  return (
+    <div className="function-input-pick-strip nodrag nopan" aria-label="Asset pick mode" role="status">
+      <MousePointer2 aria-hidden="true" size={18} />
+      <div>
+        <strong>Selecting: {pickMode.inputLabel}</strong>
+        <span>
+          {pickMode.inputType}
+          {' · '}
+          {compatibleCount} compatible
+        </span>
+      </div>
+      <button type="button" aria-label="Cancel asset pick" onClick={onCancel}>
+        <X aria-hidden="true" size={16} />
+      </button>
     </div>
   )
 }
@@ -955,6 +1022,7 @@ function CanvasSurface() {
   const [groupNodeMenu, setGroupNodeMenu] = useState<GroupNodeMenuState>()
   const [functionEditor, setFunctionEditor] = useState<FunctionEditorState>()
   const [functionRunDialog, setFunctionRunDialog] = useState<FunctionRunDialogState>()
+  const [inputPickMode, setInputPickMode] = useState<FunctionInputPickMode>()
   const [comparePair, setComparePair] = useState<CompareImagePair | null>(null)
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([])
   const [addMenuQuery, setAddMenuQuery] = useState('')
@@ -983,6 +1051,15 @@ function CanvasSurface() {
     [selectNode],
   )
 
+  const inputPickableRefs = useMemo(
+    () => (inputPickMode ? pickableResourceRefsForInput(project, inputPickMode.inputType) : []),
+    [inputPickMode, project],
+  )
+  const inputPickableResourceIds = useMemo(
+    () => new Set(inputPickableRefs.map((ref) => ref.resourceId)),
+    [inputPickableRefs],
+  )
+
   const openFunctionRunForResource = useCallback(
     (resourceId: string) => {
       const resource = project.resources[resourceId]
@@ -999,6 +1076,7 @@ function CanvasSurface() {
       setFunctionRunDialog({
         functionId,
         inputValues: functionRunInputsFromTask(task),
+        runCount: Number((task.paramsSnapshot as { runCount?: unknown } | undefined)?.runCount ?? functionDef.runtimeDefaults?.runCount ?? 1),
         position: sourceNode
           ? {
               x: sourceNode.position.x + (Number.isFinite(sourceWidth) ? sourceWidth : DEFAULT_ASSET_NODE_WIDTH) + MENU_NODE_GAP,
@@ -1039,6 +1117,12 @@ function CanvasSurface() {
         type: node.type,
         position: node.position,
         selected: activeSelectedNodeIds.includes(node.id),
+        className:
+          inputPickMode && node.type === 'resource' && typeof node.data.resourceId === 'string'
+            ? inputPickableResourceIds.has(node.data.resourceId)
+              ? 'asset-pickable'
+              : 'asset-pick-incompatible'
+            : undefined,
         style: flowNodeStyle(node, project.functions),
         data: {
           ...node.data,
@@ -1076,6 +1160,8 @@ function CanvasSurface() {
       focusCanvasNode,
       nodeReferenceMap,
       openFunctionRunForResource,
+      inputPickMode,
+      inputPickableResourceIds,
       project.canvas.nodes,
       project.functions,
       project.resources,
@@ -1207,6 +1293,11 @@ function CanvasSurface() {
         }
       }
       if (event.key === 'Escape') {
+        if (inputPickMode) {
+          event.preventDefault()
+          setInputPickMode(undefined)
+          return
+        }
         setAddMenu(null)
         setQuickToolbar(undefined)
         setFunctionNodeMenu(undefined)
@@ -1253,6 +1344,7 @@ function CanvasSurface() {
     deleteSelectedNode,
     duplicateNodes,
     duplicateSelectedNode,
+    inputPickMode,
     pasteClipboardContent,
     selectNode,
     selectedDomNodeIds,
@@ -1481,9 +1573,38 @@ function CanvasSurface() {
     })
   }
 
+  const applyInputPickFromNode = useCallback(
+    (nodeId: string) => {
+      if (!inputPickMode) return false
+      const canvasNode = project.canvas.nodes.find((node) => node.id === nodeId)
+      if (canvasNode?.type !== 'resource' || typeof canvasNode.data.resourceId !== 'string') return true
+      const resource = project.resources[canvasNode.data.resourceId]
+      if (!resource || resource.type !== inputPickMode.inputType) return true
+
+      setFunctionRunDialog((current) =>
+        current && current.functionId === inputPickMode.functionId
+          ? {
+              ...current,
+              inputValues: {
+                ...current.inputValues,
+                [inputPickMode.inputKey]: { resourceId: resource.id, type: resource.type },
+              },
+            }
+          : current,
+      )
+      setInputPickMode(undefined)
+      return true
+    },
+    [inputPickMode, project.canvas.nodes, project.resources],
+  )
+
   const handleNodeContextMenu = (event: ReactMouseEvent, node: Node) => {
     event.preventDefault()
     event.stopPropagation()
+    if (inputPickMode) {
+      applyInputPickFromNode(node.id)
+      return
+    }
     setAddMenu(null)
     setFunctionNodeMenu(undefined)
     setGroupNodeMenu(undefined)
@@ -1644,7 +1765,8 @@ function CanvasSurface() {
     if (!functionDef) return
     const inputValues = buildFunctionRunInputDraft(functionDef, project.resources, resourceRefsForFunctionMenu())
     const position = placedNodePosition(defaultFunctionWidth(functionDef)) ?? addMenu.flow
-    setFunctionRunDialog({ functionId, inputValues, position })
+    setInputPickMode(undefined)
+    setFunctionRunDialog({ functionId, inputValues, runCount: functionDef.runtimeDefaults?.runCount ?? 1, position })
     setAddMenu(null)
   }
 
@@ -1805,7 +1927,7 @@ function CanvasSurface() {
   return (
     <section
       ref={canvasRef}
-      className="workspace-canvas"
+      className={`workspace-canvas${inputPickMode ? ' asset-pick-mode' : ''}`}
       aria-label="Canvas"
       onClickCapture={handleHandleClick}
       onDoubleClick={(event) => {
@@ -1919,6 +2041,12 @@ function CanvasSurface() {
           )
         }}
         onNodeClick={(event, node) => {
+          if (inputPickMode) {
+            event.preventDefault()
+            event.stopPropagation()
+            applyInputPickFromNode(node.id)
+            return
+          }
           setSelectedEdgeIds([])
           setQuickToolbar(undefined)
           setFunctionNodeMenu(undefined)
@@ -1945,6 +2073,7 @@ function CanvasSurface() {
           updateNodePosition(node.id, node.position)
         }}
         onPaneClick={() => {
+          if (inputPickMode) return
           selectNode(undefined)
           setSelectedEdgeIds([])
           setAddMenu(null)
@@ -2033,6 +2162,7 @@ function CanvasSurface() {
                 setFunctionRunDialog({
                   functionId: fn.id,
                   inputValues,
+                  runCount: fn.runtimeDefaults?.runCount ?? 1,
                   position: commandPositionForSourceNode(quickToolbar.sourceNodeId),
                 })
                 setQuickToolbar(undefined)
@@ -2138,15 +2268,40 @@ function CanvasSurface() {
           ) : null}
         </div>
       ) : null}
-      {functionRunDialog && activeFunctionRunFunction ? (
+      {inputPickMode ? (
+        <FunctionInputPickStrip
+          pickMode={inputPickMode}
+          compatibleCount={inputPickableRefs.length}
+          onCancel={() => setInputPickMode(undefined)}
+        />
+      ) : null}
+      {functionRunDialog && activeFunctionRunFunction && !inputPickMode ? (
         <FunctionRunDialog
           functionDef={activeFunctionRunFunction}
-          inputValues={functionRunDialog.inputValues}
+          values={functionRunDialog.inputValues}
+          runCount={functionRunDialog.runCount}
           resourcesById={project.resources}
-          onClose={() => setFunctionRunDialog(undefined)}
+          onClose={() => {
+            setInputPickMode(undefined)
+            setFunctionRunDialog(undefined)
+          }}
+          onPickInput={(input) => {
+            setInputPickMode({
+              functionId: functionRunDialog.functionId,
+              inputKey: input.key,
+              inputLabel: input.label,
+              inputType: input.type,
+            })
+          }}
           onRun={(values, runCount) => {
             void runFunctionAtPosition(functionRunDialog.functionId, values, functionRunDialog.position, runCount)
           }}
+          onRunCountChange={(runCount) =>
+            setFunctionRunDialog((current) => (current ? { ...current, runCount } : current))
+          }
+          onValuesChange={(inputValues) =>
+            setFunctionRunDialog((current) => (current ? { ...current, inputValues } : current))
+          }
         />
       ) : null}
       {functionEditor && activeFunctionEditorFunction ? (

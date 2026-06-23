@@ -5,6 +5,7 @@ import type { ProjectState } from '../domain/types'
 import {
   buildComfyMinimapLayout,
   buildFunctionRunInputDraft,
+  pickableResourceRefsForInput,
   visibleCanvasNodes,
   minimapPointToFlowPosition,
   sameFlowEdgesForSync,
@@ -157,6 +158,54 @@ describe('CanvasWorkspace helpers', () => {
       scale_by: 7,
       image: { resourceId: 'res_image', type: 'image' },
     })
+  })
+
+  it('lists only compatible canvas assets for a function input picker', () => {
+    const project = projectWithOptionalInput()
+    project.resources = {
+      res_image: {
+        id: 'res_image',
+        type: 'image',
+        name: 'input.png',
+        value: {
+          assetId: 'asset_image',
+          url: 'data:image/png;base64,abc',
+          filename: 'input.png',
+          mimeType: 'image/png',
+          sizeBytes: 3,
+        },
+        source: { kind: 'manual_input' },
+      },
+      res_text: {
+        id: 'res_text',
+        type: 'text',
+        name: 'Prompt',
+        value: 'hello',
+        source: { kind: 'manual_input' },
+      },
+      res_hidden: {
+        id: 'res_hidden',
+        type: 'image',
+        name: 'not on canvas.png',
+        value: {
+          assetId: 'asset_hidden',
+          url: 'data:image/png;base64,hidden',
+          filename: 'hidden.png',
+          mimeType: 'image/png',
+          sizeBytes: 6,
+        },
+        source: { kind: 'manual_input' },
+      },
+    }
+    project.canvas.nodes.push(
+      { id: 'node_image', type: 'resource', position: { x: 0, y: 0 }, data: { resourceId: 'res_image' } },
+      { id: 'node_text', type: 'resource', position: { x: 260, y: 0 }, data: { resourceId: 'res_text' } },
+      { id: 'group_1', type: 'group', position: { x: -40, y: -40 }, data: { childNodeIds: ['node_image'] } },
+    )
+
+    expect(pickableResourceRefsForInput(project, 'image')).toEqual([
+      { nodeId: 'node_image', resourceId: 'res_image', type: 'image' },
+    ])
   })
 
   it('builds incoming and outgoing node reference summaries from canvas edges', () => {
