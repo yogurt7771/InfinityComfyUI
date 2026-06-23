@@ -8,9 +8,20 @@ It supersedes any design or implementation path that keeps visible `function` or
 
 ## Goal
 
+The primary goal of this refactor is to make future changes fast, localized, and low-risk. The architecture should have high cohesion, low coupling, clear module boundaries, and explicit ownership of responsibilities so a change in one feature does not unexpectedly break canvas rendering, task execution, history, persistence, or previews.
+
 Infinity ComfyUI should treat the canvas as an asset graph, not as a workflow-node editor.
 
 Users select or create assets, run functions through a command modal, and receive pending output assets that later become final assets. Groups and templates organize and reproduce asset subgraphs. Function definitions, tasks, and run snapshots remain part of the project data, but functions are commands rather than visible canvas nodes.
+
+This means the refactor is not successful if it merely recreates the current behavior with smaller files. It is successful only when each major subsystem can be changed and tested through a narrow interface:
+
+- Canvas rendering depends on projection data, not execution internals.
+- Function execution depends on run commands and provider adapters, not React components.
+- History depends on command transactions, not ad hoc UI event handlers.
+- Persistence depends on project revisions and serializers, not full-store subscriptions.
+- Asset preview and layout depend on resource view models, not provider-specific task details.
+- Groups and templates depend on asset graph recipes, not hidden function/result canvas nodes.
 
 ## Confirmed Scope
 
@@ -524,6 +535,9 @@ The full migration is complete when:
 8. History records command transactions for all graph changes.
 9. Tests prove old visible function/result node paths are gone.
 10. `npm test`, `npm run build`, and Docker startup pass.
+11. Canvas projection, command/history, run orchestration, provider adapters, persistence, and UI modules can each be tested without importing the others' implementation internals.
+12. New function providers can be added by implementing a provider adapter and function settings UI, without editing canvas projection, history recording, persistence scheduling, or asset node layout code.
+13. New canvas asset interactions can be added through graph commands and projection updates, without editing provider execution branches.
 
 ## Risks
 
