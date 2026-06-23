@@ -234,10 +234,10 @@ Expected: pass.
 - Create: `src/domain/assetGraphProjection.test.ts`
 - Modify: `src/domain/canvasEdges.ts` or deprecate it.
 
-- [ ] **Step 1: Write failing tests that projection emits only asset/group node types**
-- [ ] **Step 2: Implement projection for asset nodes, group nodes, and lineage edges**
-- [ ] **Step 3: Keep hidden React Flow handles as projection details**
-- [ ] **Step 4: Remove business dependence on DOM handles**
+- [x] **Step 1: Write failing tests that projection emits only asset/group node types**
+- [x] **Step 2: Implement projection for asset nodes, group nodes, and lineage edges**
+- [x] **Step 3: Keep hidden React Flow handles as projection details**
+- [x] **Step 4: Remove business dependence on DOM handles**
 
 Run: `npm test -- --run src/domain/assetGraphProjection.test.ts src/domain/canvasEdges.test.ts`
 
