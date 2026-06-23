@@ -185,10 +185,10 @@ Expected: pass.
 - Create: `src/domain/runs/runCommands.test.ts`
 - Modify: `src/domain/types.ts`
 
-- [ ] **Step 1: Write failing tests that a run creates pending asset nodes immediately**
-- [ ] **Step 2: Implement pending resource value creation for text/number/image/video/audio**
-- [ ] **Step 3: Implement output asset node placement**
-- [ ] **Step 4: Implement initial input-to-output lineage edges**
+- [x] **Step 1: Write failing tests that a run creates pending asset nodes immediately**
+- [x] **Step 2: Implement pending resource value creation for text/number/image/video/audio**
+- [x] **Step 3: Implement output asset node placement**
+- [x] **Step 4: Implement initial input-to-output lineage edges**
 
 Run: `npm test -- --run src/domain/runs/runCommands.test.ts`
 
