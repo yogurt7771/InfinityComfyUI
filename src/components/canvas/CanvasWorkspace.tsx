@@ -533,6 +533,7 @@ function CanvasSurface() {
         edges={projection.edges}
         autoPanOnNodeDrag={false}
         fitViewOptions={{ maxZoom: 1 }}
+        onlyRenderVisibleElements={false}
         nodeTypes={assetCanvasNodeTypes}
         fitView
         onNodeContextMenu={openAssetMenu}

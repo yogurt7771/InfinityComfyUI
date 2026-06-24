@@ -1682,7 +1682,8 @@ textarea[aria-invalid="true"] {
     0 20px 48px rgba(15, 23, 42, 0.14);
 }
 
-.workspace-canvas .react-flow__node-asset.dragging {
+.workspace-canvas .react-flow__node-asset,
+.workspace-canvas .react-flow__node-group {
   visibility: visible !important;
 }
 

@@ -10,6 +10,7 @@ import { assetCanvasNodeTypes, CanvasWorkspace, projectToAssetGraph, selectedRes
 const reactFlowMock = vi.hoisted(() => ({
   setViewport: vi.fn(),
   viewport: { x: 0, y: 0, zoom: 1 },
+  latestProps: undefined as Record<string, unknown> | undefined,
 }))
 
 vi.mock('@xyflow/react', async () => {
@@ -19,70 +20,67 @@ vi.mock('@xyflow/react', async () => {
     Handle: () => null,
     MarkerType: { ArrowClosed: 'arrowclosed' },
     Position: { Left: 'left', Right: 'right' },
-    ReactFlow: ({
-      children,
-      nodes = [],
-      onNodeClick,
-      onNodeContextMenu,
-      onNodesChange,
-      onPaneContextMenu,
-    }: {
+    ReactFlow: (props: {
       children?: ReactNode
       nodes?: Array<{ id: string; type?: string; data?: Record<string, unknown> }>
       onNodeClick?: (event: MouseEvent<HTMLDivElement>, node: { id: string; type?: string; data?: Record<string, unknown> }) => void
       onNodeContextMenu?: (event: MouseEvent<HTMLDivElement>, node: { id: string; type?: string; data?: Record<string, unknown> }) => void
       onNodesChange?: (changes: NodeChange[]) => void
       onPaneContextMenu?: (event: MouseEvent<HTMLDivElement>) => void
-    }) => (
-      <div data-testid="react-flow-pane" onContextMenu={onPaneContextMenu}>
-        {nodes.map((node) => (
-          <div
-            className={`react-flow__node react-flow__node-${node.type}`}
-            data-resource-id={typeof node.data?.resourceId === 'string' ? node.data.resourceId : undefined}
-            data-testid={`react-flow-node-${node.id}`}
-            key={node.id}
-            onClick={(event) => onNodeClick?.(event, node)}
-            onContextMenu={(event) => onNodeContextMenu?.(event, node)}
-          >
-            <button
-              aria-label={`Drag ${node.id}`}
-              onClick={() => {
-                onNodesChange?.([{ id: node.id, type: 'position', position: { x: 220, y: 260 }, dragging: true }])
-                onNodesChange?.([{ id: node.id, type: 'position', position: { x: 340, y: 380 }, dragging: true }])
-                onNodesChange?.([{ id: node.id, type: 'position', position: { x: 460, y: 500 }, dragging: false }])
-              }}
-              type="button"
+    }) => {
+      const { children, nodes = [], onNodeClick, onNodeContextMenu, onNodesChange, onPaneContextMenu } = props
+      reactFlowMock.latestProps = props
+      return (
+        <div data-testid="react-flow-pane" onContextMenu={onPaneContextMenu}>
+          {nodes.map((node) => (
+            <div
+              className={`react-flow__node react-flow__node-${node.type}`}
+              data-resource-id={typeof node.data?.resourceId === 'string' ? node.data.resourceId : undefined}
+              data-testid={`react-flow-node-${node.id}`}
+              key={node.id}
+              onClick={(event) => onNodeClick?.(event, node)}
+              onContextMenu={(event) => onNodeContextMenu?.(event, node)}
             >
-              Drag
-            </button>
-            {typeof node.data?.onPreview === 'function' && node.data.resource ? (
               <button
-                aria-label={`Preview ${String(node.data.title ?? node.data.resourceId)}`}
-                onClick={() => (node.data?.onPreview as (resource: unknown) => void)(node.data?.resource)}
+                aria-label={`Drag ${node.id}`}
+                onClick={() => {
+                  onNodesChange?.([{ id: node.id, type: 'position', position: { x: 220, y: 260 }, dragging: true }])
+                  onNodesChange?.([{ id: node.id, type: 'position', position: { x: 340, y: 380 }, dragging: true }])
+                  onNodesChange?.([{ id: node.id, type: 'position', position: { x: 460, y: 500 }, dragging: false }])
+                }}
                 type="button"
               >
-                Preview
+                Drag
               </button>
-            ) : (
-              node.id
-            )}
-            {typeof node.data?.runStatus === 'string' ? <span>{node.data.runStatus}</span> : null}
-            {typeof node.data?.runDurationLabel === 'string' ? <span>{node.data.runDurationLabel}</span> : null}
-            {typeof node.data?.sourceFunctionName === 'string' ? (
-              <button
-                aria-label={`Edit and run ${node.data.sourceFunctionName}`}
-                onClick={() => (node.data?.onEditRun as (resource: unknown) => void)?.(node.data?.resource)}
-                type="button"
-              >
-                {node.data.sourceFunctionName}
-              </button>
-            ) : null}
-            {typeof node.data?.runError === 'string' ? <span role="alert">{node.data.runError}</span> : null}
-          </div>
-        ))}
-        {children}
-      </div>
-    ),
+              {typeof node.data?.onPreview === 'function' && node.data.resource ? (
+                <button
+                  aria-label={`Preview ${String(node.data.title ?? node.data.resourceId)}`}
+                  onClick={() => (node.data?.onPreview as (resource: unknown) => void)(node.data?.resource)}
+                  type="button"
+                >
+                  Preview
+                </button>
+              ) : (
+                node.id
+              )}
+              {typeof node.data?.runStatus === 'string' ? <span>{node.data.runStatus}</span> : null}
+              {typeof node.data?.runDurationLabel === 'string' ? <span>{node.data.runDurationLabel}</span> : null}
+              {typeof node.data?.sourceFunctionName === 'string' ? (
+                <button
+                  aria-label={`Edit and run ${node.data.sourceFunctionName}`}
+                  onClick={() => (node.data?.onEditRun as (resource: unknown) => void)?.(node.data?.resource)}
+                  type="button"
+                >
+                  {node.data.sourceFunctionName}
+                </button>
+              ) : null}
+              {typeof node.data?.runError === 'string' ? <span role="alert">{node.data.runError}</span> : null}
+            </div>
+          ))}
+          {children}
+        </div>
+      )
+    },
     ReactFlowProvider: ({ children }: { children?: ReactNode }) => <>{children}</>,
     useReactFlow: () => ({
       screenToFlowPosition: ({ x, y }: { x: number; y: number }) => ({ x: x - 10, y: y - 20 }),
@@ -120,6 +118,7 @@ const functionDef = (id: string, name: string, inputType: 'image' | 'text') => (
 beforeEach(() => {
   reactFlowMock.setViewport.mockClear()
   reactFlowMock.viewport = { x: 0, y: 0, zoom: 1 }
+  reactFlowMock.latestProps = undefined
   readFileAsAssetResourceMock.mockImplementation(async (file: File) =>
     file.name.endsWith('.txt')
       ? {
@@ -225,6 +224,20 @@ describe('asset canvas workspace', () => {
     expect(Object.keys(assetCanvasNodeTypes)).toEqual(['asset', 'group'])
     expect(assetCanvasNodeTypes).not.toHaveProperty('function')
     expect(assetCanvasNodeTypes).not.toHaveProperty('result_group')
+  })
+
+  it('keeps React Flow from hiding non-dragged asset and group nodes during canvas drag', () => {
+    projectStore.setState({ project: project() })
+
+    render(<CanvasWorkspace />)
+
+    expect(reactFlowMock.latestProps).toEqual(
+      expect.objectContaining({
+        autoPanOnNodeDrag: false,
+        onlyRenderVisibleElements: false,
+      }),
+    )
+    expect((reactFlowMock.latestProps?.nodes as Array<{ type?: string }>).map((node) => node.type)).toEqual(['asset', 'asset', 'group'])
   })
 
   it('projects legacy project state into an asset/group-only graph', () => {

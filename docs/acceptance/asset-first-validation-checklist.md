@@ -128,3 +128,5 @@ The product target is an asset-first canvas:
 | 2026-06-24 | `docker compose build && docker compose up -d` | PASS | Runtime image rebuilt and restarted with the drag-visibility fix. |
 | 2026-06-24 | `Invoke-WebRequest -UseBasicParsing http://127.0.0.1:7930/` | PASS | Docker-served app returned HTTP 200 after the drag-visibility fix. |
 | 2026-06-24 | `npm run browser:smoke -- --reporter=line` | PASS | Final Docker-served browser smoke passed with edge-drag visible-node, minimap count, persistence reload, preview, batch drop, and replacement assertions. |
+| 2026-06-24 | `npm test -- src/components/canvas/CanvasWorkspace.test.tsx -t "keeps React Flow"` | FAIL -> PASS | Added a guard that asset-first canvas disables React Flow visible-node culling, so dragging one asset cannot hide the other asset/group nodes. |
+| 2026-06-24 | `npm run browser:smoke -- --reporter=line` | PASS | Strengthened browser regression from "at least one visible node" to "all React Flow asset nodes remain visible" while dragging an asset near the viewport edge. |
