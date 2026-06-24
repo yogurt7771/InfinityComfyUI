@@ -501,6 +501,9 @@ describe('asset canvas workspace', () => {
     render(<CanvasWorkspace />)
 
     fireEvent.contextMenu(screen.getByTestId(`react-flow-node-${nodeId}`), { clientX: 320, clientY: 340 })
+    act(() => {
+      ;(reactFlowMock.latestProps?.onSelectionChange as (payload: { nodes: [] }) => void)?.({ nodes: [] })
+    })
 
     expect(screen.queryByRole('menuitem', { name: 'Add image asset' })).not.toBeInTheDocument()
     expect(screen.getByRole('menuitem', { name: 'Image Edit' })).toBeInTheDocument()

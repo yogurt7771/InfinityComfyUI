@@ -28,6 +28,7 @@ type ContextMenuState = {
   client: { x: number; y: number }
   flow: { x: number; y: number }
   mode: 'canvas' | 'asset'
+  resourceIds?: string[]
 }
 
 type FunctionCommandState = {
@@ -362,13 +363,19 @@ function CanvasSurface() {
     [draftNodePositions, liveEndAt, project, projection.nodes],
   )
 
-  const candidateResources = useMemo(
+  const selectedCandidateResources = useMemo(
     () =>
       selectedResourceIds
         .map((resourceId) => project.resources[resourceId])
         .filter((resource): resource is Resource => Boolean(resource)),
     [project.resources, selectedResourceIds],
   )
+  const menuCandidateResources = useMemo(() => {
+    if (contextMenuPosition?.mode !== 'asset' || !contextMenuPosition.resourceIds?.length) return selectedCandidateResources
+    return contextMenuPosition.resourceIds
+      .map((resourceId) => project.resources[resourceId])
+      .filter((resource): resource is Resource => Boolean(resource))
+  }, [contextMenuPosition, project.resources, selectedCandidateResources])
   const openFunctionCommand = (
     functionDef: GenerationFunction,
     resources: Resource[],
@@ -436,11 +443,13 @@ function CanvasSurface() {
     if (!resourceId || !project.resources[resourceId]) return
     event.preventDefault()
     event.stopPropagation()
+    const menuResourceIds = selectedResourceIds.includes(resourceId) && selectedResourceIds.length > 0 ? selectedResourceIds : [resourceId]
     setSelectedResourceIds((current) => (current.includes(resourceId) ? current : [resourceId]))
     setContextMenuPosition({
       client: { x: event.clientX, y: event.clientY },
       flow: screenToFlowPosition({ x: event.clientX, y: event.clientY }),
       mode: 'asset',
+      resourceIds: menuResourceIds,
     })
   }
   const handleDragOver = (event: DragEvent<HTMLElement>) => {
@@ -570,7 +579,7 @@ function CanvasSurface() {
         functions={Object.values(project.functions)}
         mode={contextMenuPosition?.mode}
         position={contextMenuPosition?.client}
-        resourceTypes={candidateResources.map((resource) => resource.type)}
+        resourceTypes={menuCandidateResources.map((resource) => resource.type)}
         onCreateAsset={(type) => {
           addEmptyResourceAtPosition(type, contextMenuPosition?.flow ?? { x: 0, y: 0 })
           setContextMenuPosition(undefined)
@@ -578,7 +587,7 @@ function CanvasSurface() {
         onRunFunction={(functionId) => {
           setContextMenuPosition(undefined)
           const functionDef = project.functions[functionId]
-          if (functionDef) openFunctionCommand(functionDef, candidateResources)
+          if (functionDef) openFunctionCommand(functionDef, menuCandidateResources)
         }}
       />
       <CanvasPickMode
