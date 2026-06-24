@@ -144,6 +144,7 @@ const isResourceRef = (value: PrimitiveInputValue | ResourceRef | undefined): va
 const valueFromResource = (resource: Resource | undefined): PrimitiveInputValue => {
   if (!resource) return null
   if (typeof resource.value === 'object' && resource.value !== null && 'url' in resource.value) return resource.value.url
+  if (typeof resource.value === 'object') return null
   return resource.value
 }
 

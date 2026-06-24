@@ -9,6 +9,7 @@ import { SlotMapping, autoAssignFunctionInputs, type SlotAssignments } from './S
 export type FunctionCommandRunRequest = {
   functionId: string
   functionName: string
+  functionDef: GenerationFunction
   inputValues: Record<string, PrimitiveInputValue | ResourceRef>
   outputKeys: string[]
 }
@@ -22,17 +23,44 @@ type FunctionCommandModalProps = {
     resource: Resource
   }
   pendingOutputs?: Resource[]
+  initialInputValues?: Record<string, PrimitiveInputValue | ResourceRef>
   onClose: () => void
   onPickSlot?: (inputKey: string) => void
   onRun: (request: FunctionCommandRunRequest) => void
 }
 
-const initialPrimitiveValues = (functionDef: GenerationFunction, assignments: SlotAssignments) =>
+const initialPrimitiveValues = (
+  functionDef: GenerationFunction,
+  assignments: SlotAssignments,
+  initialInputValues: Record<string, PrimitiveInputValue | ResourceRef> = {},
+) =>
   Object.fromEntries(
     functionDef.inputs
       .filter((input) => !assignments[input.key] && (input.type === 'text' || input.type === 'number'))
-      .map((input) => [input.key, input.defaultValue ?? (input.type === 'number' ? 0 : '')]),
+      .map((input) => {
+        const initialValue = initialInputValues[input.key]
+        return [
+          input.key,
+          typeof initialValue === 'string' || typeof initialValue === 'number'
+            ? initialValue
+            : input.defaultValue ?? (input.type === 'number' ? 0 : ''),
+        ]
+      }),
   ) as Record<string, PrimitiveInputValue>
+
+const initialAssignmentsFromInputValues = (
+  functionDef: GenerationFunction,
+  candidateResources: Resource[],
+  initialInputValues: Record<string, PrimitiveInputValue | ResourceRef> = {},
+) => {
+  const assignments = autoAssignFunctionInputs(functionDef.inputs, candidateResources)
+  for (const input of functionDef.inputs) {
+    const value = initialInputValues[input.key]
+    if (!value || typeof value !== 'object' || !('resourceId' in value)) continue
+    assignments[input.key] = value
+  }
+  return assignments
+}
 
 const moveResource = (resources: Resource[], resourceId: string, direction: 'up' | 'down') => {
   const index = resources.findIndex((resource) => resource.id === resourceId)
@@ -44,21 +72,38 @@ const moveResource = (resources: Resource[], resourceId: string, direction: 'up'
   return next
 }
 
+const emptyInitialInputValues: Record<string, PrimitiveInputValue | ResourceRef> = {}
+
 export function FunctionCommandModal({
   functionDef,
   candidateResources,
   pickedResource,
   pendingOutputs,
+  initialInputValues,
   onClose,
   onPickSlot,
   onRun,
 }: FunctionCommandModalProps) {
+  const safeInitialInputValues = initialInputValues ?? emptyInitialInputValues
   const [resources, setResources] = useState(candidateResources)
-  const initialAssignments = useMemo(() => autoAssignFunctionInputs(functionDef.inputs, candidateResources), [functionDef, candidateResources])
+  const initialAssignments = useMemo(
+    () => initialAssignmentsFromInputValues(functionDef, candidateResources, safeInitialInputValues),
+    [functionDef, candidateResources, safeInitialInputValues],
+  )
   const [assignments, setAssignments] = useState<SlotAssignments>(initialAssignments)
   const [primitiveValues, setPrimitiveValues] = useState<Record<string, PrimitiveInputValue>>(() =>
-    initialPrimitiveValues(functionDef, initialAssignments),
+    initialPrimitiveValues(functionDef, initialAssignments, safeInitialInputValues),
   )
+
+  const setResourcesAndAutoAssign = (nextResources: Resource[]) => {
+    const nextAssignments = autoAssignFunctionInputs(functionDef.inputs, nextResources)
+    setResources(nextResources)
+    setAssignments(nextAssignments)
+    setPrimitiveValues((current) => ({
+      ...initialPrimitiveValues(functionDef, nextAssignments, current),
+      ...current,
+    }))
+  }
 
   const setAssignment = (inputKey: string, ref: ResourceRef | undefined) => {
     setAssignments((current) => {
@@ -71,10 +116,10 @@ export function FunctionCommandModal({
 
   useEffect(() => {
     setResources(candidateResources)
-    const nextAssignments = autoAssignFunctionInputs(functionDef.inputs, candidateResources)
+    const nextAssignments = initialAssignmentsFromInputValues(functionDef, candidateResources, safeInitialInputValues)
     setAssignments(nextAssignments)
-    setPrimitiveValues(initialPrimitiveValues(functionDef, nextAssignments))
-  }, [candidateResources, functionDef])
+    setPrimitiveValues(initialPrimitiveValues(functionDef, nextAssignments, safeInitialInputValues))
+  }, [candidateResources, functionDef, safeInitialInputValues])
 
   useEffect(() => {
     if (!pickedResource) return
@@ -96,6 +141,7 @@ export function FunctionCommandModal({
     onRun({
       functionId: functionDef.id,
       functionName: functionDef.name,
+      functionDef,
       inputValues,
       outputKeys: functionDef.outputs.map((output) => output.key),
     })
@@ -115,8 +161,16 @@ export function FunctionCommandModal({
 
       <InputTray
         resources={resources}
-        onMove={(resourceId, direction) => setResources((current) => moveResource(current, resourceId, direction))}
-        onRemove={(resourceId) => setResources((current) => current.filter((resource) => resource.id !== resourceId))}
+        onMove={(resourceId, direction) => setResourcesAndAutoAssign(moveResource(resources, resourceId, direction))}
+        onRemove={(resourceId) => {
+          const nextResources = resources.filter((resource) => resource.id !== resourceId)
+          const nextAssignments = { ...assignments }
+          for (const [inputKey, ref] of Object.entries(nextAssignments)) {
+            if (ref.resourceId === resourceId) delete nextAssignments[inputKey]
+          }
+          setResources(nextResources)
+          setAssignments(nextAssignments)
+        }}
       />
       <SlotMapping
         inputs={functionDef.inputs}

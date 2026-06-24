@@ -8,10 +8,16 @@ export type NodeReferenceSummary = {
   resourceId?: string
 }
 
+const canvasNodeResourceId = (node: CanvasNode) =>
+  (node.type === 'asset' || node.type === 'resource') && typeof node.data.resourceId === 'string'
+    ? node.data.resourceId
+    : undefined
+
 const nodeDisplayTitle = (project: ProjectState, node: CanvasNode) => {
   if (typeof node.data.title === 'string' && node.data.title.trim()) return node.data.title
-  if (node.type === 'resource' && typeof node.data.resourceId === 'string') {
-    return project.resources[node.data.resourceId]?.name ?? node.data.resourceId
+  const resourceId = canvasNodeResourceId(node)
+  if (resourceId) {
+    return project.resources[resourceId]?.name ?? resourceId
   }
   if (node.type === 'function' && typeof node.data.functionId === 'string') {
     return project.functions[node.data.functionId]?.name ?? node.data.functionId
@@ -34,11 +40,7 @@ export function buildNodeReferenceMap(project: ProjectState) {
     const sourceNode = nodesById.get(edge.source.nodeId)
     const targetNode = nodesById.get(edge.target.nodeId)
     if (!sourceNode || !targetNode) continue
-    const resourceId =
-      edge.source.resourceId ??
-      (sourceNode.type === 'resource' && typeof sourceNode.data.resourceId === 'string'
-        ? sourceNode.data.resourceId
-        : undefined)
+    const resourceId = edge.source.resourceId ?? canvasNodeResourceId(sourceNode)
     const resourceReference = resourceId ? { resourceId } : {}
 
     references[sourceNode.id]?.push({

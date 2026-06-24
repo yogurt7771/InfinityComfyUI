@@ -67,6 +67,15 @@ import { selectEndpoint } from '../domain/scheduler'
 import { createGenerationFunctionFromWorkflow, injectWorkflowInputs, workflowPrimitiveInputValue } from '../domain/workflow'
 import { isBuiltInFunction, withoutBuiltInProjectFunctions } from '../domain/builtInFunctions'
 import type { MediaResourcePayload, MediaResourceKind } from '../domain/resourceFiles'
+import {
+  isAssetBackedPrimitiveResourceValue,
+  isMediaResourceValue,
+  primitiveAssetRecord,
+  primitiveResourceValueWithAsset,
+  resolvedPrimitiveResourceValue,
+  resolveResourceForDisplay,
+  resourceAssetId as assetIdForResource,
+} from '../domain/resourceValues'
 import type {
   CanvasEdge,
   CanvasNode,
@@ -111,6 +120,23 @@ type AddFunctionNodeOptions = {
 }
 type NodeSelectionMode = 'replace' | 'add' | 'remove' | 'toggle'
 type FunctionEditScope = 'node' | 'all'
+type AssetResourceValueInput =
+  | {
+      type: 'text'
+      name: string
+      value: string
+    }
+  | {
+      type: 'number'
+      name: string
+      value: number
+    }
+  | {
+      type: MediaResourceKind
+      name: string
+      media: MediaResourcePayload
+    }
+type AssetResourceCreateInput = AssetResourceValueInput & { position: { x: number; y: number } }
 
 type RuntimeComfyClient = ComfyPromptClient & {
   testConnection?: () => Promise<unknown>
@@ -266,6 +292,8 @@ export type ProjectStoreState = {
     media: MediaResourcePayload,
     position: { x: number; y: number },
   ) => string
+  addAssetResourcesAtPositions: (items: AssetResourceCreateInput[]) => string[]
+  replaceAssetResource: (resourceId: string, item: AssetResourceValueInput) => void
   updateTextResourceValue: (resourceId: string, value: string) => void
   updateNumberResourceValue: (resourceId: string, value: number) => void
   replaceResourceMedia: (resourceId: string, type: MediaResourceKind, media: MediaResourcePayload) => void
@@ -299,6 +327,7 @@ export type ProjectStoreState = {
     inputValues: Record<string, PrimitiveInputValue | ResourceRef>,
     position: { x: number; y: number },
     runCount?: number,
+    functionSnapshot?: GenerationFunction,
   ) => Promise<string | undefined>
   runFunctionNode: (nodeId: string, runCount?: number) => void
   runFunctionNodeWithComfy: (nodeId: string, runCount?: number) => Promise<void>
@@ -372,11 +401,8 @@ const ensureProjectHistory = (project: ProjectState): ProjectState =>
         history: emptyProjectHistory(),
       }
 
-const isMediaResourceValue = (value: Resource['value']): value is MediaResourceValue =>
-  typeof value === 'object' && value !== null && 'assetId' in value
-
 const compactHistoryAssetRecord = (asset: AssetRecord): AssetRecord => {
-  const { blobUrl, ...metadata } = asset
+  const { blobUrl, primitiveValue, ...metadata } = asset
   return metadata
 }
 
@@ -430,6 +456,11 @@ const historyEntryId = (history: ProjectHistoryState, now: string) =>
 
 const uniqueHistoryIds = (ids: Array<string | undefined>) => [...new Set(ids.filter((id): id is string => Boolean(id)))]
 
+const canvasNodeResourceId = (node: CanvasNode) =>
+  (node.type === 'asset' || node.type === 'resource') && typeof node.data.resourceId === 'string'
+    ? node.data.resourceId
+    : undefined
+
 const nodeResourceIds = (project: ProjectState, nodeIds: string[]) => {
   const ids = new Set<string>()
   const nodesById = new Map(project.canvas.nodes.map((node) => [node.id, node]))
@@ -438,8 +469,9 @@ const nodeResourceIds = (project: ProjectState, nodeIds: string[]) => {
     const node = nodesById.get(nodeId)
     if (!node) return
 
-    if (node.type === 'resource' && typeof node.data.resourceId === 'string') {
-      ids.add(node.data.resourceId)
+    const directResourceId = canvasNodeResourceId(node)
+    if (directResourceId) {
+      ids.add(directResourceId)
       return
     }
 
@@ -465,8 +497,8 @@ const outputResourceNodeId = (resultNodeId: string, resourceId: string) => `outp
 const resourceNodeId = (resourceId: string) => `node_${resourceId}`
 
 const emptyFunctionOutputValue = (type: ResourceType, resourceId: string): Resource['value'] => {
-  if (type === 'number') return 0
-  if (type === 'text') return ''
+  if (type === 'number') return primitiveResourceValueWithAsset(`pending_${resourceId}`, 'number', 0)
+  if (type === 'text') return primitiveResourceValueWithAsset(`pending_${resourceId}`, 'text', '')
   return {
     assetId: `pending_${resourceId}`,
     url: '',
@@ -562,6 +594,7 @@ const restoreProjectHistorySnapshot = (
         {
           ...asset,
           blobUrl: asset.blobUrl ?? assetLibrary[assetId]?.blobUrl,
+          primitiveValue: asset.primitiveValue ?? assetLibrary[assetId]?.primitiveValue,
         },
       ]),
     ),
@@ -745,6 +778,39 @@ const mediaValueWithAsset = (assetId: string, media: MediaResourcePayload): Medi
   comfy: media.comfy,
 })
 
+const primitiveAssetIdForResource = (resourceId: string) => `asset_${resourceId}`
+
+const primitiveResourceWithAsset = (
+  resourceId: string,
+  type: Extract<ResourceType, 'text' | 'number'>,
+  name: string,
+  value: string | number,
+  source: Resource['source'],
+  metadata: Resource['metadata'],
+): { resource: Resource; asset: AssetRecord; ref: ResourceRef } => {
+  const normalizedValue = type === 'number' ? Number(value) : String(value ?? '')
+  const safeValue = type === 'number' ? (Number.isFinite(normalizedValue as number) ? (normalizedValue as number) : 0) : String(normalizedValue)
+  const assetId = primitiveAssetIdForResource(resourceId)
+
+  return {
+    resource: {
+      id: resourceId,
+      type,
+      name,
+      value: primitiveResourceValueWithAsset(assetId, type, safeValue),
+      source,
+      metadata,
+    },
+    asset: primitiveAssetRecord(assetId, name, type, safeValue, metadata?.createdAt ?? new Date().toISOString()),
+    ref: { resourceId, type },
+  }
+}
+
+const runtimeResourcesForProject = (project: ProjectState): Record<string, Resource> =>
+  Object.fromEntries(
+    Object.entries(project.resources).map(([resourceId, resource]) => [resourceId, resolveResourceForDisplay(project, resource)]),
+  )
+
 const uniqueIds = (nodeIds: string[]) => [...new Set(nodeIds.filter(Boolean))]
 
 const existingNodeIds = (nodes: CanvasNode[], nodeIds: string[]) => {
@@ -877,8 +943,9 @@ const sourceHandleForResource = (node: CanvasNode, resourceId: string) =>
   node.type === 'result_group' ? `result:${resourceId}` : `resource:${resourceId}`
 
 const nodeResourceRefs = (node: CanvasNode): ResourceRef[] => {
-  if (node.type === 'resource' && typeof node.data.resourceId === 'string') {
-    return [{ resourceId: node.data.resourceId, type: String(node.data.resourceType ?? 'text') as ResourceType }]
+  const directResourceId = canvasNodeResourceId(node)
+  if (directResourceId) {
+    return [{ resourceId: directResourceId, type: String(node.data.resourceType ?? 'text') as ResourceType }]
   }
 
   if (node.type !== 'result_group' || !Array.isArray(node.data.resources)) return []
@@ -1002,9 +1069,34 @@ const groupChildNodeIds = (node: CanvasNode) =>
     : []
 
 const mediaAssetId = (resource: Resource) =>
-  typeof resource.value === 'object' && resource.value !== null && 'assetId' in resource.value
-    ? String((resource.value as { assetId: unknown }).assetId)
-    : undefined
+  assetIdForResource(resource)
+
+const cloneResourceValueAndAssets = (
+  resource: Resource,
+  assets: Record<string, AssetRecord>,
+  nextResourceId: string,
+  now: string,
+  idFactory: () => string,
+) => {
+  const value = structuredClone(resource.value)
+  const originalAssetId = mediaAssetId(resource)
+  const clonedAssets: Record<string, AssetRecord> = {}
+  if (originalAssetId && typeof value === 'object' && value !== null && 'assetId' in value) {
+    const nextAssetId = isAssetBackedPrimitiveResourceValue(value)
+      ? primitiveAssetIdForResource(nextResourceId)
+      : idFactory()
+    ;(value as { assetId: string }).assetId = nextAssetId
+    const sourceAsset = assets[originalAssetId]
+    if (sourceAsset) {
+      clonedAssets[nextAssetId] = {
+        ...structuredClone(sourceAsset),
+        id: nextAssetId,
+        createdAt: now,
+      }
+    }
+  }
+  return { value, assets: clonedAssets }
+}
 
 const selectedTemplateNodeIds = (nodes: CanvasNode[], selectedIds: string[]) => {
   const nodesById = new Map(nodes.map((node) => [node.id, node]))
@@ -1024,7 +1116,8 @@ const selectedTemplateNodeIds = (nodes: CanvasNode[], selectedIds: string[]) => 
 const resourceIdsForNodes = (nodes: CanvasNode[]) =>
   uniqueIds(
     nodes.flatMap((node) => {
-      if (node.type === 'resource' && typeof node.data.resourceId === 'string') return [node.data.resourceId]
+      const directResourceId = canvasNodeResourceId(node)
+      if (directResourceId) return [directResourceId]
       if (node.type === 'result_group' && Array.isArray(node.data.resources)) {
         return node.data.resources
           .map((resource) =>
@@ -1137,8 +1230,15 @@ const resourceInputSnapshot = (
       .filter((entry): entry is [string, Resource] => Boolean(entry[1])),
   )
 
-const valueForInputSnapshot = (resource: Resource | undefined, fallback: PrimitiveInputValue) => {
+const valueForInputSnapshot = (
+  resource: Resource | undefined,
+  assets: Record<string, AssetRecord>,
+  fallback: PrimitiveInputValue,
+) => {
   if (!resource) return fallback
+  if (isAssetBackedPrimitiveResourceValue(resource.value)) {
+    return resolvedPrimitiveResourceValue(resource, assets, fallback)
+  }
   return resource.value
 }
 
@@ -1146,6 +1246,7 @@ const executionInputSnapshot = (
   functionDef: GenerationFunction,
   inputValues: RuntimeInputValues,
   resources: Record<string, Resource>,
+  assets: Record<string, AssetRecord> = {},
 ): Record<string, ExecutionInputSnapshot> =>
   Object.fromEntries(
     functionDef.inputs.map((input) => {
@@ -1160,7 +1261,7 @@ const executionInputSnapshot = (
             type: input.type,
             required: input.required,
             source: 'resource',
-            value: valueForInputSnapshot(resource, null),
+            value: valueForInputSnapshot(resource, assets, null),
             resourceId: value.resourceId,
             resourceName: resource?.name,
           },
@@ -1317,23 +1418,24 @@ const uploadedImageValue = (result: ComfyUploadImageResult) =>
   result.subfolder ? `${result.subfolder}/${result.name}` : result.name
 
 const resourceFilename = (resource: Resource) => {
-  if (typeof resource.value === 'object' && resource.value !== null && 'filename' in resource.value && resource.value.filename) {
+  if (isMediaResourceValue(resource.value) && resource.value.filename) {
     return resource.value.filename
   }
 
-  return `${resource.name ?? resource.id}.png`
+  return `${resource.name ?? resource.id}.${resource.type === 'text' || resource.type === 'number' ? 'txt' : 'png'}`
 }
 
 const resourceMimeType = (resource: Resource) => {
-  if (typeof resource.value === 'object' && resource.value !== null && 'mimeType' in resource.value) {
+  if (isMediaResourceValue(resource.value)) {
     return resource.value.mimeType
   }
 
+  if (resource.type === 'text' || resource.type === 'number') return 'text/plain'
   return 'image/png'
 }
 
 const resourceUrl = (resource: Resource) => {
-  if (typeof resource.value === 'object' && resource.value !== null && 'url' in resource.value) return resource.value.url
+  if (isMediaResourceValue(resource.value)) return resource.value.url
   if (typeof resource.value === 'string') return resource.value
   return undefined
 }
@@ -1367,10 +1469,12 @@ const readProjectResourceBlob = async (
   resource: Resource,
   createComfyClient: ProjectStoreDeps['createComfyClient'],
 ) => {
-  const media =
-    typeof resource.value === 'object' && resource.value !== null && 'assetId' in resource.value
-      ? resource.value
-      : undefined
+  if (resource.type === 'text' || resource.type === 'number') {
+    const primitiveValue = resolvedPrimitiveResourceValue(resource, project.assets, undefined)
+    if (primitiveValue !== undefined) return new Blob([String(primitiveValue)], { type: resourceMimeType(resource) })
+  }
+
+  const media = isMediaResourceValue(resource.value) ? resource.value : undefined
   const assetUrl = media?.assetId ? project.assets[media.assetId]?.blobUrl : undefined
   if (assetUrl) {
     try {
@@ -1547,17 +1651,6 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       return new Set([...explicitIds, ...ownedIds])
     }
 
-    const assetIdsForResources = (resources: Resource[]) =>
-      new Set(
-        resources
-          .map((resource) =>
-            typeof resource.value === 'object' && resource.value !== null && 'assetId' in resource.value
-              ? String(resource.value.assetId)
-              : undefined,
-          )
-          .filter((assetId): assetId is string => Boolean(assetId)),
-      )
-
     const outputResourceNodesForRefs = (
       refs: ResourceRef[],
       resources: Record<string, Resource>,
@@ -1567,8 +1660,8 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       const resultNode = nodes.find((node) => node.id === resultNodeId)
       const existingResourceNodeIds = new Set(
         nodes
-          .filter((node) => node.type === 'resource' && typeof node.data.resourceId === 'string')
-          .map((node) => String(node.data.resourceId)),
+          .map(canvasNodeResourceId)
+          .filter((resourceId): resourceId is string => Boolean(resourceId)),
       )
       const baseX = resultNode ? resultNode.position.x : 0
       const baseY = resultNode ? resultNode.position.y : 0
@@ -1600,20 +1693,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         if (!resultNode || !task) return current
 
         const resourceIdsToRemove = resourceIdsForResultNode(resultNode, taskId)
-        const resourcesToRemove = [...resourceIdsToRemove]
-          .map((resourceId) => current.project.resources[resourceId])
-          .filter((resource): resource is Resource => Boolean(resource))
-        const assetIdsToRemove = assetIdsForResources(resourcesToRemove)
-
         return {
           project: {
             ...current.project,
             project: { ...current.project.project, updatedAt: now },
             resources: Object.fromEntries(
               Object.entries(current.project.resources).filter(([resourceId]) => !resourceIdsToRemove.has(resourceId)),
-            ),
-            assets: Object.fromEntries(
-              Object.entries(current.project.assets).filter(([assetId]) => !assetIdsToRemove.has(assetId)),
             ),
             tasks: {
               ...current.project.tasks,
@@ -1762,7 +1847,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             client,
             item.functionDef.inputs,
             item.inputValues,
-            get().project.resources,
+            runtimeResourcesForProject(get().project),
             (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
           )
           if (taskWasCanceled(item.taskId)) return
@@ -1770,7 +1855,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             item.functionDef.workflow.rawJson,
             item.functionDef.inputs,
             asResolvedInputValues(preparedInputValues),
-            get().project.resources,
+            runtimeResourcesForProject(get().project),
           )
           const randomized = randomizeWorkflowSeeds(compiledWithInputs, {
             now: runtime.now,
@@ -1869,24 +1954,26 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
           for (const text of output.texts ?? []) {
             const resourceId = runtime.idFactory()
-            newResources[resourceId] = {
-              id: resourceId,
-              type: 'text',
-              name: output.key,
-              value: text,
-              source: {
+            const created = primitiveResourceWithAsset(
+              resourceId,
+              'text',
+              output.key,
+              text,
+              {
                 kind: 'function_output',
                 functionNodeId: item.functionNodeId,
                 resultGroupNodeId: item.resultNodeId,
                 taskId: item.taskId,
                 outputKey: output.key,
               },
-              metadata: {
+              {
                 workflowFunctionId: item.functionId,
                 endpointId: endpoint.id,
                 createdAt: runtime.now(),
               },
-            }
+            )
+            newResources[resourceId] = created.resource
+            newAssets[created.asset.id] = created.asset
             outputRefs.push({ resourceId, type: 'text' })
           }
 
@@ -2034,7 +2121,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         const request = await createOpenAIChatCompletionRequest(
           item.config,
           item.inputValues,
-          get().project.resources,
+          runtimeResourcesForProject(get().project),
           (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
         )
         if (request.messages.length === 0) throw new Error('OpenAI messages are empty')
@@ -2072,24 +2159,25 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         const resourceId = runtime.idFactory()
         const outputKey = item.functionDef.outputs[0]?.key ?? 'text'
         const completedAt = runtime.now()
-        const resource: Resource = {
-          id: resourceId,
-          type: 'text',
-          name: `${item.functionDef.name} Run ${item.runIndex}`,
-          value: outputText,
-          source: {
+        const created = primitiveResourceWithAsset(
+          resourceId,
+          'text',
+          `${item.functionDef.name} Run ${item.runIndex}`,
+          outputText,
+          {
             kind: 'function_output',
             functionNodeId: item.functionNodeId,
             resultGroupNodeId: item.resultNodeId,
             taskId: item.taskId,
             outputKey,
           },
-          metadata: {
+          {
             workflowFunctionId: item.functionId,
             endpointId: 'openai',
             createdAt: completedAt,
           },
-        }
+        )
+        const resource = created.resource
 
         if (taskWasCanceled(item.taskId)) return
         const resourceRefs: ResourceRef[] = [{ resourceId, type: 'text' }]
@@ -2103,6 +2191,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           project: {
             ...current.project,
             project: { ...current.project.project, updatedAt: runtime.now() },
+            assets: { ...current.project.assets, [created.asset.id]: created.asset },
             resources: { ...current.project.resources, [resourceId]: resource },
             tasks: {
               ...current.project.tasks,
@@ -2228,7 +2317,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         const request = await createGeminiGenerateContentRequest(
           item.config,
           item.inputValues,
-          get().project.resources,
+          runtimeResourcesForProject(get().project),
           (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
         )
         if (request.contents.length === 0) throw new Error('Gemini contents are empty')
@@ -2266,24 +2355,25 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         const resourceId = runtime.idFactory()
         const outputKey = item.functionDef.outputs[0]?.key ?? 'text'
         const completedAt = runtime.now()
-        const resource: Resource = {
-          id: resourceId,
-          type: 'text',
-          name: `${item.functionDef.name} Run ${item.runIndex}`,
-          value: outputText,
-          source: {
+        const created = primitiveResourceWithAsset(
+          resourceId,
+          'text',
+          `${item.functionDef.name} Run ${item.runIndex}`,
+          outputText,
+          {
             kind: 'function_output',
             functionNodeId: item.functionNodeId,
             resultGroupNodeId: item.resultNodeId,
             taskId: item.taskId,
             outputKey,
           },
-          metadata: {
+          {
             workflowFunctionId: item.functionId,
             endpointId: 'gemini',
             createdAt: completedAt,
           },
-        }
+        )
+        const resource = created.resource
 
         if (taskWasCanceled(item.taskId)) return
         const resourceRefs: ResourceRef[] = [{ resourceId, type: 'text' }]
@@ -2297,6 +2387,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           project: {
             ...current.project,
             project: { ...current.project.project, updatedAt: runtime.now() },
+            assets: { ...current.project.assets, [created.asset.id]: created.asset },
             resources: { ...current.project.resources, [resourceId]: resource },
             tasks: {
               ...current.project.tasks,
@@ -2422,7 +2513,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         const request = await createOpenAIImageApiRequest(
           item.config,
           item.inputValues,
-          get().project.resources,
+          runtimeResourcesForProject(get().project),
           defaultPrompt,
           (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
         )
@@ -2650,7 +2741,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         const request = await createGeminiImageGenerationRequest(
           item.config,
           item.inputValues,
-          get().project.resources,
+          runtimeResourcesForProject(get().project),
           defaultPrompt,
           (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
         )
@@ -2836,26 +2927,23 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       const resourceId = runtime.idFactory()
       if (output.type === 'number') {
         const numericValue = Number(typeof value === 'string' ? value : value.sizeBytes)
-        return {
-          resource: {
-            id: resourceId,
-            type: 'number',
-            name: output.label,
-            value: Number.isFinite(numericValue) ? numericValue : 0,
-            source: {
-              kind: 'function_output',
-              functionNodeId: item.functionNodeId,
-              resultGroupNodeId: item.resultNodeId,
-              taskId: item.taskId,
-              outputKey: output.key,
-            },
-            metadata: {
-              workflowFunctionId: item.functionId,
-              createdAt: now,
-            },
+        return primitiveResourceWithAsset(
+          resourceId,
+          'number',
+          output.label,
+          Number.isFinite(numericValue) ? numericValue : 0,
+          {
+            kind: 'function_output',
+            functionNodeId: item.functionNodeId,
+            resultGroupNodeId: item.resultNodeId,
+            taskId: item.taskId,
+            outputKey: output.key,
           },
-          ref: { resourceId, type: 'number' },
-        }
+          {
+            workflowFunctionId: item.functionId,
+            createdAt: now,
+          },
+        )
       }
 
       if (output.type === 'image' || output.type === 'video' || output.type === 'audio') {
@@ -2901,26 +2989,23 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         }
       }
 
-      return {
-        resource: {
-          id: resourceId,
-          type: 'text',
-          name: output.label,
-          value: typeof value === 'string' ? value : value.url,
-          source: {
-            kind: 'function_output',
-            functionNodeId: item.functionNodeId,
-            resultGroupNodeId: item.resultNodeId,
-            taskId: item.taskId,
-            outputKey: output.key,
-          },
-          metadata: {
-            workflowFunctionId: item.functionId,
-            createdAt: now,
-          },
+      return primitiveResourceWithAsset(
+        resourceId,
+        'text',
+        output.label,
+        typeof value === 'string' ? value : value.url,
+        {
+          kind: 'function_output',
+          functionNodeId: item.functionNodeId,
+          resultGroupNodeId: item.resultNodeId,
+          taskId: item.taskId,
+          outputKey: output.key,
         },
-        ref: { resourceId, type: 'text' },
-      }
+        {
+          workflowFunctionId: item.functionId,
+          createdAt: now,
+        },
+      )
     }
 
     const resourceForLocalOutput = (
@@ -2933,27 +3018,24 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
       if (output.type === 'number') {
         const numericValue = Number(value)
-        return {
-          resource: {
-            id: resourceId,
-            type: 'number',
-            name: output.label,
-            value: Number.isFinite(numericValue) ? numericValue : 0,
-            source: {
-              kind: 'function_output',
-              functionNodeId: item.sourceNodeId,
-              resultGroupNodeId: item.resultNodeId,
-              taskId: item.taskId,
-              outputKey: output.key,
-            },
-            metadata: {
-              workflowFunctionId: item.functionId,
-              endpointId: 'local',
-              createdAt: now,
-            },
+        return primitiveResourceWithAsset(
+          resourceId,
+          'number',
+          output.label,
+          Number.isFinite(numericValue) ? numericValue : 0,
+          {
+            kind: 'function_output',
+            functionNodeId: item.sourceNodeId,
+            resultGroupNodeId: item.resultNodeId,
+            taskId: item.taskId,
+            outputKey: output.key,
           },
-          ref: { resourceId, type: 'number' },
-        }
+          {
+            workflowFunctionId: item.functionId,
+            endpointId: 'local',
+            createdAt: now,
+          },
+        )
       }
 
       if (output.type === 'image' || output.type === 'video' || output.type === 'audio') {
@@ -2994,27 +3076,24 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         }
       }
 
-      return {
-        resource: {
-          id: resourceId,
-          type: 'text',
-          name: output.label,
-          value: String(value ?? ''),
-          source: {
-            kind: 'function_output',
-            functionNodeId: item.sourceNodeId,
-            resultGroupNodeId: item.resultNodeId,
-            taskId: item.taskId,
-            outputKey: output.key,
-          },
-          metadata: {
-            workflowFunctionId: item.functionId,
-            endpointId: 'local',
-            createdAt: now,
-          },
+      return primitiveResourceWithAsset(
+        resourceId,
+        'text',
+        output.label,
+        String(value ?? ''),
+        {
+          kind: 'function_output',
+          functionNodeId: item.sourceNodeId,
+          resultGroupNodeId: item.resultNodeId,
+          taskId: item.taskId,
+          outputKey: output.key,
         },
-        ref: { resourceId, type: 'text' },
-      }
+        {
+          workflowFunctionId: item.functionId,
+          endpointId: 'local',
+          createdAt: now,
+        },
+      )
     }
 
     const executeLocalQueueItem = async (item: QueuedLocalRun) => {
@@ -3047,7 +3126,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         const outputs = await executeLocalTransformFunction(
           item.functionDef,
           item.inputValues,
-          get().project.resources,
+          runtimeResourcesForProject(get().project),
           (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
         )
         const outputRefsByKey: Record<string, ResourceRef[]> = {}
@@ -3171,7 +3250,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       }))
 
       try {
-        const request = compileRequestFunctionRequest(item.functionDef, item.inputValues, get().project.resources)
+        const request = compileRequestFunctionRequest(item.functionDef, item.inputValues, runtimeResourcesForProject(get().project))
         set((current) => ({
           project: {
             ...current.project,
@@ -3342,7 +3421,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
                 status: 'queued',
                 inputRefs: inputResourceRefs(inputValues),
                 inputSnapshot: resourceInputSnapshot(inputValues, current.project.resources),
-                inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, current.project.resources),
+                inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, current.project.resources, current.project.assets),
                 updatedAt: now,
               },
             },
@@ -3686,7 +3765,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           status: hasPendingDependencies ? 'pending' : 'queued',
           inputRefs: inputResourceRefs(inputValues),
           inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
-          inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
+          inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources, state.project.assets),
           paramsSnapshot: {
             runCount,
             mode: 'local_transform',
@@ -3803,7 +3882,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           status: hasPendingDependencies ? 'pending' : 'queued',
           inputRefs: inputResourceRefs(inputValues),
           inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
-          inputValuesSnapshot: executionInputSnapshot(runtimeFunctionDef, inputValues, state.project.resources),
+          inputValuesSnapshot: executionInputSnapshot(runtimeFunctionDef, inputValues, state.project.resources, state.project.assets),
           paramsSnapshot: {
             runCount,
             mode: 'http_request',
@@ -3907,7 +3986,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           status: hasPendingDependencies ? 'pending' : 'queued',
           inputRefs: inputResourceRefs(inputValues),
           inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
-          inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
+          inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources, state.project.assets),
           paramsSnapshot: {
             runCount,
             mode: 'openai_chat_completions',
@@ -4013,7 +4092,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           status: hasPendingDependencies ? 'pending' : 'queued',
           inputRefs: inputResourceRefs(inputValues),
           inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
-          inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
+          inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources, state.project.assets),
           paramsSnapshot: {
             runCount,
             mode: 'gemini_generate_content',
@@ -4119,7 +4198,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           status: hasPendingDependencies ? 'pending' : 'queued',
           inputRefs: inputResourceRefs(inputValues),
           inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
-          inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
+          inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources, state.project.assets),
           paramsSnapshot: {
             runCount,
             mode: 'openai_image_generation',
@@ -4228,7 +4307,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           status: hasPendingDependencies ? 'pending' : 'queued',
           inputRefs: inputResourceRefs(inputValues),
           inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
-          inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
+          inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources, state.project.assets),
           paramsSnapshot: {
             runCount,
             mode: 'gemini_image_generation',
@@ -4620,13 +4699,14 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
     addTextResourceAtPosition: (name, value, position) => {
       const resourceId = runtime.idFactory()
+      const assetId = primitiveAssetIdForResource(resourceId)
       const nodeId = `node_${resourceId}`
       const now = runtime.now()
       const resource: Resource = {
         id: resourceId,
         type: 'text',
         name,
-        value,
+        value: primitiveResourceValueWithAsset(assetId, 'text', value),
         source: { kind: 'manual_input' },
         metadata: { createdAt: now },
       }
@@ -4641,6 +4721,10 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         const nextProject = {
           ...ensureProjectHistory(state.project),
           project: { ...state.project.project, updatedAt: now },
+          assets: {
+            ...state.project.assets,
+            [assetId]: primitiveAssetRecord(assetId, name, 'text', value, now),
+          },
           resources: { ...state.project.resources, [resourceId]: resource },
           canvas: { ...state.project.canvas, nodes: [...state.project.canvas.nodes, node] },
         }
@@ -4670,13 +4754,15 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       if (type === 'number') {
         const numericValue = Number(initialValue)
         const resourceId = runtime.idFactory()
+        const assetId = primitiveAssetIdForResource(resourceId)
         const nodeId = `node_${resourceId}`
         const now = runtime.now()
+        const value = Number.isFinite(numericValue) ? numericValue : 0
         const resource: Resource = {
           id: resourceId,
           type,
           name: resourceNameForType(type),
-          value: Number.isFinite(numericValue) ? numericValue : 0,
+          value: primitiveResourceValueWithAsset(assetId, 'number', value),
           source: { kind: 'manual_input' },
           metadata: { createdAt: now },
         }
@@ -4691,6 +4777,10 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           const nextProject = {
             ...ensureProjectHistory(state.project),
             project: { ...state.project.project, updatedAt: now },
+            assets: {
+              ...state.project.assets,
+              [assetId]: primitiveAssetRecord(assetId, resource.name ?? resourceNameForType(type), 'number', value, now),
+            },
             resources: { ...state.project.resources, [resourceId]: resource },
             canvas: { ...state.project.canvas, nodes: [...state.project.canvas.nodes, node] },
           }
@@ -4772,6 +4862,176 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       return nodeId
     },
 
+    addAssetResourcesAtPositions: (items) => {
+      if (items.length === 0) return []
+      const now = runtime.now()
+      const nodes: CanvasNode[] = []
+      const resources: Record<string, Resource> = {}
+      const assets: Record<string, AssetRecord> = {}
+
+      for (const item of items) {
+        const resourceId = runtime.idFactory()
+        const nodeId = `node_${resourceId}`
+        const resourceBase = {
+          id: resourceId,
+          type: item.type,
+          name: item.name,
+          source: { kind: 'manual_input' as const },
+          metadata: { createdAt: now },
+        }
+
+        if (item.type === 'text') {
+          const assetId = primitiveAssetIdForResource(resourceId)
+          resources[resourceId] = {
+            ...resourceBase,
+            type: 'text',
+            value: primitiveResourceValueWithAsset(assetId, 'text', item.value),
+          }
+          assets[assetId] = primitiveAssetRecord(assetId, item.name, 'text', item.value, now)
+        } else if (item.type === 'number') {
+          const assetId = primitiveAssetIdForResource(resourceId)
+          resources[resourceId] = {
+            ...resourceBase,
+            type: 'number',
+            value: primitiveResourceValueWithAsset(assetId, 'number', item.value),
+          }
+          assets[assetId] = primitiveAssetRecord(assetId, item.name, 'number', item.value, now)
+        } else {
+          const assetId = runtime.idFactory()
+          resources[resourceId] = {
+            ...resourceBase,
+            type: item.type,
+            value: mediaValueWithAsset(assetId, item.media),
+          }
+          assets[assetId] = {
+            id: assetId,
+            name: item.media.filename ?? item.name,
+            mimeType: item.media.mimeType,
+            sizeBytes: item.media.sizeBytes,
+            blobUrl: item.media.url,
+            createdAt: now,
+          }
+        }
+
+        nodes.push({
+          id: nodeId,
+          type: 'resource',
+          position: item.position,
+          data: { resourceId, resourceType: item.type },
+        })
+      }
+
+      const nodeIds = nodes.map((node) => node.id)
+      const resourceIds = Object.keys(resources)
+      set((state) => {
+        const nextProject = {
+          ...ensureProjectHistory(state.project),
+          project: { ...state.project.project, updatedAt: now },
+          assets: { ...state.project.assets, ...assets },
+          resources: { ...state.project.resources, ...resources },
+          canvas: { ...state.project.canvas, nodes: [...state.project.canvas.nodes, ...nodes] },
+        }
+        return {
+          ...selectedState(nodeIds),
+          project: projectWithRecordedHistory(state.project, nextProject, now, {
+            label: items.length > 1 ? 'Create assets' : `Create ${items[0]?.type ?? 'asset'} asset`,
+            transactionType: 'asset',
+            nodeIds,
+            assetIds: resourceIds,
+            preview: {
+              title: items.length > 1 ? 'Create assets' : `Create ${items[0]?.type ?? 'asset'} asset`,
+              subtitle: items.length > 1 ? `${items.length} assets` : items[0]?.name,
+              nodeIds,
+              assetIds: resourceIds,
+            },
+          }),
+        }
+      })
+      return nodeIds
+    },
+
+    replaceAssetResource: (resourceId, item) => {
+      const now = runtime.now()
+      set((state) => {
+        const resource = state.project.resources[resourceId]
+        if (!resource) return state
+        const nodeIds = state.project.canvas.nodes
+          .filter((node) => canvasNodeResourceId(node) === resourceId)
+          .map((node) => node.id)
+        const nextAssets: Record<string, AssetRecord> = {}
+        let nextResource: Resource
+
+        if (item.type === 'text') {
+          const assetId = primitiveAssetIdForResource(resourceId)
+          nextAssets[assetId] = primitiveAssetRecord(assetId, item.name, 'text', item.value, now)
+          nextResource = {
+            ...resource,
+            type: 'text',
+            name: item.name,
+            value: primitiveResourceValueWithAsset(assetId, 'text', item.value),
+          }
+        } else if (item.type === 'number') {
+          const assetId = primitiveAssetIdForResource(resourceId)
+          nextAssets[assetId] = primitiveAssetRecord(assetId, item.name, 'number', item.value, now)
+          nextResource = {
+            ...resource,
+            type: 'number',
+            name: item.name,
+            value: primitiveResourceValueWithAsset(assetId, 'number', item.value),
+          }
+        } else {
+          const assetId = runtime.idFactory()
+          nextAssets[assetId] = {
+            id: assetId,
+            name: item.media.filename ?? item.name,
+            mimeType: item.media.mimeType,
+            sizeBytes: item.media.sizeBytes,
+            blobUrl: item.media.url,
+            createdAt: now,
+          }
+          nextResource = {
+            ...resource,
+            type: item.type,
+            name: item.media.filename ?? item.name,
+            value: mediaValueWithAsset(assetId, item.media),
+          }
+        }
+
+        const nextProject = {
+          ...ensureProjectHistory(state.project),
+          project: { ...state.project.project, updatedAt: now },
+          assets: { ...state.project.assets, ...nextAssets },
+          resources: {
+            ...state.project.resources,
+            [resourceId]: nextResource,
+          },
+          canvas: {
+            ...state.project.canvas,
+            nodes: state.project.canvas.nodes.map((node) =>
+              canvasNodeResourceId(node) === resourceId
+                ? { ...node, data: { ...node.data, resourceType: item.type } }
+                : node,
+            ),
+          },
+        }
+
+        return {
+          project: projectWithRecordedHistory(state.project, nextProject, now, {
+            label: `Replace ${item.type} asset`,
+            transactionType: 'asset',
+            nodeIds,
+            assetIds: [resourceId],
+            preview: {
+              title: `Replace ${item.type} asset`,
+              subtitle: item.name,
+              nodeIds,
+              assetIds: [resourceId],
+            },
+          }),
+        }
+      })
+    },
+
     updateTextResourceValue: (resourceId, value) => {
       const now = runtime.now()
       set((state) => {
@@ -4786,8 +5046,18 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
               ...state.project.resources,
               [resourceId]: {
                 ...resource,
-                value,
+                value: primitiveResourceValueWithAsset(primitiveAssetIdForResource(resourceId), 'text', value),
               },
+            },
+            assets: {
+              ...state.project.assets,
+              [primitiveAssetIdForResource(resourceId)]: primitiveAssetRecord(
+                primitiveAssetIdForResource(resourceId),
+                resource.name ?? resourceNameForType('text'),
+                'text',
+                value,
+                now,
+              ),
             },
           },
         }
@@ -4809,8 +5079,18 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
               ...state.project.resources,
               [resourceId]: {
                 ...resource,
-                value,
+                value: primitiveResourceValueWithAsset(primitiveAssetIdForResource(resourceId), 'number', value),
               },
+            },
+            assets: {
+              ...state.project.assets,
+              [primitiveAssetIdForResource(resourceId)]: primitiveAssetRecord(
+                primitiveAssetIdForResource(resourceId),
+                resource.name ?? resourceNameForType('number'),
+                'number',
+                value,
+                now,
+              ),
             },
           },
         }
@@ -4818,47 +5098,10 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
     },
 
     replaceResourceMedia: (resourceId, type, media) => {
-      const assetId = runtime.idFactory()
-      const now = runtime.now()
-
-      set((state) => {
-        const resource = state.project.resources[resourceId]
-        if (!resource) return state
-
-        return {
-          project: {
-            ...state.project,
-            project: { ...state.project.project, updatedAt: now },
-            assets: {
-              ...state.project.assets,
-              [assetId]: {
-                id: assetId,
-                name: media.filename ?? resource.name ?? resourceNameForType(type),
-                mimeType: media.mimeType,
-                sizeBytes: media.sizeBytes,
-                blobUrl: media.url,
-                createdAt: now,
-              },
-            },
-            resources: {
-              ...state.project.resources,
-              [resourceId]: {
-                ...resource,
-                type,
-                name: media.filename ?? resource.name,
-                value: mediaValueWithAsset(assetId, media),
-              },
-            },
-            canvas: {
-              ...state.project.canvas,
-              nodes: state.project.canvas.nodes.map((node) =>
-                node.type === 'resource' && node.data.resourceId === resourceId
-                  ? { ...node, data: { ...node.data, resourceType: type } }
-                  : node,
-              ),
-            },
-          },
-        }
+      get().replaceAssetResource(resourceId, {
+        type,
+        name: media.filename ?? resourceNameForType(type),
+        media,
       })
     },
 
@@ -5169,9 +5412,9 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       return id
     },
 
-    runFunctionAtPosition: async (functionId, inputValues, position, runCount) => {
+    runFunctionAtPosition: async (functionId, inputValues, position, runCount, functionSnapshot) => {
       const state = get()
-      const functionDef = state.project.functions[functionId]
+      const functionDef = functionSnapshot ?? state.project.functions[functionId]
       if (!functionDef) return undefined
 
       const now = runtime.now()
@@ -5239,7 +5482,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           status: hasPendingDependencies ? 'pending' : 'queued',
           inputRefs: inputResourceRefs(runtimeInputValues),
           inputSnapshot: resourceInputSnapshot(runtimeInputValues, state.project.resources),
-          inputValuesSnapshot: executionInputSnapshot(functionDef, runtimeInputValues, state.project.resources),
+          inputValuesSnapshot: executionInputSnapshot(functionDef, runtimeInputValues, state.project.resources, state.project.assets),
           paramsSnapshot: { runCount: normalizedRuns, mode: 'function_command' },
           workflowTemplateSnapshot: functionDef.workflow.rawJson,
           compiledWorkflowSnapshot: functionDef.workflow.rawJson,
@@ -5254,7 +5497,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           functionDef,
           provider,
           inputRefs: inputResourceRefs(runtimeInputValues),
-          inputValuesSnapshot: executionInputSnapshot(functionDef, runtimeInputValues, state.project.resources),
+          inputValuesSnapshot: executionInputSnapshot(functionDef, runtimeInputValues, state.project.resources, state.project.assets),
           primitiveParams: { runCount: normalizedRuns },
           runIndex,
           runTotal: normalizedRuns,
@@ -5338,16 +5581,14 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       ): { resource: Resource; asset?: ProjectState['assets'][string] } => {
         if (output.type === 'number') {
           const numericValue = Number(value)
-          return {
-            resource: {
-              id: resourceId,
-              type: 'number',
-              name: output.label,
-              value: Number.isFinite(numericValue) ? numericValue : 0,
-              source: sourceForOutput(taskId, output.key),
-              metadata: { workflowFunctionId: functionId, endpointId: 'local', createdAt: completedAt },
-            },
-          }
+          return primitiveResourceWithAsset(
+            resourceId,
+            'number',
+            output.label,
+            Number.isFinite(numericValue) ? numericValue : 0,
+            sourceForOutput(taskId, output.key),
+            { workflowFunctionId: functionId, endpointId: 'local', createdAt: completedAt },
+          )
         }
 
         if (output.type === 'image' || output.type === 'video' || output.type === 'audio') {
@@ -5377,16 +5618,14 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           }
         }
 
-        return {
-          resource: {
-            id: resourceId,
-            type: 'text',
-            name: output.label,
-            value: String(value ?? ''),
-            source: sourceForOutput(taskId, output.key),
-            metadata: { workflowFunctionId: functionId, endpointId: 'local', createdAt: completedAt },
-          },
-        }
+        return primitiveResourceWithAsset(
+          resourceId,
+          'text',
+          output.label,
+          String(value ?? ''),
+          sourceForOutput(taskId, output.key),
+          { workflowFunctionId: functionId, endpointId: 'local', createdAt: completedAt },
+        )
       }
 
       const mediaResourceFromGeneratedImage = (
@@ -5434,16 +5673,14 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       ): { resource: Resource; asset?: ProjectState['assets'][string] } => {
         if (output.type === 'number') {
           const numericValue = Number(typeof value === 'string' ? value : value.sizeBytes)
-          return {
-            resource: {
-              id: resourceId,
-              type: 'number',
-              name: output.label,
-              value: Number.isFinite(numericValue) ? numericValue : 0,
-              source: sourceForOutput(taskId, output.key),
-              metadata: { workflowFunctionId: functionId, endpointId: 'request', createdAt: completedAt },
-            },
-          }
+          return primitiveResourceWithAsset(
+            resourceId,
+            'number',
+            output.label,
+            Number.isFinite(numericValue) ? numericValue : 0,
+            sourceForOutput(taskId, output.key),
+            { workflowFunctionId: functionId, endpointId: 'request', createdAt: completedAt },
+          )
         }
 
         if (output.type === 'image' || output.type === 'video' || output.type === 'audio') {
@@ -5473,16 +5710,14 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           }
         }
 
-        return {
-          resource: {
-            id: resourceId,
-            type: 'text',
-            name: output.label,
-            value: String(value ?? ''),
-            source: sourceForOutput(taskId, output.key),
-            metadata: { workflowFunctionId: functionId, endpointId: 'request', createdAt: completedAt },
-          },
-        }
+        return primitiveResourceWithAsset(
+          resourceId,
+          'text',
+          output.label,
+          String(value ?? ''),
+          sourceForOutput(taskId, output.key),
+          { workflowFunctionId: functionId, endpointId: 'request', createdAt: completedAt },
+        )
       }
 
       const markCommandTaskRunning = (taskId: string, endpointId: string) => {
@@ -5633,7 +5868,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           const outputs = await executeLocalTransformFunction(
             functionDef,
             queuedRun.inputValues,
-            get().project.resources,
+            runtimeResourcesForProject(get().project),
             (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
           )
           const completedAt = runtime.now()
@@ -5686,14 +5921,14 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             client,
             functionDef.inputs,
             queuedRun.inputValues,
-            get().project.resources,
+            runtimeResourcesForProject(get().project),
             (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
           )
           const compiledWithInputs = injectWorkflowInputs(
             functionDef.workflow.rawJson,
             functionDef.inputs,
             asResolvedInputValues(preparedInputValues),
-            get().project.resources,
+            runtimeResourcesForProject(get().project),
           )
           const randomized = randomizeWorkflowSeeds(compiledWithInputs, {
             now: runtime.now,
@@ -5795,14 +6030,16 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
               )
               if (extraNode) extraNodes.push(extraNode)
 
-              nextResources[ref.resourceId] = {
-                id: ref.resourceId,
-                type: 'text',
-                name: output.key,
-                value: text,
-                source: sourceForOutput(queuedRun.taskId, output.key),
-                metadata: { workflowFunctionId: functionId, endpointId: endpoint.id, createdAt: completedAt },
-              }
+              const created = primitiveResourceWithAsset(
+                ref.resourceId,
+                'text',
+                output.key,
+                text,
+                sourceForOutput(queuedRun.taskId, output.key),
+                { workflowFunctionId: functionId, endpointId: endpoint.id, createdAt: completedAt },
+              )
+              nextResources[ref.resourceId] = created.resource
+              nextAssets[created.asset.id] = created.asset
               valueIndex += 1
             }
 
@@ -5839,7 +6076,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             const request = await createOpenAIChatCompletionRequest(
               config,
               queuedRun.inputValues,
-              get().project.resources,
+              runtimeResourcesForProject(get().project),
               (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
             )
             requestSnapshot = request
@@ -5855,14 +6092,16 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             const output = functionDef.outputs[0] ?? { key: 'text', label: 'Text', type: 'text' as const }
             const ref = queuedRun.outputRefs[output.key]?.[0]
             if (!ref) throw new Error(`Missing pending output ref: ${output.key}`)
-            nextResources[ref.resourceId] = {
-              id: ref.resourceId,
-              type: 'text',
-              name: output.label,
-              value: outputText,
-              source: sourceForOutput(queuedRun.taskId, output.key),
-              metadata: { workflowFunctionId: functionId, endpointId: 'openai', createdAt: completedAt },
-            }
+            const created = primitiveResourceWithAsset(
+              ref.resourceId,
+              'text',
+              output.label,
+              outputText,
+              sourceForOutput(queuedRun.taskId, output.key),
+              { workflowFunctionId: functionId, endpointId: 'openai', createdAt: completedAt },
+            )
+            nextResources[ref.resourceId] = created.resource
+            nextAssets[created.asset.id] = created.asset
             nextOutputRefs[output.key] = [ref]
           } else if (provider === 'gemini_llm') {
             const config = mergedGeminiLlmConfig(functionDef.gemini)
@@ -5870,7 +6109,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             const request = await createGeminiGenerateContentRequest(
               config,
               queuedRun.inputValues,
-              get().project.resources,
+              runtimeResourcesForProject(get().project),
               (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
             )
             requestSnapshot = request
@@ -5886,14 +6125,16 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             const output = functionDef.outputs[0] ?? { key: 'text', label: 'Text', type: 'text' as const }
             const ref = queuedRun.outputRefs[output.key]?.[0]
             if (!ref) throw new Error(`Missing pending output ref: ${output.key}`)
-            nextResources[ref.resourceId] = {
-              id: ref.resourceId,
-              type: 'text',
-              name: output.label,
-              value: outputText,
-              source: sourceForOutput(queuedRun.taskId, output.key),
-              metadata: { workflowFunctionId: functionId, endpointId: 'gemini', createdAt: completedAt },
-            }
+            const created = primitiveResourceWithAsset(
+              ref.resourceId,
+              'text',
+              output.label,
+              outputText,
+              sourceForOutput(queuedRun.taskId, output.key),
+              { workflowFunctionId: functionId, endpointId: 'gemini', createdAt: completedAt },
+            )
+            nextResources[ref.resourceId] = created.resource
+            nextAssets[created.asset.id] = created.asset
             nextOutputRefs[output.key] = [ref]
           } else if (provider === 'openai_image') {
             const config = mergedOpenAIImageConfig(functionDef.openaiImage)
@@ -5901,7 +6142,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             const request = await createOpenAIImageApiRequest(
               config,
               queuedRun.inputValues,
-              get().project.resources,
+              runtimeResourcesForProject(get().project),
               functionDef.inputs.find((input) => input.key === 'prompt')?.defaultValue,
               (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
             )
@@ -5951,7 +6192,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             const request = await createGeminiImageGenerationRequest(
               config,
               queuedRun.inputValues,
-              get().project.resources,
+              runtimeResourcesForProject(get().project),
               functionDef.inputs.find((input) => input.key === 'prompt')?.defaultValue,
               (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
             )
@@ -5990,7 +6231,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
               nextOutputRefs[output.key] = refs
             })
           } else if (provider === 'http_request') {
-            const request = compileRequestFunctionRequest(functionDef, queuedRun.inputValues, get().project.resources)
+            const request = compileRequestFunctionRequest(functionDef, queuedRun.inputValues, runtimeResourcesForProject(get().project))
             requestSnapshot = request
             const response = await fetch(request.url, request.init)
             const responseBuffer = await response.arrayBuffer()
@@ -6405,7 +6646,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           status,
           inputRefs: inputResourceRefs(inputValues),
           inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
-          inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
+          inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources, state.project.assets),
           paramsSnapshot: { runCount },
           workflowTemplateSnapshot: functionDef.workflow.rawJson,
           compiledWorkflowSnapshot: randomized.workflow,
@@ -6536,7 +6777,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           status: hasPendingDependencies ? 'pending' : 'queued',
           inputRefs: inputResourceRefs(inputValues),
           inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
-          inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
+          inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources, state.project.assets),
           paramsSnapshot: { runCount, mode: 'comfy' },
           workflowTemplateSnapshot: functionDef.workflow.rawJson,
           compiledWorkflowSnapshot: functionDef.workflow.rawJson,
@@ -6642,7 +6883,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         status: 'queued',
         inputRefs: inputResourceRefs(inputValues),
         inputSnapshot: resourceInputSnapshot(inputValues, state.project.resources),
-        inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources),
+        inputValuesSnapshot: executionInputSnapshot(functionDef, inputValues, state.project.resources, state.project.assets),
         paramsSnapshot: {
           runCount,
           mode: 'local_transform',
@@ -7265,7 +7506,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         if (!node) return state
 
         const resources = { ...state.project.resources }
-        if (node.type === 'resource') {
+        if (node.type === 'asset' || node.type === 'resource') {
           const resourceId = String(node.data.resourceId ?? '')
           const resource = resources[resourceId]
           if (resource) resources[resourceId] = { ...resource, name: trimmedTitle }
@@ -7506,25 +7747,13 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       for (const resource of Object.values(template.resources)) {
         const nextResourceId = runtime.idFactory()
         resourceIdMap.set(resource.id, nextResourceId)
-        const originalAssetId = mediaAssetId(resource)
-        const value = structuredClone(resource.value)
-        if (originalAssetId && typeof value === 'object' && value !== null && 'assetId' in value) {
-          const sourceAsset = template.assets[originalAssetId]
-          const nextAssetId = runtime.idFactory()
-          ;(value as { assetId: string }).assetId = nextAssetId
-          if (sourceAsset) {
-            clonedAssets[nextAssetId] = {
-              ...structuredClone(sourceAsset),
-              id: nextAssetId,
-              createdAt: now,
-            }
-          }
-        }
+        const clonedValue = cloneResourceValueAndAssets(resource, template.assets, nextResourceId, now, runtime.idFactory)
+        Object.assign(clonedAssets, clonedValue.assets)
         clonedResources[nextResourceId] = {
           ...structuredClone(resource),
           id: nextResourceId,
           name: `${resource.name ?? 'Resource'} Copy`,
-          value,
+          value: clonedValue.value,
           source: {
             kind: 'duplicated',
             parentResourceId: resource.id,
@@ -7539,8 +7768,9 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       const clonedNodes = template.nodes.map((node) => {
         const clonedNode = structuredClone(node)
         let nextNodeId: string
-        if (node.type === 'resource' && typeof node.data.resourceId === 'string') {
-          const nextResourceId = resourceIdMap.get(node.data.resourceId)
+        const nodeResourceId = canvasNodeResourceId(node)
+        if (nodeResourceId) {
+          const nextResourceId = resourceIdMap.get(nodeResourceId)
           nextNodeId = nextResourceId ? `node_${nextResourceId}` : `node_${runtime.idFactory()}`
           clonedNode.data = {
             ...clonedNode.data,
@@ -7650,11 +7880,19 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         if (!originalResource) return
 
         const resourceId = runtime.idFactory()
+        const clonedValue = cloneResourceValueAndAssets(
+          originalResource,
+          get().project.assets,
+          resourceId,
+          now,
+          runtime.idFactory,
+        )
         const nodeId = `node_${resourceId}`
         const resource: Resource = {
           ...structuredClone(originalResource),
           id: resourceId,
           name: `${originalResource.name ?? 'Resource'} Copy`,
+          value: clonedValue.value,
           source: {
             kind: 'duplicated',
             parentResourceId: originalResource.id,
@@ -7680,6 +7918,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           project: {
             ...state.project,
             project: { ...state.project.project, updatedAt: now },
+            assets: { ...state.project.assets, ...clonedValue.assets },
             resources: { ...state.project.resources, [resourceId]: resource },
             canvas: { ...state.project.canvas, nodes: [...state.project.canvas.nodes, node] },
           },
@@ -7720,23 +7959,32 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         const nodesById = new Map(state.project.canvas.nodes.map((node) => [node.id, node]))
         const newNodes: CanvasNode[] = []
         const newResources: Record<string, Resource> = {}
+        const newAssets: Record<string, AssetRecord> = {}
         const selectedIds: string[] = []
 
         for (const nodeId of ids) {
           const node = nodesById.get(nodeId)
           if (!node) continue
 
-          if (node.type === 'resource') {
-            const originalResourceId = String(node.data.resourceId ?? '')
+          const originalResourceId = canvasNodeResourceId(node)
+          if (originalResourceId) {
             const originalResource = state.project.resources[originalResourceId]
             if (!originalResource) continue
 
             const resourceId = runtime.idFactory()
+            const clonedValue = cloneResourceValueAndAssets(
+              originalResource,
+              state.project.assets,
+              resourceId,
+              now,
+              runtime.idFactory,
+            )
             const duplicatedNodeId = `node_${resourceId}`
             const resource: Resource = {
               ...structuredClone(originalResource),
               id: resourceId,
               name: `${originalResource.name ?? 'Resource'} Copy`,
+              value: clonedValue.value,
               source: {
                 kind: 'duplicated',
                 parentResourceId: originalResource.id,
@@ -7758,6 +8006,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             }
 
             newResources[resourceId] = resource
+            Object.assign(newAssets, clonedValue.assets)
             newNodes.push(duplicatedNode)
             selectedIds.push(duplicatedNodeId)
             continue
@@ -7788,6 +8037,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           project: {
             ...state.project,
             project: { ...state.project.project, updatedAt: now },
+            assets: { ...state.project.assets, ...newAssets },
             resources: { ...state.project.resources, ...newResources },
             canvas: { ...state.project.canvas, nodes: [...state.project.canvas.nodes, ...newNodes] },
           },

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 import type { Resource } from '../domain/types'
+import { resolvedResourceDisplayValue } from '../domain/resourceValues'
 import { projectStore } from '../store/projectStore'
 
 const mediaValue = (resource: Resource) =>
@@ -62,29 +63,36 @@ function usePreviewMediaSource(resource: Resource) {
       canceled = true
       if (nextObjectUrl) URL.revokeObjectURL(nextObjectUrl)
     }
-  }, [key, resource])
+  }, [key, resource.id])
 
   if (!media?.url) return undefined
   return key ? (objectUrl?.key === key ? objectUrl.url : undefined) : media.url
 }
 
 function FullResourcePreview({ resource }: { resource: Resource }) {
-  const mediaSource = usePreviewMediaSource(resource)
-  const label = resourceDownloadName(resource)
+  const previewResource = {
+    ...resource,
+    value: resolvedResourceDisplayValue(resource, projectStore.getState().project.assets),
+  }
+  const mediaSource = usePreviewMediaSource(previewResource)
+  const label = resourceDownloadName(previewResource)
 
-  if (resource.type === 'image' && mediaSource) {
+  if (previewResource.type === 'image' && mediaSource) {
     return <img className="full-preview-image" src={String(mediaSource)} alt={label} />
   }
 
-  if (resource.type === 'video' && mediaSource) {
+  if (previewResource.type === 'video' && mediaSource) {
     return <video className="full-preview-video" src={String(mediaSource)} controls aria-label={`${label} full preview`} />
   }
 
-  if (resource.type === 'audio' && mediaSource) {
+  if (previewResource.type === 'audio' && mediaSource) {
     return <audio className="full-preview-audio" src={String(mediaSource)} controls aria-label={`${label} full preview`} />
   }
 
-  const textValue = typeof resource.value === 'string' ? resource.value : JSON.stringify(resource.value, null, 2)
+  const textValue =
+    typeof previewResource.value === 'string' || typeof previewResource.value === 'number'
+      ? String(previewResource.value)
+      : JSON.stringify(previewResource.value, null, 2)
   return <pre className="full-preview-text">{textValue}</pre>
 }
 

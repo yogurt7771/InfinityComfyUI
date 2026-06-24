@@ -17,6 +17,7 @@ export type AssetRecord = {
   mimeType: string
   sizeBytes: number
   blobUrl?: string
+  primitiveValue?: string | number
   createdAt: string
 }
 
@@ -38,11 +39,18 @@ export type MediaResourceValue = {
   }
 }
 
+export type AssetBackedPrimitiveResourceValue = {
+  assetId: string
+  kind: Extract<ResourceType, 'text' | 'number'>
+  mimeType: string
+  sizeBytes: number
+}
+
 export type Resource = {
   id: string
   type: ResourceType
   name?: string
-  value: string | number | MediaResourceValue
+  value: string | number | MediaResourceValue | AssetBackedPrimitiveResourceValue
   source: {
     kind: ResourceSourceKind
     runId?: string
@@ -312,12 +320,13 @@ export type GenerationFunction = {
   updatedAt: string
 }
 
-export type CanvasNodeKind = 'resource' | 'function' | 'result_group' | 'group'
+export type CanvasNodeKind = 'asset' | 'resource' | 'function' | 'result_group' | 'group'
 
 export type CanvasNode = {
   id: string
   type: CanvasNodeKind
   position: { x: number; y: number }
+  size?: { width: number; height: number }
   data: Record<string, unknown>
 }
 
