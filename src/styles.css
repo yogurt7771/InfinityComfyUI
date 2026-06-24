@@ -1718,6 +1718,78 @@ textarea[aria-invalid="true"] {
   min-height: 34px;
 }
 
+.add-node-section-label {
+  padding: 7px 9px 2px;
+  color: var(--muted-light);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.temporary-comfy-runner {
+  width: min(760px, calc(100vw - 48px));
+}
+
+.temporary-comfy-endpoint {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.temporary-comfy-endpoint select {
+  width: 100%;
+  min-height: 46px;
+}
+
+.temporary-comfy-panel {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 22px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 86%, var(--teal-soft));
+  color: var(--muted);
+}
+
+.temporary-comfy-panel strong {
+  color: var(--ink);
+  font-size: 18px;
+}
+
+.function-run-provider-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 88%, var(--teal-soft));
+}
+
+.function-run-provider-fields label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.function-run-provider-fields input,
+.function-run-provider-fields select,
+.function-run-provider-fields textarea {
+  width: 100%;
+  min-width: 0;
+}
+
+.function-run-provider-wide {
+  grid-column: 1 / -1;
+}
+
 .add-node-menu button:disabled {
   cursor: not-allowed;
   opacity: 0.5;

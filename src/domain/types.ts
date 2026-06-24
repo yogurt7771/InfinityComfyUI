@@ -55,6 +55,7 @@ export type Resource = {
     prompt?: string
     seed?: number
     workflowFunctionId?: string
+    functionSnapshot?: GenerationFunction
     endpointId?: string
     createdAt: string
   }
@@ -458,6 +459,7 @@ export type ExecutionTask = {
   inputSnapshot: Record<string, Resource>
   inputValuesSnapshot?: Record<string, ExecutionInputSnapshot>
   paramsSnapshot: Record<string, unknown>
+  functionSnapshot?: GenerationFunction
   workflowTemplateSnapshot: ComfyWorkflow
   compiledWorkflowSnapshot: ComfyWorkflow
   requestSnapshot?: unknown

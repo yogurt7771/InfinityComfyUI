@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { vi } from 'vitest'
 import { createProjectSlice } from './projectStore'
 import { createOpenAILlmFunction, OPENAI_LLM_FUNCTION_ID } from '../domain/openaiLlm'
-import { GEMINI_LLM_FUNCTION_ID } from '../domain/geminiLlm'
-import { OPENAI_IMAGE_FUNCTION_ID } from '../domain/openaiImage'
-import { GEMINI_IMAGE_FUNCTION_ID } from '../domain/geminiImage'
+import { createGeminiLlmFunction, GEMINI_LLM_FUNCTION_ID } from '../domain/geminiLlm'
+import { createOpenAIImageFunction, OPENAI_IMAGE_FUNCTION_ID } from '../domain/openaiImage'
+import { createGeminiImageFunction, GEMINI_IMAGE_FUNCTION_ID } from '../domain/geminiImage'
 import { REQUEST_FUNCTION_ID } from '../domain/requestFunction'
 import { LOCAL_TEXT_TRIM_FUNCTION_ID } from '../domain/localTransforms'
 import type { GenerationFunction } from '../domain/types'
@@ -1354,6 +1354,532 @@ describe('project store actions', () => {
     expect(state.project.tasks.task_1.outputRefs).toEqual({
       text: [{ resourceId: 'res_output', type: 'text' }],
     })
+  })
+
+  it('runs a temporary function draft from popup inputs without saving it as a function template', async () => {
+    const ids = ['res_input', 'task_1', 'res_output']
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now: () => '2026-05-08T09:00:00.000Z',
+    })
+    const builtInTrim = slice.getState().project.functions[LOCAL_TEXT_TRIM_FUNCTION_ID]!
+    const temporaryTrim = {
+      ...builtInTrim,
+      id: 'temp_trim',
+      name: 'Temporary Trim',
+    }
+
+    slice.getState().addTextResourceAtPosition('Prompt', '  warm kitchen  ', { x: 0, y: 0 })
+    await slice.getState().runTemporaryFunctionAtPosition(
+      temporaryTrim,
+      { text: { resourceId: 'res_input', type: 'text' } },
+      { x: 360, y: 0 },
+      1,
+    )
+
+    const state = slice.getState()
+    expect(state.project.functions.temp_trim).toBeUndefined()
+    expect(state.project.resources.res_output.value).toBe('warm kitchen')
+    expect(state.project.resources.res_output.metadata?.workflowFunctionId).toBe('temp_trim')
+    expect(state.project.tasks.task_1.functionId).toBe('temp_trim')
+  })
+
+  it('runs a temporary request draft from popup inputs and creates command output resources', async () => {
+    const originalFetch = globalThis.fetch
+    const fetchCalls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        fetchCalls.push({ input, init })
+        return new Response(JSON.stringify({ result: { text: 'ok from temporary request' } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }),
+    )
+    const ids = ['task_1', 'res_output']
+    const now = () => '2026-05-08T09:00:00.000Z'
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now,
+    })
+    const temporaryRequest: GenerationFunction = {
+      id: 'temp_request',
+      name: 'Temporary Request',
+      category: 'Request',
+      description: 'Temporary HTTP request',
+      workflow: { format: 'http_request', rawJson: {} },
+      request: {
+        url: 'https://api.example.com/render',
+        method: 'POST',
+        headers: { 'X-App': 'Infinity' },
+        body: '{"prompt":""}',
+        responseParse: 'json',
+        responseEncoding: 'utf-8',
+      },
+      inputs: [
+        {
+          key: 'prompt',
+          label: 'Prompt',
+          type: 'text',
+          required: true,
+          bind: { path: '$.prompt', requestTarget: 'body' },
+          upload: { strategy: 'none' },
+        },
+      ],
+      outputs: [
+        {
+          key: 'text',
+          label: 'Text',
+          type: 'text',
+          bind: {},
+          extract: { source: 'response_json_path', path: '$.result.text' },
+        },
+      ],
+      runtimeDefaults: { runCount: 1, seedPolicy: { mode: 'randomize_all_before_submit' } },
+      createdAt: now(),
+      updatedAt: now(),
+    }
+
+    try {
+      await slice.getState().runTemporaryFunctionAtPosition(
+        temporaryRequest,
+        { prompt: 'sunny kitchen' },
+        { x: 360, y: 0 },
+        1,
+      )
+
+      const state = slice.getState()
+      expect(fetchCalls).toHaveLength(1)
+      expect(String(fetchCalls[0]?.input)).toBe('https://api.example.com/render')
+      expect(fetchCalls[0]?.init).toMatchObject({
+        method: 'POST',
+        headers: { 'X-App': 'Infinity' },
+        body: '{"prompt":"sunny kitchen"}',
+      })
+      expect(state.project.functions.temp_request).toBeUndefined()
+      expect(state.project.tasks.task_1).toMatchObject({
+        status: 'succeeded',
+        functionId: 'temp_request',
+        outputRefs: { text: [{ resourceId: 'res_output', type: 'text' }] },
+      })
+      expect(state.project.resources.res_output).toMatchObject({
+        type: 'text',
+        name: 'Text',
+        value: 'ok from temporary request',
+        source: {
+          kind: 'function_output',
+          functionNodeId: 'task_1',
+          taskId: 'task_1',
+          outputKey: 'text',
+        },
+        metadata: {
+          workflowFunctionId: 'temp_request',
+          createdAt: now(),
+        },
+      })
+      expect(state.project.canvas.nodes).toEqual([
+        expect.objectContaining({
+          id: 'node_res_output',
+          type: 'resource',
+          position: { x: 360, y: 0 },
+          data: expect.objectContaining({
+            resourceId: 'res_output',
+            resourceType: 'text',
+            functionId: 'temp_request',
+            taskId: 'task_1',
+            status: 'succeeded',
+          }),
+        }),
+      ])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('detects temporary request binary output media type from response headers', async () => {
+    const originalFetch = globalThis.fetch
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(new Blob(['video-bytes'], { type: 'video/mp4' }), {
+          status: 200,
+          headers: {
+            'content-type': 'video/mp4',
+            'content-disposition': 'attachment; filename="clip.mp4"',
+          },
+        }),
+      ),
+    )
+    const ids = ['task_1', 'res_output', 'asset_output']
+    const now = () => '2026-05-08T09:00:00.000Z'
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now,
+    })
+    const temporaryRequest: GenerationFunction = {
+      id: 'temp_request_binary',
+      name: 'Temporary Binary Request',
+      category: 'Request',
+      description: 'Temporary binary HTTP request',
+      workflow: { format: 'http_request', rawJson: {} },
+      request: {
+        url: 'https://api.example.com/render-video',
+        method: 'GET',
+        headers: {},
+        body: '',
+        responseParse: 'binary',
+        responseEncoding: 'utf-8',
+      },
+      inputs: [],
+      outputs: [
+        {
+          key: 'result',
+          label: 'Result',
+          type: 'text',
+          bind: {},
+          extract: { source: 'response_json_path', path: '$' },
+        },
+      ],
+      runtimeDefaults: { runCount: 1, seedPolicy: { mode: 'randomize_all_before_submit' } },
+      createdAt: now(),
+      updatedAt: now(),
+    }
+
+    try {
+      await slice.getState().runTemporaryFunctionAtPosition(temporaryRequest, {}, { x: 360, y: 0 }, 1)
+
+      const state = slice.getState()
+      expect(state.project.tasks.task_1).toMatchObject({
+        status: 'succeeded',
+        outputRefs: { result: [{ resourceId: 'res_output', type: 'video' }] },
+      })
+      expect(state.project.resources.res_output).toMatchObject({
+        type: 'video',
+        name: 'clip.mp4',
+        value: {
+          assetId: 'asset_output',
+          filename: 'clip.mp4',
+          mimeType: 'video/mp4',
+        },
+        metadata: {
+          workflowFunctionId: 'temp_request_binary',
+          functionSnapshot: expect.objectContaining({ id: 'temp_request_binary' }),
+          endpointId: 'request',
+        },
+      })
+      expect(state.project.assets.asset_output).toMatchObject({
+        name: 'clip.mp4',
+        mimeType: 'video/mp4',
+        blobUrl: expect.stringMatching(/^data:video\/mp4;base64,/),
+      })
+      expect(state.project.canvas.nodes).toEqual([
+        expect.objectContaining({
+          data: expect.objectContaining({
+            resourceId: 'res_output',
+            resourceType: 'video',
+            status: 'succeeded',
+          }),
+        }),
+      ])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('runs temporary OpenAI and Gemini LLM drafts from popup inputs', async () => {
+    const originalFetch = globalThis.fetch
+    const fetchCalls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        fetchCalls.push({ input, init })
+        if (String(input).includes('generativelanguage')) {
+          return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'gemini text' }] } }] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return new Response(JSON.stringify({ choices: [{ message: { content: 'openai text' } }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }),
+    )
+    const ids = ['task_openai', 'res_openai', 'task_gemini', 'res_gemini']
+    const now = () => '2026-05-08T09:00:00.000Z'
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now,
+    })
+    const openAiFunction = createOpenAILlmFunction(now(), {
+      id: 'temp_openai',
+      name: 'Temporary OpenAI',
+      config: {
+        apiKey: 'openai-key',
+        messages: [{ role: 'user', content: [{ type: 'text', content: 'Write one line.' }] }],
+      },
+    })
+    const geminiFunction = createGeminiLlmFunction(now(), {
+      id: 'temp_gemini',
+      name: 'Temporary Gemini',
+      config: {
+        apiKey: 'gemini-key',
+        messages: [{ role: 'user', content: [{ type: 'text', content: 'Write one line.' }] }],
+      },
+    })
+
+    try {
+      await slice.getState().runTemporaryFunctionAtPosition(openAiFunction, {}, { x: 100, y: 100 }, 1)
+      await slice.getState().runTemporaryFunctionAtPosition(geminiFunction, {}, { x: 400, y: 100 }, 1)
+
+      const state = slice.getState()
+      expect(fetchCalls).toHaveLength(2)
+      expect(String(fetchCalls[0]?.input)).toBe('https://api.openai.com/v1/chat/completions')
+      expect(fetchCalls[0]?.init).toMatchObject({
+        method: 'POST',
+        headers: expect.objectContaining({ Authorization: 'Bearer openai-key' }),
+      })
+      expect(String(fetchCalls[1]?.input)).toBe(
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+      )
+      expect(fetchCalls[1]?.init).toMatchObject({
+        method: 'POST',
+        headers: expect.objectContaining({ 'x-goog-api-key': 'gemini-key' }),
+      })
+      expect(state.project.functions.temp_openai).toBeUndefined()
+      expect(state.project.functions.temp_gemini).toBeUndefined()
+      expect(state.project.resources.res_openai).toMatchObject({
+        type: 'text',
+        value: 'openai text',
+        metadata: { workflowFunctionId: 'temp_openai', endpointId: 'openai' },
+      })
+      expect(state.project.resources.res_gemini).toMatchObject({
+        type: 'text',
+        value: 'gemini text',
+        metadata: { workflowFunctionId: 'temp_gemini', endpointId: 'gemini' },
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('runs temporary OpenAI and Gemini image drafts from popup inputs', async () => {
+    const originalFetch = globalThis.fetch
+    const fetchCalls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        fetchCalls.push({ input, init })
+        if (String(input).includes('generativelanguage')) {
+          return new Response(
+            JSON.stringify({
+              candidates: [{ content: { parts: [{ inlineData: { data: 'Z2VtaW5p', mimeType: 'image/png' } }] } }],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          )
+        }
+        return new Response(JSON.stringify({ data: [{ b64_json: 'b3BlbmFp', mime_type: 'image/png' }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }),
+    )
+    const ids = [
+      'task_openai_image',
+      'res_openai_image',
+      'asset_openai_image',
+      'task_gemini_image',
+      'res_gemini_image',
+      'asset_gemini_image',
+    ]
+    const now = () => '2026-05-08T09:00:00.000Z'
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now,
+    })
+    const openAiImageFunction = {
+      ...createOpenAIImageFunction(now()),
+      id: 'temp_openai_image',
+      name: 'Temporary OpenAI Image',
+    }
+    openAiImageFunction.openaiImage = { ...openAiImageFunction.openaiImage!, apiKey: 'openai-image-key' }
+    const geminiImageFunction = {
+      ...createGeminiImageFunction(now()),
+      id: 'temp_gemini_image',
+      name: 'Temporary Gemini Image',
+    }
+    geminiImageFunction.geminiImage = { ...geminiImageFunction.geminiImage!, apiKey: 'gemini-image-key' }
+
+    try {
+      await slice.getState().runTemporaryFunctionAtPosition(
+        openAiImageFunction,
+        { prompt: 'clean product render' },
+        { x: 100, y: 100 },
+        1,
+      )
+      await slice.getState().runTemporaryFunctionAtPosition(
+        geminiImageFunction,
+        { prompt: 'clean product render' },
+        { x: 400, y: 100 },
+        1,
+      )
+
+      const state = slice.getState()
+      expect(fetchCalls).toHaveLength(2)
+      expect(String(fetchCalls[0]?.input)).toBe('https://api.openai.com/v1/images/generations')
+      expect(fetchCalls[0]?.init).toMatchObject({
+        method: 'POST',
+        headers: expect.objectContaining({ Authorization: 'Bearer openai-image-key' }),
+      })
+      expect(JSON.parse(String(fetchCalls[0]?.init?.body))).toMatchObject({ prompt: 'clean product render' })
+      expect(String(fetchCalls[1]?.input)).toBe(
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent',
+      )
+      expect(fetchCalls[1]?.init).toMatchObject({
+        method: 'POST',
+        headers: expect.objectContaining({ 'x-goog-api-key': 'gemini-image-key' }),
+      })
+      expect(state.project.resources.res_openai_image).toMatchObject({
+        type: 'image',
+        value: {
+          assetId: 'asset_openai_image',
+          url: 'data:image/png;base64,b3BlbmFp',
+          filename: 'openai-image-1.png',
+          mimeType: 'image/png',
+        },
+        metadata: { workflowFunctionId: 'temp_openai_image', endpointId: 'openai_image' },
+      })
+      expect(state.project.resources.res_gemini_image).toMatchObject({
+        type: 'image',
+        value: {
+          assetId: 'asset_gemini_image',
+          url: 'data:image/png;base64,Z2VtaW5p',
+          filename: 'gemini-image-1.png',
+          mimeType: 'image/png',
+        },
+        metadata: { workflowFunctionId: 'temp_gemini_image', endpointId: 'gemini_image' },
+      })
+      expect(state.project.assets.asset_openai_image?.blobUrl).toBe('data:image/png;base64,b3BlbmFp')
+      expect(state.project.assets.asset_gemini_image?.blobUrl).toBe('data:image/png;base64,Z2VtaW5p')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('runs temporary ComfyUI drafts on the selected endpoint and snapshots the function for rerun', async () => {
+    const ids = ['task_1', 'res_output', 'asset_output']
+    const queuedWorkflows: unknown[] = []
+    const createComfyClient = vi.fn(() => ({
+      queuePrompt: async (workflow: unknown) => {
+        queuedWorkflows.push(workflow)
+        return { prompt_id: 'prompt_1', number: 1 }
+      },
+      getHistory: async () => ({
+        prompt_1: {
+          outputs: {
+            '9': {
+              images: [{ filename: 'result.png', subfolder: '', type: 'output' }],
+            },
+          },
+        },
+      }),
+    }))
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => new Blob(['image-bytes'], { type: 'image/png' }),
+    } as Response)
+    const now = () => '2026-05-08T09:00:00.000Z'
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now,
+      randomInt: () => 7,
+      createComfyClient,
+      comfyRunOptions: { maxPollAttempts: 1, pollIntervalMs: 1 },
+    })
+    const temporaryComfyFunction: GenerationFunction = {
+      id: 'temp_comfy_workflow',
+      name: 'Temporary ComfyUI Workflow',
+      description: 'Temporary workflow',
+      category: 'ComfyUI',
+      workflow: {
+        format: 'comfyui_api_json',
+        rawJson: {
+          '9': {
+            class_type: 'SaveImage',
+            _meta: { title: 'Save Image' },
+            inputs: { filename_prefix: 'result' },
+          },
+        },
+        editor: {
+          kind: 'comfyui_embedded',
+          endpointId: 'endpoint_local',
+          baseUrl: 'http://127.0.0.1:27707',
+          savedAt: now(),
+        },
+      },
+      inputs: [],
+      outputs: [
+        {
+          key: 'image',
+          label: 'Image',
+          type: 'image',
+          bind: { nodeId: '9', nodeTitle: 'Save Image' },
+          extract: { source: 'history', multiple: true },
+        },
+      ],
+      runtimeDefaults: { runCount: 1, seedPolicy: { mode: 'randomize_all_before_submit' } },
+      createdAt: now(),
+      updatedAt: now(),
+    }
+
+    try {
+      slice.setState((state) => ({
+        project: {
+          ...state.project,
+          comfy: {
+            ...state.project.comfy,
+            endpoints: [
+              {
+                ...state.project.comfy.endpoints[0]!,
+                id: 'endpoint_remote',
+                name: 'Remote',
+                capabilities: { supportedFunctions: ['fn_other'] },
+              },
+              {
+                ...state.project.comfy.endpoints[0]!,
+                id: 'endpoint_local',
+                name: 'Selected Local',
+                baseUrl: 'http://127.0.0.1:27707',
+                capabilities: { supportedFunctions: ['fn_other'] },
+              },
+            ],
+          },
+        },
+      }))
+
+      await slice.getState().runTemporaryFunctionAtPosition(temporaryComfyFunction, {}, { x: 100, y: 100 }, 1)
+
+      expect(createComfyClient).toHaveBeenCalledWith(expect.objectContaining({ id: 'endpoint_local' }))
+      expect(queuedWorkflows).toHaveLength(1)
+      const state = slice.getState()
+      expect(state.project.tasks.task_1.functionSnapshot).toMatchObject({
+        id: 'temp_comfy_workflow',
+        workflow: { editor: { endpointId: 'endpoint_local' } },
+      })
+      expect(state.project.resources.res_output).toMatchObject({
+        type: 'image',
+        metadata: {
+          workflowFunctionId: 'temp_comfy_workflow',
+          endpointId: 'endpoint_local',
+          functionSnapshot: expect.objectContaining({ id: 'temp_comfy_workflow' }),
+        },
+      })
+      expect(state.project.functions.temp_comfy_workflow).toBeUndefined()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 
   it('uses the function node run count and appends result nodes to the right', () => {

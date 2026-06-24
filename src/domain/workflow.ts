@@ -189,6 +189,57 @@ const imageInputsForWorkflow = (workflow: ComfyWorkflow): FunctionInputDef[] =>
       upload: { strategy: 'comfy_upload', targetSubfolder: 'infinity-comfyui' },
     }))
 
+const isGraphLinkValue = (value: unknown) =>
+  Array.isArray(value) &&
+  value.length >= 2 &&
+  (typeof value[0] === 'string' || typeof value[0] === 'number') &&
+  typeof value[1] === 'number'
+
+const labelFromInputKey = (key: string) =>
+  key
+    .replace(/[_-]+/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+
+const inputKeyFromPath = (key: string) =>
+  key
+    .trim()
+    .replace(/([a-z])([A-Z])/g, '$1_$2')
+    .replace(/[^a-zA-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toLowerCase() || 'input'
+
+const uniqueInputKey = (baseKey: string, usedKeys: Set<string>) => {
+  let key = baseKey
+  let index = 2
+  while (usedKeys.has(key)) {
+    key = `${baseKey}_${index}`
+    index += 1
+  }
+  usedKeys.add(key)
+  return key
+}
+
+const contextForWorkflowInput = (node: WorkflowNode, title: string, key: string) =>
+  normalized(`${node.class_type ?? ''} ${title} ${key}`)
+
+const contextHasAny = (context: string, words: string[]) => words.some((word) => context.includes(word))
+
+const inferredInputType = (node: WorkflowNode, title: string, key: string, value: unknown): ResourceType | undefined => {
+  if (isGraphLinkValue(value)) return undefined
+
+  const context = contextForWorkflowInput(node, title, key)
+  if (typeof value === 'number') return 'number'
+  if (contextHasAny(context, ['video', 'vhs', 'frame', 'frames', 'movie', 'mp4', 'webm'])) return 'video'
+  if (contextHasAny(context, ['audio', 'sound', 'voice', 'wav', 'mp3'])) return 'audio'
+  if (contextHasAny(context, ['image', 'picture', 'photo', 'mask'])) return 'image'
+  if (typeof value === 'string' || value === null) {
+    if (contextHasAny(context, ['text', 'prompt', 'caption', 'string'])) return 'text'
+  }
+  return undefined
+}
+
 const outputNodeMatches = (node: WorkflowNode, type: ResourceType) => {
   const classType = normalized(node.class_type ?? '')
   if (type === 'image') return classType === 'saveimage'
@@ -202,6 +253,55 @@ const outputNodeMatches = (node: WorkflowNode, type: ResourceType) => {
   }
 
   return false
+}
+
+const isLikelyOutputNode = (node: WorkflowNode) =>
+  (['image', 'video', 'audio', 'text'] as const).some((type) => outputNodeMatches(node, type))
+
+const inputBindKey = (nodeId: string, path: string) => `${nodeId}:${path}`
+
+const genericInputsForWorkflow = (workflow: ComfyWorkflow, existingInputs: FunctionInputDef[]): FunctionInputDef[] => {
+  const usedKeys = new Set(existingInputs.map((input) => input.key))
+  const usedBindings = new Set(
+    existingInputs.map((input) => input.bind.nodeId && input.bind.path ? inputBindKey(input.bind.nodeId, input.bind.path) : ''),
+  )
+  const inputs: FunctionInputDef[] = []
+
+  for (const [id, node] of Object.entries(workflow)) {
+    if (isLikelyOutputNode(node)) continue
+    const nodeInputs = node.inputs ?? {}
+    const title = nodeTitle(id, node)
+    for (const [key, value] of Object.entries(nodeInputs)) {
+      const path = `inputs.${key}`
+      if (usedBindings.has(inputBindKey(id, path))) continue
+
+      const type = inferredInputType(node, title, key, value)
+      if (!type) continue
+
+      const baseKey = inputKeyFromPath(key)
+      const inputKey = uniqueInputKey(baseKey, usedKeys)
+      const mediaInput = type === 'image' || type === 'video' || type === 'audio'
+      const primitiveDefault =
+        !mediaInput && (typeof value === 'string' || typeof value === 'number' || value === null) ? value : undefined
+
+      inputs.push({
+        key: inputKey,
+        label: labelFromInputKey(key),
+        type,
+        required: mediaInput,
+        ...(primitiveDefault !== undefined ? { defaultValue: primitiveDefault } : {}),
+        bind: { nodeId: id, nodeTitle: title, path },
+        upload: mediaInput
+          ? type === 'image'
+            ? { strategy: 'comfy_upload', targetSubfolder: 'infinity-comfyui' }
+            : { strategy: 'manual_path' }
+          : { strategy: 'none' },
+      })
+      usedBindings.add(inputBindKey(id, path))
+    }
+  }
+
+  return inputs
 }
 
 const outputsForType = (workflow: ComfyWorkflow, type: ResourceType, label: string): FunctionOutputDef[] =>
@@ -248,7 +348,8 @@ export function createGenerationFunctionFromWorkflow(
     editor?: ComfyWorkflowEditorMetadata
   } = {},
 ): GenerationFunction {
-  const inputs = [...promptInputsForWorkflow(workflow), ...imageInputsForWorkflow(workflow)]
+  const knownInputs = [...promptInputsForWorkflow(workflow), ...imageInputsForWorkflow(workflow)]
+  const inputs = [...knownInputs, ...genericInputsForWorkflow(workflow, knownInputs)]
   const hasImageInput = inputs.some((input) => input.type === 'image')
 
   return {

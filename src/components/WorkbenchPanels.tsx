@@ -1065,7 +1065,7 @@ const parseHeaderJson = (value: string) => {
   return Object.fromEntries(Object.entries(parsed).map(([key, headerValue]) => [key, String(headerValue)]))
 }
 
-type EmbeddedComfySave = {
+export type EmbeddedComfySave = {
   rawJson: ComfyWorkflow
   uiJson?: ComfyUiWorkflow
   editor: ComfyWorkflowEditorMetadata
@@ -1148,7 +1148,7 @@ async function waitForComfyFrameApp(frame: HTMLIFrameElement) {
   throw new Error('ComfyUI editor is not ready yet')
 }
 
-function ComfyWorkflowEditorDialog({
+export function ComfyWorkflowEditorDialog({
   endpoint,
   initialUiJson,
   initialApiJson,

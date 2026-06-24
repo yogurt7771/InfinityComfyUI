@@ -31,14 +31,14 @@ const fetchResourceBlob = async (resource: Resource) => {
 function usePreviewMediaSource(resource: Resource) {
   const media = mediaValue(resource)
   const key =
-    media?.url && (media.comfy || resource.metadata?.endpointId)
+    media?.url && media.comfy
       ? [
           resource.id,
           media.url,
-          media.comfy?.endpointId ?? resource.metadata?.endpointId ?? '',
-          media.comfy?.filename ?? '',
-          media.comfy?.subfolder ?? '',
-          media.comfy?.type ?? '',
+          media.comfy.endpointId,
+          media.comfy.filename,
+          media.comfy.subfolder,
+          media.comfy.type,
         ].join('|')
       : undefined
   const [objectUrl, setObjectUrl] = useState<{ key: string; url: string }>()

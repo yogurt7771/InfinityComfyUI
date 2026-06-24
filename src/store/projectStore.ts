@@ -293,6 +293,12 @@ export type ProjectStoreState = {
     position: { x: number; y: number },
     runCount?: number,
   ) => Promise<string | undefined>
+  runTemporaryFunctionAtPosition: (
+    functionDef: GenerationFunction,
+    inputValues: Record<string, PrimitiveInputValue | ResourceRef>,
+    position: { x: number; y: number },
+    runCount?: number,
+  ) => Promise<string | undefined>
   runFunctionNode: (nodeId: string, runCount?: number) => void
   runFunctionNodeWithComfy: (nodeId: string, runCount?: number) => Promise<void>
   runLocalFunctionForResourceNode: (
@@ -1302,6 +1308,14 @@ const responseMimeType = (response: Response, outputType: ResourceType, filename
   return contentType || outputMimeType(outputType, filename)
 }
 
+const resourceTypeFromMimeType = (mimeType: string, fallback: ResourceType): ResourceType => {
+  const normalized = mimeType.split(';')[0]?.trim().toLowerCase() ?? ''
+  if (normalized.startsWith('image/')) return 'image'
+  if (normalized.startsWith('video/')) return 'video'
+  if (normalized.startsWith('audio/')) return 'audio'
+  return fallback
+}
+
 const decodeResponseBuffer = (buffer: ArrayBuffer, encoding: string) => {
   try {
     return new TextDecoder((encoding || requestDefaultEncoding).trim() || requestDefaultEncoding).decode(buffer)
@@ -1484,8 +1498,14 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
   const runtime = { ...defaultDeps, ...deps }
   const comfyQueue: QueuedComfyRun[] = []
   const activeComfyWorkerEndpointIds = new Set<string>()
+  const temporaryFunctionDrafts = new Map<string, GenerationFunction>()
 
   return createStore<ProjectStoreState>((set, get) => {
+    const functionDefinitionById = (functionId: string) =>
+      get().project.functions[functionId] ?? temporaryFunctionDrafts.get(functionId)
+    const functionDefinitionForTask = (task: ExecutionTask) =>
+      task.functionSnapshot ?? functionDefinitionById(task.functionId)
+
     const markMissingInputs = (nodeId: string, missingInputKeys: string[]) => {
       const now = runtime.now()
       set((current) => ({
@@ -3189,6 +3209,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         if (!response.ok) throw new Error(`Request failed: ${response.status} ${errorText}`)
         let responseText = ''
         let responseBinary: RequestBinaryOutputValue | undefined
+        let binaryOutputType: ResourceType | undefined
         if (request.responseParse === 'binary') {
           const firstBinaryOutput = item.functionDef.outputs.find(
             (output) => output.type === 'image' || output.type === 'video' || output.type === 'audio',
@@ -3196,22 +3217,33 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           const outputType = firstBinaryOutput?.type ?? 'image'
           const fallbackMimeType = outputMimeType(outputType, '')
           const mimeType = response.headers.get('content-type')?.split(';')[0]?.trim() || fallbackMimeType
+          binaryOutputType = resourceTypeFromMimeType(mimeType, outputType)
           const filename =
             filenameFromContentDisposition(response.headers.get('content-disposition')) ||
             filenameFromRequestUrl(request.url) ||
-            `${firstBinaryOutput?.label ?? 'response'}.${extensionForMimeType(outputType, mimeType)}`
+            `${firstBinaryOutput?.label ?? 'response'}.${extensionForMimeType(binaryOutputType, mimeType)}`
           const blob = new Blob([responseBuffer], { type: mimeType })
           responseBinary = {
             url: await blobToDataUrl(blob, mimeType),
             filename,
-            mimeType: responseMimeType(response, outputType, filename),
+            mimeType: responseMimeType(response, binaryOutputType, filename),
             sizeBytes: responseBuffer.byteLength,
           }
         } else {
           responseText = decodeResponseBuffer(responseBuffer, request.responseEncoding)
         }
         const responseJson = request.responseParse === 'json' ? JSON.parse(responseText || 'null') : undefined
-        const outputs = extractRequestFunctionOutputs(responseText, responseJson, item.functionDef.outputs, responseBinary)
+        const outputs =
+          request.responseParse === 'binary' && responseBinary
+            ? [
+                {
+                  key: item.functionDef.outputs[0]?.key ?? 'result',
+                  label: item.functionDef.outputs[0]?.label ?? 'Result',
+                  type: binaryOutputType ?? 'image',
+                  values: [responseBinary],
+                },
+              ]
+            : extractRequestFunctionOutputs(responseText, responseJson, item.functionDef.outputs, responseBinary)
         const outputRefsByKey: Record<string, ResourceRef[]> = {}
         const resourceRefs: ResourceRef[] = []
         const newResources: Record<string, Resource> = {}
@@ -3680,7 +3712,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           for (const pendingTask of pendingTasks) {
             const project = get().project
             const resultNode = taskResultNode(project, pendingTask.id)
-            const functionDef = project.functions[pendingTask.functionId]
+            const functionDef = functionDefinitionForTask(pendingTask)
             if (!resultNode) continue
             if (!functionDef) {
               failResultRunInPlace(resultNode.id, pendingTask.id, 'function_missing', 'Function definition is missing')
@@ -3720,7 +3752,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       const node = state.project.canvas.nodes.find((item) => item.id === nodeId && item.type === 'function')
       if (!node) return
       const functionId = String(node.data.functionId ?? '')
-      const functionDef = state.project.functions[functionId]
+      const functionDef = functionDefinitionById(functionId)
       if (!functionDef || !isLocalTransformFunction(functionDef)) return
 
       const runCount = normalizedRunCount(
@@ -5234,7 +5266,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
     runFunctionAtPosition: async (functionId, inputValues, position, runCount) => {
       const state = get()
-      const functionDef = state.project.functions[functionId]
+      const functionDef = functionDefinitionById(functionId)
       if (!functionDef) return undefined
 
       const now = runtime.now()
@@ -5255,6 +5287,36 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         inputValues: ResolvedRuntimeInputValues
       }> = []
       const queuedComfyRuns: Array<{
+        taskId: string
+        runIndex: number
+        outputRefs: Record<string, ResourceRef[]>
+        inputValues: ResolvedRuntimeInputValues
+      }> = []
+      const queuedOpenAiRuns: Array<{
+        taskId: string
+        runIndex: number
+        outputRefs: Record<string, ResourceRef[]>
+        inputValues: ResolvedRuntimeInputValues
+      }> = []
+      const queuedGeminiRuns: Array<{
+        taskId: string
+        runIndex: number
+        outputRefs: Record<string, ResourceRef[]>
+        inputValues: ResolvedRuntimeInputValues
+      }> = []
+      const queuedOpenAiImageRuns: Array<{
+        taskId: string
+        runIndex: number
+        outputRefs: Record<string, ResourceRef[]>
+        inputValues: ResolvedRuntimeInputValues
+      }> = []
+      const queuedGeminiImageRuns: Array<{
+        taskId: string
+        runIndex: number
+        outputRefs: Record<string, ResourceRef[]>
+        inputValues: ResolvedRuntimeInputValues
+      }> = []
+      const queuedRequestRuns: Array<{
         taskId: string
         runIndex: number
         outputRefs: Record<string, ResourceRef[]>
@@ -5283,6 +5345,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
             metadata: {
               workflowFunctionId: functionId,
+              functionSnapshot: structuredClone(functionDef),
               endpointId: functionDef.workflow.format === 'local_transform' ? 'local' : undefined,
               createdAt: now,
             },
@@ -5313,6 +5376,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           inputSnapshot: resourceInputSnapshot(runtimeInputValues, state.project.resources),
           inputValuesSnapshot: executionInputSnapshot(functionDef, runtimeInputValues, state.project.resources),
           paramsSnapshot: { runCount: normalizedRuns, mode: 'function_command' },
+          ...(state.project.functions[functionId] ? {} : { functionSnapshot: structuredClone(functionDef) }),
           workflowTemplateSnapshot: functionDef.workflow.rawJson,
           compiledWorkflowSnapshot: functionDef.workflow.rawJson,
           seedPatchLog: [],
@@ -5332,6 +5396,46 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         }
         if (functionDef.workflow.format === 'comfyui_api_json' && !hasPendingDependencies) {
           queuedComfyRuns.push({
+            taskId,
+            runIndex,
+            outputRefs,
+            inputValues: asResolvedInputValues(runtimeInputValues),
+          })
+        }
+        if (isOpenAILlmFunction(functionDef) && !hasPendingDependencies) {
+          queuedOpenAiRuns.push({
+            taskId,
+            runIndex,
+            outputRefs,
+            inputValues: asResolvedInputValues(runtimeInputValues),
+          })
+        }
+        if (isGeminiLlmFunction(functionDef) && !hasPendingDependencies) {
+          queuedGeminiRuns.push({
+            taskId,
+            runIndex,
+            outputRefs,
+            inputValues: asResolvedInputValues(runtimeInputValues),
+          })
+        }
+        if (isOpenAIImageFunction(functionDef) && !hasPendingDependencies) {
+          queuedOpenAiImageRuns.push({
+            taskId,
+            runIndex,
+            outputRefs,
+            inputValues: asResolvedInputValues(runtimeInputValues),
+          })
+        }
+        if (isGeminiImageFunction(functionDef) && !hasPendingDependencies) {
+          queuedGeminiImageRuns.push({
+            taskId,
+            runIndex,
+            outputRefs,
+            inputValues: asResolvedInputValues(runtimeInputValues),
+          })
+        }
+        if (isRequestFunction(functionDef) && !hasPendingDependencies) {
+          queuedRequestRuns.push({
             taskId,
             runIndex,
             outputRefs,
@@ -5369,7 +5473,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
               name: output.label,
               value: Number.isFinite(numericValue) ? numericValue : 0,
               source: { kind: 'function_output', functionNodeId: taskId, taskId, outputKey: output.key },
-              metadata: { workflowFunctionId: functionId, endpointId: 'local', createdAt: completedAt },
+              metadata: {
+                workflowFunctionId: functionId,
+                functionSnapshot: structuredClone(functionDef),
+                endpointId: 'local',
+                createdAt: completedAt,
+              },
             },
           }
         }
@@ -5396,7 +5505,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
               name: filename,
               value: mediaValueWithAsset(assetId, value),
               source: { kind: 'function_output', functionNodeId: taskId, taskId, outputKey: output.key },
-              metadata: { workflowFunctionId: functionId, endpointId: 'local', createdAt: completedAt },
+              metadata: {
+                workflowFunctionId: functionId,
+                functionSnapshot: structuredClone(functionDef),
+                endpointId: 'local',
+                createdAt: completedAt,
+              },
             },
           }
         }
@@ -5408,7 +5522,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             name: output.label,
             value: String(value ?? ''),
             source: { kind: 'function_output', functionNodeId: taskId, taskId, outputKey: output.key },
-            metadata: { workflowFunctionId: functionId, endpointId: 'local', createdAt: completedAt },
+            metadata: {
+              workflowFunctionId: functionId,
+              functionSnapshot: structuredClone(functionDef),
+              endpointId: 'local',
+              createdAt: completedAt,
+            },
           },
         }
       }
@@ -5475,6 +5594,184 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
           },
         }))
+      }
+
+      type CommandOutputValue = string | number | MediaResourcePayload | RequestBinaryOutputValue
+      type CommandOutputItem = {
+        key: string
+        label: string
+        type: ResourceType
+        values: CommandOutputValue[]
+      }
+
+      const commandOutputResourceFromValue = (
+        resourceId: string,
+        output: { key: string; label: string; type: ResourceType },
+        value: CommandOutputValue,
+        taskId: string,
+        endpointId: string,
+        completedAt: string,
+      ): { resource: Resource; asset?: ProjectState['assets'][string] } => {
+        const metadata = {
+          workflowFunctionId: functionId,
+          functionSnapshot: structuredClone(functionDef),
+          endpointId,
+          createdAt: completedAt,
+        }
+        if (output.type === 'number') {
+          const numericValue = Number(typeof value === 'object' && value !== null && 'sizeBytes' in value ? value.sizeBytes : value)
+          return {
+            resource: {
+              id: resourceId,
+              type: 'number',
+              name: output.label,
+              value: Number.isFinite(numericValue) ? numericValue : 0,
+              source: { kind: 'function_output', functionNodeId: taskId, taskId, outputKey: output.key },
+              metadata,
+            },
+          }
+        }
+
+        if (output.type === 'image' || output.type === 'video' || output.type === 'audio') {
+          const assetId = runtime.idFactory()
+          const media =
+            typeof value === 'object' && value !== null && 'url' in value
+              ? value
+              : {
+                  url: String(value ?? ''),
+                  filename: output.label,
+                  mimeType: outputMimeType(output.type, output.label),
+                  sizeBytes: 0,
+                }
+          const filename = media.filename ?? output.label
+          const asset = {
+            id: assetId,
+            name: filename,
+            mimeType: media.mimeType,
+            sizeBytes: media.sizeBytes,
+            blobUrl: media.url,
+            createdAt: completedAt,
+          }
+          return {
+            asset,
+            resource: {
+              id: resourceId,
+              type: output.type,
+              name: filename,
+              value: mediaValueWithAsset(assetId, {
+                url: media.url,
+                filename,
+                mimeType: media.mimeType,
+                sizeBytes: media.sizeBytes,
+              }),
+              source: { kind: 'function_output', functionNodeId: taskId, taskId, outputKey: output.key },
+              metadata,
+            },
+          }
+        }
+
+        return {
+          resource: {
+            id: resourceId,
+            type: 'text',
+            name: output.label,
+            value: typeof value === 'object' && value !== null && 'url' in value ? value.url : String(value ?? ''),
+            source: { kind: 'function_output', functionNodeId: taskId, taskId, outputKey: output.key },
+            metadata,
+          },
+        }
+      }
+
+      const writeCommandOutputs = (
+        taskId: string,
+        runIndex: number,
+        outputRefs: Record<string, ResourceRef[]>,
+        outputs: CommandOutputItem[],
+        endpointId: string,
+        extraTaskPatch: Partial<ExecutionTask> = {},
+      ) => {
+        const completedAt = runtime.now()
+        const nextResources: Record<string, Resource> = {}
+        const nextAssets: ProjectState['assets'] = {}
+        const nextOutputRefs: Record<string, ResourceRef[]> = {}
+        const extraNodes: CanvasNode[] = []
+
+        outputs.forEach((outputItem, outputIndex) => {
+          const refs = outputRefs[outputItem.key] ? [...outputRefs[outputItem.key]] : []
+          outputItem.values.forEach((value, valueIndex) => {
+            let ref = refs[valueIndex]
+            if (!ref) {
+              const resourceId = runtime.idFactory()
+              ref = { resourceId, type: outputItem.type }
+              refs.push(ref)
+              extraNodes.push({
+                id: resourceNodeId(resourceId),
+                type: 'resource',
+                position: commandOutputPosition(position, runIndex - 1, outputIndex + valueIndex),
+                data: {
+                  resourceId,
+                  resourceType: outputItem.type,
+                  functionId,
+                  taskId,
+                  outputKey: outputItem.key,
+                  status: 'succeeded',
+                  completedAt,
+                },
+              })
+            } else {
+              ref = { ...ref, type: outputItem.type }
+              refs[valueIndex] = ref
+            }
+
+            const created = commandOutputResourceFromValue(ref.resourceId, outputItem, value, taskId, endpointId, completedAt)
+            nextResources[created.resource.id] = created.resource
+            if (created.asset) nextAssets[created.asset.id] = created.asset
+          })
+          nextOutputRefs[outputItem.key] = refs
+        })
+
+        const completedResourceIds = new Set(Object.keys(nextResources))
+        set((current) => ({
+          project: {
+            ...current.project,
+            project: { ...current.project.project, updatedAt: completedAt },
+            resources: { ...current.project.resources, ...nextResources },
+            assets: { ...current.project.assets, ...nextAssets },
+            tasks: {
+              ...current.project.tasks,
+              [taskId]: {
+                ...current.project.tasks[taskId]!,
+                ...extraTaskPatch,
+                status: 'succeeded',
+                outputRefs: nextOutputRefs,
+                updatedAt: completedAt,
+                completedAt,
+              },
+            },
+            canvas: {
+              ...current.project.canvas,
+              nodes: [
+                ...current.project.canvas.nodes.map((node) =>
+                  completedResourceIds.has(String(node.data.resourceId))
+                    ? {
+                        ...node,
+                        data: {
+                          ...node.data,
+                          endpointId,
+                          resourceType:
+                            nextResources[String(node.data.resourceId)]?.type ?? node.data.resourceType,
+                          status: 'succeeded',
+                          completedAt,
+                        },
+                      }
+                    : node,
+                ),
+                ...extraNodes,
+              ],
+            },
+          },
+        }))
+        void resolvePendingDependencyTasks()
       }
 
       for (const queuedRun of queuedLocalRuns) {
@@ -5559,7 +5856,13 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       }
 
       for (const queuedRun of queuedComfyRuns) {
-        const endpoint = selectEndpoint(get().project.comfy.endpoints, activeJobs(get().project.tasks), functionId)
+        const preferredEndpointId = functionDef.workflow.editor?.endpointId
+        const endpoint =
+          preferredEndpointId && !get().project.functions[functionId]
+            ? get().project.comfy.endpoints.find(
+                (item) => item.id === preferredEndpointId && endpointIsWorkerEligible(item),
+              )
+            : selectEndpoint(get().project.comfy.endpoints, activeJobs(get().project.tasks), functionId)
         if (!endpoint) {
           failCommandTask(queuedRun.taskId, new Error('No eligible ComfyUI endpoint'))
           continue
@@ -5663,7 +5966,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
                   },
                 },
                 source: { kind: 'function_output', functionNodeId: queuedRun.taskId, taskId: queuedRun.taskId, outputKey: output.key },
-                metadata: { workflowFunctionId: functionId, endpointId: endpoint.id, createdAt: completedAt },
+                metadata: {
+                  workflowFunctionId: functionId,
+                  functionSnapshot: structuredClone(functionDef),
+                  endpointId: endpoint.id,
+                  createdAt: completedAt,
+                },
               }
               valueIndex += 1
             }
@@ -5696,7 +6004,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
                 name: output.key,
                 value: text,
                 source: { kind: 'function_output', functionNodeId: queuedRun.taskId, taskId: queuedRun.taskId, outputKey: output.key },
-                metadata: { workflowFunctionId: functionId, endpointId: endpoint.id, createdAt: completedAt },
+                metadata: {
+                  workflowFunctionId: functionId,
+                  functionSnapshot: structuredClone(functionDef),
+                  endpointId: endpoint.id,
+                  createdAt: completedAt,
+                },
               }
               valueIndex += 1
             }
@@ -5740,7 +6053,358 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         }
       }
 
+      for (const queuedRun of queuedOpenAiRuns) {
+        const config = mergedOpenAILlmConfig(functionDef.openai)
+        markCommandTaskRunning(queuedRun.taskId, 'openai')
+        try {
+          if (!config.apiKey.trim()) throw new Error('OpenAI API key is required')
+          const request = await createOpenAIChatCompletionRequest(
+            config,
+            queuedRun.inputValues,
+            get().project.resources,
+            (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
+          )
+          if (request.messages.length === 0) throw new Error('OpenAI messages are empty')
+          set((current) => ({
+            project: {
+              ...current.project,
+              tasks: {
+                ...current.project.tasks,
+                [queuedRun.taskId]: {
+                  ...current.project.tasks[queuedRun.taskId]!,
+                  requestSnapshot: structuredClone(request),
+                  updatedAt: runtime.now(),
+                },
+              },
+            },
+          }))
+
+          const response = await fetch(chatCompletionsUrl(config.baseUrl), {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${config.apiKey.trim()}`,
+            },
+            body: JSON.stringify(request),
+          })
+          if (!response.ok) {
+            const errorText = await response.text().catch(() => '')
+            throw new Error(`OpenAI request failed: ${response.status}${errorText ? ` ${errorText}` : ''}`)
+          }
+
+          const outputText = extractOpenAIChatCompletionText(await response.json())
+          if (!outputText) throw new Error('OpenAI response did not include output text')
+          const output = functionDef.outputs[0] ?? {
+            key: 'text',
+            label: 'Text',
+            type: 'text' as ResourceType,
+          }
+          writeCommandOutputs(
+            queuedRun.taskId,
+            queuedRun.runIndex,
+            queuedRun.outputRefs,
+            [{ key: output.key, label: output.label, type: output.type, values: [outputText] }],
+            'openai',
+            { compiledWorkflowSnapshot: {} },
+          )
+        } catch (err) {
+          failCommandTask(queuedRun.taskId, err)
+        }
+      }
+
+      for (const queuedRun of queuedGeminiRuns) {
+        const config = mergedGeminiLlmConfig(functionDef.gemini)
+        markCommandTaskRunning(queuedRun.taskId, 'gemini')
+        try {
+          if (!config.apiKey.trim()) throw new Error('Gemini API key is required')
+          const request = await createGeminiGenerateContentRequest(
+            config,
+            queuedRun.inputValues,
+            get().project.resources,
+            (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
+          )
+          if (request.contents.length === 0) throw new Error('Gemini contents are empty')
+          set((current) => ({
+            project: {
+              ...current.project,
+              tasks: {
+                ...current.project.tasks,
+                [queuedRun.taskId]: {
+                  ...current.project.tasks[queuedRun.taskId]!,
+                  requestSnapshot: structuredClone(request),
+                  updatedAt: runtime.now(),
+                },
+              },
+            },
+          }))
+
+          const response = await fetch(geminiGenerateContentUrl(config.baseUrl, config.model), {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-goog-api-key': config.apiKey.trim(),
+            },
+            body: JSON.stringify(request),
+          })
+          if (!response.ok) {
+            const errorText = await response.text().catch(() => '')
+            throw new Error(`Gemini request failed: ${response.status}${errorText ? ` ${errorText}` : ''}`)
+          }
+
+          const outputText = extractGeminiGenerateContentText(await response.json())
+          if (!outputText) throw new Error('Gemini response did not include output text')
+          const output = functionDef.outputs[0] ?? {
+            key: 'text',
+            label: 'Text',
+            type: 'text' as ResourceType,
+          }
+          writeCommandOutputs(
+            queuedRun.taskId,
+            queuedRun.runIndex,
+            queuedRun.outputRefs,
+            [{ key: output.key, label: output.label, type: output.type, values: [outputText] }],
+            'gemini',
+            { compiledWorkflowSnapshot: {} },
+          )
+        } catch (err) {
+          failCommandTask(queuedRun.taskId, err)
+        }
+      }
+
+      for (const queuedRun of queuedOpenAiImageRuns) {
+        const config = mergedOpenAIImageConfig(functionDef.openaiImage)
+        markCommandTaskRunning(queuedRun.taskId, 'openai_image')
+        try {
+          if (!config.apiKey.trim()) throw new Error('OpenAI API key is required')
+          const defaultPrompt = functionDef.inputs.find((input) => input.key === 'prompt')?.defaultValue
+          const request = await createOpenAIImageApiRequest(
+            config,
+            queuedRun.inputValues,
+            get().project.resources,
+            defaultPrompt,
+            (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
+          )
+          const requestSnapshot =
+            request.kind === 'edit'
+              ? { kind: request.kind, body: snapshotFormData(request.body) }
+              : { kind: request.kind, body: structuredClone(request.body) }
+          set((current) => ({
+            project: {
+              ...current.project,
+              tasks: {
+                ...current.project.tasks,
+                [queuedRun.taskId]: {
+                  ...current.project.tasks[queuedRun.taskId]!,
+                  requestSnapshot,
+                  updatedAt: runtime.now(),
+                },
+              },
+            },
+          }))
+          const requestPrompt =
+            request.kind === 'edit' ? String(request.body.get('prompt') ?? '') : String(request.body.prompt ?? '')
+          if (!requestPrompt.trim()) throw new Error('OpenAI image prompt is empty')
+
+          const response = await fetch(
+            request.kind === 'edit' ? openAiImagesEditsUrl(config.baseUrl) : openAiImagesGenerationsUrl(config.baseUrl),
+            {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${config.apiKey.trim()}`,
+                ...(request.kind === 'generation' ? { 'Content-Type': 'application/json' } : {}),
+              },
+              body: request.kind === 'edit' ? request.body : JSON.stringify(request.body),
+            },
+          )
+          if (!response.ok) {
+            const errorText = await response.text().catch(() => '')
+            throw new Error(`OpenAI image request failed: ${response.status}${errorText ? ` ${errorText}` : ''}`)
+          }
+
+          const outputs = extractOpenAIImageGenerationOutputs(await response.json(), config.outputFormat)
+          if (outputs.length === 0) throw new Error('OpenAI image response did not include image data')
+          const output = functionDef.outputs[0] ?? {
+            key: 'image',
+            label: 'Image',
+            type: 'image' as ResourceType,
+          }
+          writeCommandOutputs(
+            queuedRun.taskId,
+            queuedRun.runIndex,
+            queuedRun.outputRefs,
+            [
+              {
+                key: output.key,
+                label: output.label,
+                type: output.type,
+                values: outputs.map((item) => ({
+                  url: item.dataUrl,
+                  filename: item.filename,
+                  mimeType: item.mimeType,
+                  sizeBytes: 0,
+                })),
+              },
+            ],
+            'openai_image',
+            { compiledWorkflowSnapshot: {} },
+          )
+        } catch (err) {
+          failCommandTask(queuedRun.taskId, err)
+        }
+      }
+
+      for (const queuedRun of queuedGeminiImageRuns) {
+        const config = mergedGeminiImageConfig(functionDef.geminiImage)
+        markCommandTaskRunning(queuedRun.taskId, 'gemini_image')
+        try {
+          if (!config.apiKey.trim()) throw new Error('Gemini API key is required')
+          const defaultPrompt = functionDef.inputs.find((input) => input.key === 'prompt')?.defaultValue
+          const request = await createGeminiImageGenerationRequest(
+            config,
+            queuedRun.inputValues,
+            get().project.resources,
+            defaultPrompt,
+            (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
+          )
+          set((current) => ({
+            project: {
+              ...current.project,
+              tasks: {
+                ...current.project.tasks,
+                [queuedRun.taskId]: {
+                  ...current.project.tasks[queuedRun.taskId]!,
+                  requestSnapshot: structuredClone(request),
+                  updatedAt: runtime.now(),
+                },
+              },
+            },
+          }))
+          const requestPrompt =
+            request.contents[0]?.parts.find((part): part is { text: string } => 'text' in part)?.text ?? ''
+          if (!requestPrompt.trim()) throw new Error('Gemini image prompt is empty')
+
+          const response = await fetch(geminiGenerateContentUrl(config.baseUrl, config.model), {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-goog-api-key': config.apiKey.trim(),
+            },
+            body: JSON.stringify(request),
+          })
+          if (!response.ok) {
+            const errorText = await response.text().catch(() => '')
+            throw new Error(`Gemini image request failed: ${response.status}${errorText ? ` ${errorText}` : ''}`)
+          }
+
+          const outputs = extractGeminiImageGenerationOutputs(await response.json())
+          if (outputs.length === 0) throw new Error('Gemini image response did not include image data')
+          const output = functionDef.outputs[0] ?? {
+            key: 'image',
+            label: 'Image',
+            type: 'image' as ResourceType,
+          }
+          writeCommandOutputs(
+            queuedRun.taskId,
+            queuedRun.runIndex,
+            queuedRun.outputRefs,
+            [
+              {
+                key: output.key,
+                label: output.label,
+                type: output.type,
+                values: outputs.map((item) => ({
+                  url: item.dataUrl,
+                  filename: item.filename,
+                  mimeType: item.mimeType,
+                  sizeBytes: 0,
+                })),
+              },
+            ],
+            'gemini_image',
+            { compiledWorkflowSnapshot: {} },
+          )
+        } catch (err) {
+          failCommandTask(queuedRun.taskId, err)
+        }
+      }
+
+      for (const queuedRun of queuedRequestRuns) {
+        markCommandTaskRunning(queuedRun.taskId, 'request')
+        try {
+          const request = compileRequestFunctionRequest(functionDef, queuedRun.inputValues, get().project.resources)
+          set((current) => ({
+            project: {
+              ...current.project,
+              tasks: {
+                ...current.project.tasks,
+                [queuedRun.taskId]: {
+                  ...current.project.tasks[queuedRun.taskId]!,
+                  requestSnapshot: request,
+                  updatedAt: runtime.now(),
+                },
+              },
+            },
+          }))
+
+          const response = await fetch(request.url, request.init)
+          const responseBuffer = await response.arrayBuffer()
+          const errorText = response.ok ? '' : decodeResponseBuffer(responseBuffer, request.responseEncoding)
+          if (!response.ok) throw new Error(`Request failed: ${response.status} ${errorText}`)
+          let responseText = ''
+          let responseBinary: RequestBinaryOutputValue | undefined
+          let binaryOutputType: ResourceType | undefined
+          if (request.responseParse === 'binary') {
+            const firstBinaryOutput = functionDef.outputs.find(
+              (output) => output.type === 'image' || output.type === 'video' || output.type === 'audio',
+            )
+            const outputType = firstBinaryOutput?.type ?? 'image'
+            const fallbackMimeType = outputMimeType(outputType, '')
+            const mimeType = response.headers.get('content-type')?.split(';')[0]?.trim() || fallbackMimeType
+            binaryOutputType = resourceTypeFromMimeType(mimeType, outputType)
+            const filename =
+              filenameFromContentDisposition(response.headers.get('content-disposition')) ||
+              filenameFromRequestUrl(request.url) ||
+              `${firstBinaryOutput?.label ?? 'response'}.${extensionForMimeType(binaryOutputType, mimeType)}`
+            const blob = new Blob([responseBuffer], { type: mimeType })
+            responseBinary = {
+              url: await blobToDataUrl(blob, mimeType),
+              filename,
+              mimeType: responseMimeType(response, binaryOutputType, filename),
+              sizeBytes: responseBuffer.byteLength,
+            }
+          } else {
+            responseText = decodeResponseBuffer(responseBuffer, request.responseEncoding)
+          }
+          const responseJson = request.responseParse === 'json' ? JSON.parse(responseText || 'null') : undefined
+          const outputs =
+            request.responseParse === 'binary' && responseBinary
+              ? [
+                  {
+                    key: functionDef.outputs[0]?.key ?? 'result',
+                    label: functionDef.outputs[0]?.label ?? 'Result',
+                    type: binaryOutputType ?? 'image',
+                    values: [responseBinary],
+                  },
+                ]
+              : extractRequestFunctionOutputs(responseText, responseJson, functionDef.outputs, responseBinary)
+          writeCommandOutputs(
+            queuedRun.taskId,
+            queuedRun.runIndex,
+            queuedRun.outputRefs,
+            outputs.map((output) => ({ ...output, values: output.values })),
+            'request',
+          )
+        } catch (err) {
+          failCommandTask(queuedRun.taskId, err)
+        }
+      }
+
       return firstTaskId
+    },
+
+    runTemporaryFunctionAtPosition: async (functionDef, inputValues, position, runCount) => {
+      if (!get().project.functions[functionDef.id]) temporaryFunctionDrafts.set(functionDef.id, functionDef)
+      return await get().runFunctionAtPosition(functionDef.id, inputValues, position, runCount)
     },
 
     updateFunctionNodeRunCount: (nodeId, runCount) => {
@@ -6398,7 +7062,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       const task = state.project.tasks[taskId]
       if (!task || activeTaskStatuses.has(task.status)) return
 
-      const functionDef = state.project.functions[task.functionId]
+      const functionDef = functionDefinitionForTask(task)
       if (!functionDef) {
         failResultRunInPlace(resultNodeId, taskId, 'function_missing', 'Function definition is missing')
         return

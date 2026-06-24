@@ -28,24 +28,38 @@ import {
 } from '@xyflow/react'
 import { CaseSensitive, GitCompareArrows, Grid2X2, Image, Info, Layers, MousePointer2, Pencil, Scissors, Shrink, Video, Volume2, X } from 'lucide-react'
 import { EmptyNodeView, FunctionNodeView, GroupNodeView, ResourceNodeView, ResultGroupNodeView } from './NodeViews'
-import { FunctionManager } from './WorkbenchPanels'
+import { ComfyWorkflowEditorDialog, FunctionManager, type EmbeddedComfySave } from './WorkbenchPanels'
 import { ResourcePreview } from './ResourcePreview'
 import { buildCanvasFlowEdges } from '../domain/canvasEdges'
 import { targetInputInitialResourceValue } from '../domain/inputInitialValue'
 import { buildNodeReferenceMap } from '../domain/nodeReferences'
 import { readFileAsMediaResource } from '../domain/resourceFiles'
+import { isBuiltInFunction } from '../domain/builtInFunctions'
+import { GEMINI_LLM_FUNCTION_ID, isGeminiLlmFunction, mergedGeminiLlmConfig } from '../domain/geminiLlm'
+import { GEMINI_IMAGE_FUNCTION_ID, isGeminiImageFunction, mergedGeminiImageConfig } from '../domain/geminiImage'
+import { OPENAI_LLM_FUNCTION_ID, isOpenAILlmFunction, mergedOpenAILlmConfig } from '../domain/openaiLlm'
+import { OPENAI_IMAGE_FUNCTION_ID, isOpenAIImageFunction, mergedOpenAIImageConfig } from '../domain/openaiImage'
+import {
+  isRequestFunction,
+  mergedRequestConfig,
+  normalizeRequestOutputsForParse,
+  REQUEST_FUNCTION_ID,
+  requestMethods,
+  requestParseModes,
+} from '../domain/requestFunction'
 import {
   resourceNodeMinSize,
   resourceNodeMinSizeForCanvasNode,
   type ResourceNodeLayoutContext,
 } from '../domain/resourceNodeLayout'
-import { workflowPrimitiveInputValue } from '../domain/workflow'
+import { createGenerationFunctionFromWorkflow, workflowPrimitiveInputValue } from '../domain/workflow'
 import { useProjectStore } from '../store/projectStore'
 import { shouldIgnoreCanvasShortcut } from './canvasKeyboard'
 import type {
   CanvasNode,
   ExecutionTask,
   GenerationFunction,
+  ComfyEndpointConfig,
   PrimitiveInputValue,
   ProjectState,
   Resource,
@@ -111,9 +125,24 @@ type FunctionEditorState = {
 
 type FunctionRunDialogState = {
   functionId: string
+  temporaryFunction?: GenerationFunction
   inputValues: Record<string, PrimitiveInputValue | ResourceRef>
   runCount: number
   position: { x: number; y: number }
+}
+
+type TemporaryComfyWorkflowState = {
+  position: { x: number; y: number }
+  endpointId?: string
+  editorOpen: boolean
+  candidateRefs: ResourceRef[]
+}
+
+type BuiltInRunnerMenuItem = {
+  id: string
+  label: string
+  functionId?: string
+  kind: 'comfyui' | 'function'
 }
 
 type FunctionInputPickMode = {
@@ -138,6 +167,25 @@ const nodeTypes: NodeTypes = {
   group: GroupNodeView,
   default: EmptyNodeView,
 }
+
+const builtInFunctionMenuOrder = [
+  REQUEST_FUNCTION_ID,
+  OPENAI_LLM_FUNCTION_ID,
+  GEMINI_LLM_FUNCTION_ID,
+  OPENAI_IMAGE_FUNCTION_ID,
+  GEMINI_IMAGE_FUNCTION_ID,
+]
+
+const builtInFunctionMenuLabels: Record<string, string> = {
+  [REQUEST_FUNCTION_ID]: 'Request',
+  [OPENAI_LLM_FUNCTION_ID]: 'OpenAI LLM',
+  [GEMINI_LLM_FUNCTION_ID]: 'Gemini LLM',
+  [OPENAI_IMAGE_FUNCTION_ID]: 'OpenAI Image',
+  [GEMINI_IMAGE_FUNCTION_ID]: 'Gemini Image',
+}
+
+const temporaryRunnerId = (functionId: string) =>
+  `temp_${functionId}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 
 export const visibleCanvasNodes = (nodes: CanvasNode[]) =>
   nodes.filter((node) => node.type === 'resource' || node.type === 'group')
@@ -785,6 +833,19 @@ function functionInputSatisfied(value: PrimitiveInputValue | ResourceRef | undef
   return value !== undefined && value !== null
 }
 
+const textPromptFromProviderMessages = (
+  messages: Array<{ role: string; content: Array<{ type: string; content: string }> }>,
+) => {
+  const userMessage = messages.find((message) => message.role === 'user') ?? messages[0]
+  const textPart = userMessage?.content.find((part) => part.type === 'text')
+  return textPart?.content ?? ''
+}
+
+const providerImageContentParts = (functionDef: GenerationFunction) =>
+  functionDef.inputs
+    .filter((input) => input.type === 'image')
+    .map((input) => ({ type: 'image_url' as const, content: input.key, detail: 'auto' as const }))
+
 function FunctionRunDialog({
   functionDef,
   values,
@@ -793,6 +854,7 @@ function FunctionRunDialog({
   onClose,
   onPickInput,
   onRun,
+  onFunctionDefChange,
   onRunCountChange,
   onValuesChange,
 }: {
@@ -803,6 +865,7 @@ function FunctionRunDialog({
   onClose: () => void
   onPickInput: (input: { key: string; label: string; type: ResourceType }) => void
   onRun: (values: Record<string, PrimitiveInputValue | ResourceRef>, runCount: number) => void
+  onFunctionDefChange?: (functionDef: GenerationFunction) => void
   onRunCountChange: (runCount: number) => void
   onValuesChange: (values: Record<string, PrimitiveInputValue | ResourceRef>) => void
 }) {
@@ -828,6 +891,75 @@ function FunctionRunDialog({
   const setPrimitiveValue = (inputKey: string, value: PrimitiveInputValue) => {
     onValuesChange({ ...values, [inputKey]: value })
   }
+
+  const updateRequestConfig = (patch: Parameters<typeof mergedRequestConfig>[1]) => {
+    const request = mergedRequestConfig(functionDef.request, patch)
+    onFunctionDefChange?.({
+      ...functionDef,
+      request,
+      outputs: patch?.responseParse ? normalizeRequestOutputsForParse(functionDef.outputs, request.responseParse) : functionDef.outputs,
+    })
+  }
+
+  const updateRequestHeader = (name: string, value: string) => {
+    const currentHeaders = mergedRequestConfig(functionDef.request).headers ?? {}
+    const nextHeaders = { ...currentHeaders }
+    const trimmedValue = value.trim()
+    if (trimmedValue) {
+      nextHeaders[name] = value
+    } else {
+      delete nextHeaders[name]
+    }
+    updateRequestConfig({ headers: nextHeaders })
+  }
+
+  const updateOpenAiConfig = (patch: Parameters<typeof mergedOpenAILlmConfig>[1]) => {
+    onFunctionDefChange?.({ ...functionDef, openai: mergedOpenAILlmConfig(functionDef.openai, patch) })
+  }
+
+  const updateGeminiConfig = (patch: Parameters<typeof mergedGeminiLlmConfig>[1]) => {
+    onFunctionDefChange?.({ ...functionDef, gemini: mergedGeminiLlmConfig(functionDef.gemini, patch) })
+  }
+
+  const updateOpenAiImageConfig = (patch: Parameters<typeof mergedOpenAIImageConfig>[1]) => {
+    onFunctionDefChange?.({ ...functionDef, openaiImage: mergedOpenAIImageConfig(functionDef.openaiImage, patch) })
+  }
+
+  const updateGeminiImageConfig = (patch: Parameters<typeof mergedGeminiImageConfig>[1]) => {
+    onFunctionDefChange?.({ ...functionDef, geminiImage: mergedGeminiImageConfig(functionDef.geminiImage, patch) })
+  }
+
+  const updateOpenAiPrompt = (prompt: string) => {
+    updateOpenAiConfig({
+      messages: [
+        {
+          role: 'user',
+          content: [{ type: 'text', content: prompt }, ...providerImageContentParts(functionDef)],
+        },
+      ],
+    })
+  }
+
+  const updateGeminiPrompt = (prompt: string) => {
+    updateGeminiConfig({
+      messages: [
+        {
+          role: 'user',
+          content: [{ type: 'text', content: prompt }, ...providerImageContentParts(functionDef)],
+        },
+      ],
+    })
+  }
+
+  const requestConfig = isRequestFunction(functionDef) ? mergedRequestConfig(functionDef.request) : undefined
+  const openAiConfig = isOpenAILlmFunction(functionDef) ? mergedOpenAILlmConfig(functionDef.openai) : undefined
+  const geminiConfig = isGeminiLlmFunction(functionDef) ? mergedGeminiLlmConfig(functionDef.gemini) : undefined
+  const openAiImageConfig = isOpenAIImageFunction(functionDef)
+    ? mergedOpenAIImageConfig(functionDef.openaiImage)
+    : undefined
+  const geminiImageConfig = isGeminiImageFunction(functionDef)
+    ? mergedGeminiImageConfig(functionDef.geminiImage)
+    : undefined
 
   return (
     <div
@@ -865,6 +997,201 @@ function FunctionRunDialog({
             <p>No assets selected yet.</p>
           )}
         </div>
+        {onFunctionDefChange && requestConfig ? (
+          <div className="function-run-provider-fields" aria-label="Request settings">
+            <label>
+              <span>URL</span>
+              <input
+                aria-label="Request URL"
+                value={requestConfig.url}
+                onChange={(event) => updateRequestConfig({ url: event.target.value })}
+              />
+            </label>
+            <label>
+              <span>Method</span>
+              <select
+                aria-label="Request method"
+                value={requestConfig.method}
+                onChange={(event) => updateRequestConfig({ method: event.target.value })}
+              >
+                {requestMethods.map((method) => (
+                  <option key={method} value={method}>
+                    {method}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Response</span>
+              <select
+                aria-label="Request response parse"
+                value={requestConfig.responseParse}
+                onChange={(event) =>
+                  updateRequestConfig({ responseParse: event.target.value as typeof requestConfig.responseParse })
+                }
+              >
+                {requestParseModes.map((mode) => (
+                  <option key={mode} value={mode}>
+                    {mode}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Authorization</span>
+              <input
+                aria-label="Request Authorization header"
+                autoComplete="off"
+                value={requestConfig.headers.Authorization ?? ''}
+                onChange={(event) => updateRequestHeader('Authorization', event.target.value)}
+                placeholder="Bearer ..."
+              />
+            </label>
+            <label className="function-run-provider-wide">
+              <span>Body</span>
+              <textarea
+                aria-label="Request body"
+                rows={3}
+                value={requestConfig.body}
+                onChange={(event) => updateRequestConfig({ body: event.target.value })}
+              />
+            </label>
+          </div>
+        ) : null}
+        {onFunctionDefChange && openAiConfig ? (
+          <div className="function-run-provider-fields" aria-label="OpenAI settings">
+            <label>
+              <span>API key</span>
+              <input
+                aria-label="OpenAI API key"
+                type="password"
+                value={openAiConfig.apiKey}
+                onChange={(event) => updateOpenAiConfig({ apiKey: event.target.value })}
+              />
+            </label>
+            <label>
+              <span>Base URL</span>
+              <input
+                aria-label="OpenAI base URL"
+                value={openAiConfig.baseUrl}
+                onChange={(event) => updateOpenAiConfig({ baseUrl: event.target.value })}
+              />
+            </label>
+            <label>
+              <span>Model</span>
+              <input
+                aria-label="OpenAI model"
+                value={openAiConfig.model}
+                onChange={(event) => updateOpenAiConfig({ model: event.target.value })}
+              />
+            </label>
+            <label className="function-run-provider-wide">
+              <span>Prompt</span>
+              <textarea
+                aria-label="OpenAI prompt"
+                rows={3}
+                value={textPromptFromProviderMessages(openAiConfig.messages)}
+                onChange={(event) => updateOpenAiPrompt(event.target.value)}
+              />
+            </label>
+          </div>
+        ) : null}
+        {onFunctionDefChange && geminiConfig ? (
+          <div className="function-run-provider-fields" aria-label="Gemini settings">
+            <label>
+              <span>API key</span>
+              <input
+                aria-label="Gemini API key"
+                type="password"
+                value={geminiConfig.apiKey}
+                onChange={(event) => updateGeminiConfig({ apiKey: event.target.value })}
+              />
+            </label>
+            <label>
+              <span>Base URL</span>
+              <input
+                aria-label="Gemini base URL"
+                value={geminiConfig.baseUrl}
+                onChange={(event) => updateGeminiConfig({ baseUrl: event.target.value })}
+              />
+            </label>
+            <label>
+              <span>Model</span>
+              <input
+                aria-label="Gemini model"
+                value={geminiConfig.model}
+                onChange={(event) => updateGeminiConfig({ model: event.target.value })}
+              />
+            </label>
+            <label className="function-run-provider-wide">
+              <span>Prompt</span>
+              <textarea
+                aria-label="Gemini prompt"
+                rows={3}
+                value={textPromptFromProviderMessages(geminiConfig.messages)}
+                onChange={(event) => updateGeminiPrompt(event.target.value)}
+              />
+            </label>
+          </div>
+        ) : null}
+        {onFunctionDefChange && openAiImageConfig ? (
+          <div className="function-run-provider-fields" aria-label="OpenAI image settings">
+            <label>
+              <span>API key</span>
+              <input
+                aria-label="OpenAI image API key"
+                type="password"
+                value={openAiImageConfig.apiKey}
+                onChange={(event) => updateOpenAiImageConfig({ apiKey: event.target.value })}
+              />
+            </label>
+            <label>
+              <span>Base URL</span>
+              <input
+                aria-label="OpenAI image base URL"
+                value={openAiImageConfig.baseUrl}
+                onChange={(event) => updateOpenAiImageConfig({ baseUrl: event.target.value })}
+              />
+            </label>
+            <label>
+              <span>Model</span>
+              <input
+                aria-label="OpenAI image model"
+                value={openAiImageConfig.model}
+                onChange={(event) => updateOpenAiImageConfig({ model: event.target.value })}
+              />
+            </label>
+          </div>
+        ) : null}
+        {onFunctionDefChange && geminiImageConfig ? (
+          <div className="function-run-provider-fields" aria-label="Gemini image settings">
+            <label>
+              <span>API key</span>
+              <input
+                aria-label="Gemini image API key"
+                type="password"
+                value={geminiImageConfig.apiKey}
+                onChange={(event) => updateGeminiImageConfig({ apiKey: event.target.value })}
+              />
+            </label>
+            <label>
+              <span>Base URL</span>
+              <input
+                aria-label="Gemini image base URL"
+                value={geminiImageConfig.baseUrl}
+                onChange={(event) => updateGeminiImageConfig({ baseUrl: event.target.value })}
+              />
+            </label>
+            <label>
+              <span>Model</span>
+              <input
+                aria-label="Gemini image model"
+                value={geminiImageConfig.model}
+                onChange={(event) => updateGeminiImageConfig({ model: event.target.value })}
+              />
+            </label>
+          </div>
+        ) : null}
         <div className="function-run-fields">
           {functionDef.inputs.map((input) => {
             const value = values[input.key]
@@ -962,6 +1289,81 @@ function FunctionRunDialog({
   )
 }
 
+function TemporaryComfyWorkflowDialog({
+  endpoints,
+  endpointId,
+  onEndpointChange,
+  onEdit,
+  onClose,
+}: {
+  endpoints: ComfyEndpointConfig[]
+  endpointId?: string
+  onEndpointChange: (endpointId: string) => void
+  onEdit: () => void
+  onClose: () => void
+}) {
+  const enabledEndpoints = endpoints.filter((endpoint) => endpoint.enabled !== false)
+  const selectedEndpoint = enabledEndpoints.find((endpoint) => endpoint.id === endpointId) ?? enabledEndpoints[0]
+
+  return (
+    <div
+      className="local-action-backdrop nodrag nopan"
+      onMouseDown={(event) => {
+        event.stopPropagation()
+        if (event.target === event.currentTarget) onClose()
+      }}
+    >
+      <section
+        aria-label="ComfyUI workflow runner"
+        aria-modal="true"
+        className="local-action-dialog temporary-comfy-runner"
+        role="dialog"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header>
+          <div>
+            <h2>ComfyUI Workflow</h2>
+            <span>Build a one-off workflow, then run it from selected inputs</span>
+          </div>
+          <button type="button" aria-label="Close ComfyUI workflow runner" onClick={onClose}>
+            <X size={16} />
+          </button>
+        </header>
+        <label className="temporary-comfy-endpoint">
+          <span>ComfyUI server</span>
+          <select
+            aria-label="ComfyUI server for temporary workflow"
+            value={selectedEndpoint?.id ?? ''}
+            onChange={(event) => onEndpointChange(event.target.value)}
+          >
+            {enabledEndpoints.length ? (
+              enabledEndpoints.map((endpoint) => (
+                <option key={endpoint.id} value={endpoint.id}>
+                  {endpoint.name} - {endpoint.baseUrl}
+                </option>
+              ))
+            ) : (
+              <option value="">No ComfyUI server configured</option>
+            )}
+          </select>
+        </label>
+        <div className="temporary-comfy-panel">
+          <strong>No workflow saved yet</strong>
+          <span>Open ComfyUI, create or import the workflow, then save it back here.</span>
+        </div>
+        <div className="local-action-footer">
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="button" aria-label="Edit temporary workflow in ComfyUI" className="primary" disabled={!selectedEndpoint} onClick={onEdit}>
+            Edit in ComfyUI
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
 function FunctionInputPickStrip({
   pickMode,
   compatibleCount,
@@ -997,6 +1399,7 @@ function CanvasSurface() {
   const selectNodes = useProjectStore((state) => state.selectNodes)
   const runFunctionNodeWithComfy = useProjectStore((state) => state.runFunctionNodeWithComfy)
   const runFunctionAtPosition = useProjectStore((state) => state.runFunctionAtPosition)
+  const runTemporaryFunctionAtPosition = useProjectStore((state) => state.runTemporaryFunctionAtPosition)
   const rerunResultNode = useProjectStore((state) => state.rerunResultNode)
   const cancelResultRun = useProjectStore((state) => state.cancelResultRun)
   const addTextResourceAtPosition = useProjectStore((state) => state.addTextResourceAtPosition)
@@ -1043,6 +1446,7 @@ function CanvasSurface() {
   const [groupNodeMenu, setGroupNodeMenu] = useState<GroupNodeMenuState>()
   const [functionEditor, setFunctionEditor] = useState<FunctionEditorState>()
   const [functionRunDialog, setFunctionRunDialog] = useState<FunctionRunDialogState>()
+  const [temporaryComfyWorkflow, setTemporaryComfyWorkflow] = useState<TemporaryComfyWorkflowState>()
   const [inputPickMode, setInputPickMode] = useState<FunctionInputPickMode>()
   const [comparePair, setComparePair] = useState<CompareImagePair | null>(null)
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([])
@@ -1115,7 +1519,9 @@ function CanvasSurface() {
       const taskId = resource?.source.taskId
       const task = taskId ? project.tasks[taskId] : undefined
       const functionId = task?.functionId ?? resource?.metadata?.workflowFunctionId
-      const functionDef = functionId ? project.functions[functionId] : undefined
+      const functionDef = functionId
+        ? project.functions[functionId] ?? task?.functionSnapshot ?? resource?.metadata?.functionSnapshot
+        : undefined
       if (!resource || !task || !functionId || !functionDef) return
 
       const sourceNode = project.canvas.nodes.find(
@@ -1124,6 +1530,7 @@ function CanvasSurface() {
       const sourceWidth = sourceNode ? Number(flowNodeStyle(sourceNode, flowNodeLayoutContext).width) : DEFAULT_ASSET_NODE_WIDTH
       openFunctionRunDialog({
         functionId,
+        temporaryFunction: project.functions[functionId] ? undefined : functionDef,
         inputValues: functionRunInputsFromTask(task),
         runCount: Number((task.paramsSnapshot as { runCount?: unknown } | undefined)?.runCount ?? functionDef.runtimeDefaults?.runCount ?? 1),
         position: sourceNode
@@ -1730,7 +2137,9 @@ function CanvasSurface() {
 
   const activeFunctionEditorFunction = functionEditor ? project.functions[functionEditor.functionId] : undefined
   const activeFunctionEditorFunctions = activeFunctionEditorFunction ? [activeFunctionEditorFunction] : []
-  const activeFunctionRunFunction = functionRunDialog ? project.functions[functionRunDialog.functionId] : undefined
+  const activeFunctionRunFunction = functionRunDialog
+    ? functionRunDialog.temporaryFunction ?? project.functions[functionRunDialog.functionId]
+    : undefined
 
   const placedNodePosition = (newNodeWidth: number) => {
     if (!addMenu?.placement) return addMenu?.flow
@@ -1774,9 +2183,34 @@ function CanvasSurface() {
     return uniqueResourceRefs(refs)
   }
 
-  const addMenuFunctions = Object.values(project.functions).filter((fn) =>
+  const addMenuFunctionOptions = Object.values(project.functions).filter((fn) =>
     addMenu?.connection?.kind === 'target' ? false : functionAcceptsResourceType(fn, addMenu?.connection?.resourceType),
   )
+  const addMenuBuiltInFunctionOptions = addMenuFunctionOptions.filter(isBuiltInFunction)
+  const addMenuCustomFunctionOptions = addMenuFunctionOptions.filter((fn) => !isBuiltInFunction(fn))
+  const addMenuBuiltInRunners: BuiltInRunnerMenuItem[] =
+    addMenu?.connection?.kind === 'target'
+      ? []
+      : [
+          { id: 'builtin_comfyui_workflow', label: 'ComfyUI Workflow', kind: 'comfyui' },
+          ...builtInFunctionMenuOrder
+            .map((functionId) => addMenuBuiltInFunctionOptions.find((fn) => fn.id === functionId))
+            .filter((fn): fn is GenerationFunction => Boolean(fn))
+            .map((fn) => ({
+              id: `builtin_${fn.id}`,
+              label: builtInFunctionMenuLabels[fn.id] ?? fn.name,
+              functionId: fn.id,
+              kind: 'function' as const,
+            })),
+          ...addMenuBuiltInFunctionOptions
+            .filter((fn) => !builtInFunctionMenuOrder.includes(fn.id))
+            .map((fn) => ({
+              id: `builtin_${fn.id}`,
+              label: fn.name,
+              functionId: fn.id,
+              kind: 'function' as const,
+            })),
+        ]
   const assetTypeAllowedInMenu = (type: ResourceType) =>
     addMenu?.connection?.kind !== 'target' || addMenu.connection.resourceType === type
   const addMenuAssetOptions = [
@@ -1787,7 +2221,10 @@ function CanvasSurface() {
     { type: 'audio' as const, label: 'Audio Asset' },
   ].filter((item) => assetTypeAllowedInMenu(item.type))
   const filteredAddMenuAssets = addMenuAssetOptions.filter((item) => addMenuItemMatches(item.label, addMenuQuery))
-  const filteredAddMenuFunctions = addMenuFunctions.filter((fn) => addMenuItemMatches(fn.name, addMenuQuery))
+  const filteredAddMenuBuiltInRunners = addMenuBuiltInRunners.filter((runner) =>
+    addMenuItemMatches(runner.label, addMenuQuery),
+  )
+  const filteredAddMenuFunctions = addMenuCustomFunctionOptions.filter((fn) => addMenuItemMatches(fn.name, addMenuQuery))
   const filteredAddMenuTemplates = Object.values(project.templates ?? {}).filter((template) =>
     addMenuItemMatches(template.name, addMenuQuery),
   )
@@ -1808,7 +2245,13 @@ function CanvasSurface() {
     menu.style.top = `${top}px`
     menu.style.maxHeight = rect.height > maxHeight ? `${maxHeight}px` : ''
     addMenuSearchRef.current?.focus()
-  }, [addMenu, filteredAddMenuAssets.length, filteredAddMenuFunctions.length])
+  }, [
+    addMenu,
+    filteredAddMenuAssets.length,
+    filteredAddMenuBuiltInRunners.length,
+    filteredAddMenuFunctions.length,
+    filteredAddMenuTemplates.length,
+  ])
 
   const createFunctionFromMenu = (functionId: string) => {
     if (!addMenu) return
@@ -1817,6 +2260,73 @@ function CanvasSurface() {
     const inputValues = buildFunctionRunInputDraft(functionDef, project.resources, resourceRefsForFunctionMenu())
     const position = placedNodePosition(defaultFunctionWidth(functionDef)) ?? addMenu.flow
     openFunctionRunDialog({ functionId, inputValues, runCount: functionDef.runtimeDefaults?.runCount ?? 1, position })
+    setAddMenu(null)
+  }
+
+  const createBuiltInRunnerFromMenu = (runner: BuiltInRunnerMenuItem) => {
+    if (runner.kind === 'comfyui') {
+      if (!addMenu) return
+      const enabledEndpoint = project.comfy.endpoints.find((endpoint) => endpoint.enabled !== false)
+      setTemporaryComfyWorkflow({
+        position: placedNodePosition(DEFAULT_ASSET_NODE_WIDTH) ?? addMenu.flow,
+        endpointId: enabledEndpoint?.id,
+        editorOpen: false,
+        candidateRefs: resourceRefsForFunctionMenu(),
+      })
+      setAddMenu(null)
+      return
+    }
+
+    if (runner.kind === 'function' && runner.functionId) {
+      if (!addMenu) return
+      const functionDef = project.functions[runner.functionId]
+      if (!functionDef) return
+      const temporaryFunction = {
+        ...functionDef,
+        id: temporaryRunnerId(functionDef.id),
+        name: runner.label,
+      }
+      const inputValues = buildFunctionRunInputDraft(temporaryFunction, project.resources, resourceRefsForFunctionMenu())
+      const position = placedNodePosition(defaultFunctionWidth(temporaryFunction)) ?? addMenu.flow
+      openFunctionRunDialog({
+        functionId: temporaryFunction.id,
+        temporaryFunction,
+        inputValues,
+        runCount: temporaryFunction.runtimeDefaults?.runCount ?? 1,
+        position,
+      })
+      setAddMenu(null)
+      return
+    }
+    setAddMenu(null)
+  }
+
+  const saveTemporaryComfyWorkflow = (value: EmbeddedComfySave) => {
+    if (!temporaryComfyWorkflow) return
+    const createdAt = value.editor.savedAt || new Date().toISOString()
+    const temporaryFunction = createGenerationFunctionFromWorkflow(
+      `temp_comfy_${createdAt.replace(/\W/g, '')}`,
+      'ComfyUI Workflow',
+      value.rawJson,
+      createdAt,
+      {
+        uiJson: value.uiJson,
+        editor: value.editor,
+      },
+    )
+    const inputValues = buildFunctionRunInputDraft(
+      temporaryFunction,
+      project.resources,
+      temporaryComfyWorkflow.candidateRefs,
+    )
+    openFunctionRunDialog({
+      functionId: temporaryFunction.id,
+      temporaryFunction,
+      inputValues,
+      runCount: temporaryFunction.runtimeDefaults?.runCount ?? 1,
+      position: temporaryComfyWorkflow.position,
+    })
+    setTemporaryComfyWorkflow(undefined)
   }
 
   const createAssetFromMenu = (type: ResourceType) => {
@@ -2166,22 +2676,34 @@ function CanvasSurface() {
               if (event.key === 'Escape') setAddMenu(null)
             }}
           />
+          {filteredAddMenuAssets.length > 0 ? <div className="add-node-section-label">Assets</div> : null}
           {filteredAddMenuAssets.map((item) => (
             <button key={item.type} role="menuitem" type="button" onClick={() => createAssetFromMenu(item.type)}>
               {item.label}
             </button>
           ))}
+          {filteredAddMenuBuiltInRunners.length > 0 ? <div className="add-node-section-label">Built-in</div> : null}
+          {filteredAddMenuBuiltInRunners.map((runner) => (
+            <button key={runner.id} role="menuitem" type="button" onClick={() => createBuiltInRunnerFromMenu(runner)}>
+              {runner.label}
+            </button>
+          ))}
+          {filteredAddMenuTemplates.length > 0 ? <div className="add-node-section-label">Templates</div> : null}
           {filteredAddMenuTemplates.map((template) => (
             <button key={template.id} role="menuitem" type="button" onClick={() => createTemplateFromMenu(template.id)}>
               Template: {template.name}
             </button>
           ))}
+          {filteredAddMenuFunctions.length > 0 ? <div className="add-node-section-label">Functions</div> : null}
           {filteredAddMenuFunctions.map((fn) => (
             <button key={fn.id} role="menuitem" type="button" onClick={() => createFunctionFromMenu(fn.id)}>
               {fn.name}
             </button>
           ))}
-          {filteredAddMenuAssets.length === 0 && filteredAddMenuTemplates.length === 0 && filteredAddMenuFunctions.length === 0 ? (
+          {filteredAddMenuAssets.length === 0 &&
+          filteredAddMenuBuiltInRunners.length === 0 &&
+          filteredAddMenuTemplates.length === 0 &&
+          filteredAddMenuFunctions.length === 0 ? (
             <div className="add-node-empty">No matching nodes</div>
           ) : null}
         </div>
@@ -2324,6 +2846,24 @@ function CanvasSurface() {
           onCancel={() => setInputPickMode(undefined)}
         />
       ) : null}
+      {temporaryComfyWorkflow && !temporaryComfyWorkflow.editorOpen ? (
+        <TemporaryComfyWorkflowDialog
+          endpoints={project.comfy.endpoints}
+          endpointId={temporaryComfyWorkflow.endpointId}
+          onEndpointChange={(endpointId) =>
+            setTemporaryComfyWorkflow((current) => (current ? { ...current, endpointId } : current))
+          }
+          onEdit={() => setTemporaryComfyWorkflow((current) => (current ? { ...current, editorOpen: true } : current))}
+          onClose={() => setTemporaryComfyWorkflow(undefined)}
+        />
+      ) : null}
+      {temporaryComfyWorkflow?.editorOpen ? (
+        <ComfyWorkflowEditorDialog
+          endpoint={project.comfy.endpoints.find((endpoint) => endpoint.id === temporaryComfyWorkflow.endpointId)}
+          onSave={saveTemporaryComfyWorkflow}
+          onClose={() => setTemporaryComfyWorkflow((current) => (current ? { ...current, editorOpen: false } : current))}
+        />
+      ) : null}
       {functionRunDialog && activeFunctionRunFunction && !inputPickMode ? (
         <FunctionRunDialog
           functionDef={activeFunctionRunFunction}
@@ -2343,8 +2883,18 @@ function CanvasSurface() {
             })
           }}
           onRun={(values, runCount) => {
+            if (functionRunDialog.temporaryFunction) {
+              void runTemporaryFunctionAtPosition(functionRunDialog.temporaryFunction, values, functionRunDialog.position, runCount)
+              return
+            }
             void runFunctionAtPosition(functionRunDialog.functionId, values, functionRunDialog.position, runCount)
           }}
+          onFunctionDefChange={
+            functionRunDialog.temporaryFunction
+              ? (temporaryFunction) =>
+                  setFunctionRunDialog((current) => (current ? { ...current, temporaryFunction } : current))
+              : undefined
+          }
           onRunCountChange={(runCount) =>
             setFunctionRunDialog((current) => (current ? { ...current, runCount } : current))
           }

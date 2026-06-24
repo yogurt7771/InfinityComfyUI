@@ -688,14 +688,14 @@ async function downloadResource(resource: Resource) {
 function usePreviewMediaSource(resource: Resource) {
   const media = mediaValue(resource)
   const key =
-    media?.url && (media.comfy || resource.metadata?.endpointId)
+    media?.url && media.comfy
       ? [
           resource.id,
           media.url,
-          media.comfy?.endpointId ?? resource.metadata?.endpointId ?? '',
-          media.comfy?.filename ?? '',
-          media.comfy?.subfolder ?? '',
-          media.comfy?.type ?? '',
+          media.comfy.endpointId,
+          media.comfy.filename,
+          media.comfy.subfolder,
+          media.comfy.type,
         ].join('|')
       : undefined
   const [objectUrl, setObjectUrl] = useState<{ key: string; url: string }>()
@@ -1861,7 +1861,11 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
   const sourceFunctionId =
     resource?.metadata?.workflowFunctionId ??
     (resource?.source.taskId ? nodeData.tasksById?.[resource.source.taskId]?.functionId : undefined)
-  const sourceFunction = sourceFunctionId ? nodeData.functionsById[sourceFunctionId] : undefined
+  const sourceFunction = sourceFunctionId
+    ? nodeData.functionsById[sourceFunctionId] ??
+      task?.functionSnapshot ??
+      resource?.metadata?.functionSnapshot
+    : undefined
   const minSize = resourceNodeMinSize({
     resourceType: resource?.type ?? nodeData.resourceType,
     title,

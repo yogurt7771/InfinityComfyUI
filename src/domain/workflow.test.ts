@@ -282,6 +282,89 @@ describe('workflow helpers', () => {
     expect(fn.category).toBe('Edit')
   })
 
+  it('infers numeric widget inputs from unlinked primitive workflow fields', () => {
+    const fn = createGenerationFunctionFromWorkflow('fn_1', 'Latent Size', {
+      '14': {
+        class_type: 'EmptyLatentImage',
+        _meta: { title: 'Latent Size' },
+        inputs: {
+          width: 1024,
+          height: 768,
+          batch_size: ['11', 0],
+        },
+      },
+      '9': {
+        class_type: 'SaveImage',
+        _meta: { title: 'Save Image' },
+        inputs: { filename_prefix: 'flux', images: ['14', 0] },
+      },
+    }, '2026-05-08T09:00:00.000Z')
+
+    expect(fn.inputs).toMatchObject([
+      {
+        key: 'width',
+        label: 'Width',
+        type: 'number',
+        required: false,
+        defaultValue: 1024,
+        bind: { nodeId: '14', nodeTitle: 'Latent Size', path: 'inputs.width' },
+      },
+      {
+        key: 'height',
+        label: 'Height',
+        type: 'number',
+        required: false,
+        defaultValue: 768,
+        bind: { nodeId: '14', nodeTitle: 'Latent Size', path: 'inputs.height' },
+      },
+    ])
+  })
+
+  it('infers video and audio asset inputs from media loader workflow fields', () => {
+    const fn = createGenerationFunctionFromWorkflow('fn_1', 'Media Inputs', {
+      '20': {
+        class_type: 'LoadVideo',
+        _meta: { title: 'First Frame Video' },
+        inputs: {
+          video: 'input.mp4',
+          vae: ['4', 0],
+        },
+      },
+      '21': {
+        class_type: 'LoadAudio',
+        _meta: { title: 'Voice Audio' },
+        inputs: {
+          audio: 'voice.wav',
+          model: ['5', 0],
+        },
+      },
+      '30': {
+        class_type: 'SaveVideo',
+        _meta: { title: 'Save Video' },
+        inputs: { video: ['20', 0] },
+      },
+    }, '2026-05-08T09:00:00.000Z')
+
+    expect(fn.inputs).toMatchObject([
+      {
+        key: 'video',
+        label: 'Video',
+        type: 'video',
+        required: true,
+        bind: { nodeId: '20', nodeTitle: 'First Frame Video', path: 'inputs.video' },
+        upload: { strategy: 'manual_path' },
+      },
+      {
+        key: 'audio',
+        label: 'Audio',
+        type: 'audio',
+        required: true,
+        bind: { nodeId: '21', nodeTitle: 'Voice Audio', path: 'inputs.audio' },
+        upload: { strategy: 'manual_path' },
+      },
+    ])
+  })
+
   it('stores ComfyUI UI workflow metadata alongside the runnable API workflow', () => {
     const apiWorkflow = {
       '9': {
