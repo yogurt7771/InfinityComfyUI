@@ -71,7 +71,7 @@
 - Create: `src/domain/assetGraph.test.ts`
 - Reference: `docs/superpowers/specs/2026-06-23-asset-first-full-migration-design.md`
 
-- [x] **Step 1: Write failing tests for the asset-only graph contract**
+- [ ] **Step 1: Write failing tests for the asset-only graph contract**
 
 ```ts
 import { describe, expect, it } from 'vitest'
@@ -105,23 +105,23 @@ describe('assetGraph', () => {
 })
 ```
 
-- [x] **Step 2: Run the test and verify it fails**
+- [ ] **Step 2: Run the test and verify it fails**
 
 Run: `npm test -- --run src/domain/assetGraph.test.ts`
 
 Expected: fail because `assetGraph` does not exist.
 
-- [x] **Step 3: Implement the minimal asset graph domain**
+- [ ] **Step 3: Implement the minimal asset graph domain**
 
 Create focused exported types and helpers only. Do not edit the legacy `CanvasNodeKind` yet.
 
-- [x] **Step 4: Run the test and verify it passes**
+- [ ] **Step 4: Run the test and verify it passes**
 
 Run: `npm test -- --run src/domain/assetGraph.test.ts`
 
 Expected: pass.
 
-- [x] **Step 5: Run nearby tests**
+- [ ] **Step 5: Run nearby tests**
 
 Run: `npm test -- --run src/domain/canvasEdges.test.ts src/domain/resourceNodeLayout.test.ts`
 
@@ -135,11 +135,11 @@ Expected: pass.
 - Create: `src/domain/commands/commandHistory.test.ts`
 - Modify later: `src/store/projectStore.ts`
 
-- [x] **Step 1: Write failing tests for one-command-one-history behavior**
-- [x] **Step 2: Implement serializable command and transaction types**
-- [x] **Step 3: Implement compact snapshot creation and hydrate restore helpers**
-- [x] **Step 4: Prove batch delete/move commands produce one transaction**
-- [x] **Step 5: Run command tests**
+- [ ] **Step 1: Write failing tests for one-command-one-history behavior**
+- [ ] **Step 2: Implement serializable command and transaction types**
+- [ ] **Step 3: Implement compact snapshot creation and hydrate restore helpers**
+- [ ] **Step 4: Prove batch delete/move commands produce one transaction**
+- [ ] **Step 5: Run command tests**
 
 Run: `npm test -- --run src/domain/commands/commandHistory.test.ts`
 
@@ -152,10 +152,10 @@ Expected: pass.
 - Create: `src/domain/commands/assetCommands.test.ts`
 - Modify: `src/store/projectStore.ts`
 
-- [x] **Step 1: Write failing tests for create/update/delete asset commands**
-- [x] **Step 2: Implement create asset command that adds resource, optional asset record, and asset canvas node**
-- [x] **Step 3: Implement delete assets command that removes selected asset nodes and lineage edges in one transaction**
-- [x] **Step 4: Implement move/resize asset commands**
+- [ ] **Step 1: Write failing tests for create/update/delete asset commands**
+- [ ] **Step 2: Implement create asset command that adds resource, optional asset record, and asset canvas node**
+- [ ] **Step 3: Implement delete assets command that removes selected asset nodes and lineage edges in one transaction**
+- [ ] **Step 4: Implement move/resize asset commands**
 - [ ] **Step 5: Wire store actions to asset commands without changing UI yet**
 
 Run: `npm test -- --run src/domain/commands/assetCommands.test.ts src/store/projectStore.test.ts`
@@ -169,10 +169,10 @@ Expected: pass.
 - Create: `src/domain/runs/runSnapshot.test.ts`
 - Modify: `src/domain/types.ts`
 
-- [x] **Step 1: Write failing tests for run snapshot normalization**
-- [x] **Step 2: Add `RunSnapshot` and provider discriminants**
-- [x] **Step 3: Add helpers to derive output resource source metadata from `runId/outputKey`**
-- [x] **Step 4: Add tests that generated resources no longer need `functionNodeId/resultGroupNodeId`**
+- [ ] **Step 1: Write failing tests for run snapshot normalization**
+- [ ] **Step 2: Add `RunSnapshot` and provider discriminants**
+- [ ] **Step 3: Add helpers to derive output resource source metadata from `runId/outputKey`**
+- [ ] **Step 4: Add tests that generated resources no longer need `functionNodeId/resultGroupNodeId`**
 
 Run: `npm test -- --run src/domain/runs/runSnapshot.test.ts`
 
@@ -185,10 +185,10 @@ Expected: pass.
 - Create: `src/domain/runs/runCommands.test.ts`
 - Modify: `src/domain/types.ts`
 
-- [x] **Step 1: Write failing tests that a run creates pending asset nodes immediately**
-- [x] **Step 2: Implement pending resource value creation for text/number/image/video/audio**
-- [x] **Step 3: Implement output asset node placement**
-- [x] **Step 4: Implement initial input-to-output lineage edges**
+- [ ] **Step 1: Write failing tests that a run creates pending asset nodes immediately**
+- [ ] **Step 2: Implement pending resource value creation for text/number/image/video/audio**
+- [ ] **Step 3: Implement output asset node placement**
+- [ ] **Step 4: Implement initial input-to-output lineage edges**
 
 Run: `npm test -- --run src/domain/runs/runCommands.test.ts`
 
@@ -201,11 +201,11 @@ Expected: pass.
 - Create: `src/domain/runs/runOrchestrator.test.ts`
 - Create: `src/domain/runs/adapters/*.ts`
 
-- [x] **Step 1: Write failing adapter contract tests**
-- [x] **Step 2: Implement provider-neutral adapter interface**
-- [x] **Step 3: Move provider-specific request preparation behind adapters**
-- [x] **Step 4: Keep existing provider domain modules pure and reusable**
-- [x] **Step 5: Test each adapter with existing provider tests**
+- [ ] **Step 1: Write failing adapter contract tests**
+- [ ] **Step 2: Implement provider-neutral adapter interface**
+- [ ] **Step 3: Move provider-specific request preparation behind adapters**
+- [ ] **Step 4: Keep existing provider domain modules pure and reusable**
+- [ ] **Step 5: Test each adapter with existing provider tests**
 
 Run: `npm test -- --run src/domain/runs/runOrchestrator.test.ts src/domain/*Image*.test.ts src/domain/*Llm*.test.ts src/domain/requestFunction.test.ts src/domain/localTransforms.test.ts`
 
@@ -218,10 +218,10 @@ Expected: pass. If `localTransforms.test.ts` does not exist, add focused local t
 - Create: `src/domain/runs/dependencyResolver.test.ts`
 - Modify: `src/store/projectStore.ts`
 
-- [x] **Step 1: Write failing tests for deep pending dependency chains**
-- [x] **Step 2: Implement pending task resolution when upstream output assets succeed**
-- [x] **Step 3: Implement immediate downstream failure when upstream output assets fail**
-- [x] **Step 4: Wire resolver into task completion/failure store actions**
+- [ ] **Step 1: Write failing tests for deep pending dependency chains**
+- [ ] **Step 2: Implement pending task resolution when upstream output assets succeed**
+- [ ] **Step 3: Implement immediate downstream failure when upstream output assets fail**
+- [ ] **Step 4: Wire resolver into task completion/failure store actions**
 
 Run: `npm test -- --run src/domain/runs/dependencyResolver.test.ts src/store/projectStore.test.ts`
 
@@ -234,10 +234,10 @@ Expected: pass.
 - Create: `src/domain/assetGraphProjection.test.ts`
 - Modify: `src/domain/canvasEdges.ts` or deprecate it.
 
-- [x] **Step 1: Write failing tests that projection emits only asset/group node types**
-- [x] **Step 2: Implement projection for asset nodes, group nodes, and lineage edges**
-- [x] **Step 3: Keep hidden React Flow handles as projection details**
-- [x] **Step 4: Remove business dependence on DOM handles**
+- [ ] **Step 1: Write failing tests that projection emits only asset/group node types**
+- [ ] **Step 2: Implement projection for asset nodes, group nodes, and lineage edges**
+- [ ] **Step 3: Keep hidden React Flow handles as projection details**
+- [ ] **Step 4: Remove business dependence on DOM handles**
 
 Run: `npm test -- --run src/domain/assetGraphProjection.test.ts src/domain/canvasEdges.test.ts`
 
@@ -253,12 +253,12 @@ Expected: pass until `canvasEdges` is fully replaced, then delete old tests.
 - Create: `src/components/functions/OutputPreviewStrip.tsx`
 - Create tests beside each component.
 
-- [x] **Step 1: Write failing tests for automatic compatible slot fill**
-- [x] **Step 2: Implement Input Tray**
-- [x] **Step 3: Implement Slot Mapping**
-- [x] **Step 4: Implement provider parameter sections**
-- [x] **Step 5: Implement output strip with pending/final previews**
-- [x] **Step 6: Wire modal submit to `RunFunctionCommand`**
+- [ ] **Step 1: Write failing tests for automatic compatible slot fill**
+- [ ] **Step 2: Implement Input Tray**
+- [ ] **Step 3: Implement Slot Mapping**
+- [ ] **Step 4: Implement provider parameter sections**
+- [ ] **Step 5: Implement output strip with pending/final previews**
+- [ ] **Step 6: Wire modal submit to `RunFunctionCommand`**
 
 Run: `npm test -- --run src/components/functions`
 
@@ -275,11 +275,11 @@ Expected: pass.
 - Modify: `src/components/CanvasWorkspace.tsx`
 - Modify: `src/App.tsx`
 
-- [x] **Step 1: Write failing tests that canvas nodeTypes exclude function/result nodes**
-- [x] **Step 2: Implement asset/group node views using existing preview components**
-- [x] **Step 3: Implement context menu entry to open Function Command Modal**
-- [x] **Step 4: Implement Pick Mode**
-- [x] **Step 5: Replace old workspace import path**
+- [ ] **Step 1: Write failing tests that canvas nodeTypes exclude function/result nodes**
+- [ ] **Step 2: Implement asset/group node views using existing preview components**
+- [ ] **Step 3: Implement context menu entry to open Function Command Modal**
+- [ ] **Step 4: Implement Pick Mode**
+- [ ] **Step 5: Replace old workspace import path**
 
 Run: `npm test -- --run src/components/canvas src/components/CanvasWorkspace.test.ts`
 
@@ -292,14 +292,14 @@ Expected: pass.
 - Modify: `src/domain/runs/adapters/*.ts`
 - Test: `src/store/projectStore.test.ts`
 
-- [x] **Step 1: Write failing tests for every provider asserting no `function` or `result_group` canvas node is created**
-- [x] **Step 2: Migrate ComfyUI runs**
-- [x] **Step 3: Migrate OpenAI LLM runs**
-- [x] **Step 4: Migrate Gemini LLM runs**
-- [x] **Step 5: Migrate OpenAI image runs**
-- [x] **Step 6: Migrate Gemini image runs**
-- [x] **Step 7: Migrate HTTP request runs**
-- [x] **Step 8: Migrate local transform runs**
+- [ ] **Step 1: Write failing tests for every provider asserting no `function` or `result_group` canvas node is created**
+- [ ] **Step 2: Migrate ComfyUI runs**
+- [ ] **Step 3: Migrate OpenAI LLM runs**
+- [ ] **Step 4: Migrate Gemini LLM runs**
+- [ ] **Step 5: Migrate OpenAI image runs**
+- [ ] **Step 6: Migrate Gemini image runs**
+- [ ] **Step 7: Migrate HTTP request runs**
+- [ ] **Step 8: Migrate local transform runs**
 
 Run: `npm test -- --run src/store/projectStore.test.ts src/domain/runs`
 
@@ -313,11 +313,11 @@ Expected: pass.
 - Modify: `src/domain/types.ts`
 - Test: `src/store/projectStore.test.ts`
 
-- [x] **Step 1: Write failing tests for group/ungroup asset nodes**
-- [x] **Step 2: Write failing tests for template recipe creation from asset subgraph**
-- [x] **Step 3: Implement group commands**
-- [x] **Step 4: Implement template recipe commands**
-- [x] **Step 5: Implement template instantiation as a new group containing cloned asset nodes**
+- [ ] **Step 1: Write failing tests for group/ungroup asset nodes**
+- [ ] **Step 2: Write failing tests for template recipe creation from asset subgraph**
+- [ ] **Step 3: Implement group commands**
+- [ ] **Step 4: Implement template recipe commands**
+- [ ] **Step 5: Implement template instantiation as a new group containing cloned asset nodes**
 
 Run: `npm test -- --run src/domain/commands/groupCommands.test.ts src/domain/commands/templateCommands.test.ts src/store/projectStore.test.ts`
 
@@ -331,11 +331,11 @@ Expected: pass.
 - Create tests beside them.
 - Modify: `src/store/projectStore.ts`
 
-- [x] **Step 1: Write failing tests that UI-only state does not schedule persistence**
-- [x] **Step 2: Implement project revision tracking**
-- [x] **Step 3: Implement idle persistence scheduler**
-- [x] **Step 4: Implement unload flush**
-- [x] **Step 5: Remove full-store stringify from the hot notification path**
+- [ ] **Step 1: Write failing tests that UI-only state does not schedule persistence**
+- [ ] **Step 2: Implement project revision tracking**
+- [ ] **Step 3: Implement idle persistence scheduler**
+- [ ] **Step 4: Implement unload flush**
+- [ ] **Step 5: Remove full-store stringify from the hot notification path**
 
 Run: `npm test -- --run src/domain/persistence src/store/projectPersistence.test.ts`
 
@@ -350,11 +350,11 @@ Expected: pass.
 - Modify: `src/store/projectStore.ts`
 - Modify/delete obsolete tests.
 
-- [x] **Step 1: Write failing compile-time/runtime tests that legacy canvas node kinds are absent**
-- [x] **Step 2: Keep legacy `ProjectState` node kinds only for import/history compatibility, while projecting the active canvas to asset/group**
-- [x] **Step 3: Remove `FunctionNodeView` and `ResultGroupNodeView` from active nodeTypes**
-- [x] **Step 4: Route function execution through the asset-first command modal and `runFunctionAtPosition`**
-- [x] **Step 5: Delete or rewrite tests that assert old visible node behavior**
+- [ ] **Step 1: Write failing compile-time/runtime tests that legacy canvas node kinds are absent**
+- [ ] **Step 2: Remove `function` and `result_group` from `CanvasNodeKind`**
+- [ ] **Step 3: Remove `FunctionNodeView` and `ResultGroupNodeView` from active nodeTypes**
+- [ ] **Step 4: Remove `addFunctionNode`, `runLocalFunctionNode`, `rerunResultNode`, and result-node helpers**
+- [ ] **Step 5: Delete or rewrite tests that assert old visible node behavior**
 
 Run: `npm test -- --run`
 

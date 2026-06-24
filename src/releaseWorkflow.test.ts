@@ -9,7 +9,7 @@ describe('GitHub release workflow', () => {
   it('builds Windows release artifacts when a version tag is pushed', () => {
     expect(existsSync(workflowPath)).toBe(true)
 
-    const workflow = readFileSync(workflowPath, 'utf8').replace(/\r\n?/g, '\n')
+    const workflow = readFileSync(workflowPath, 'utf8')
 
     expect(workflow).toMatch(/on:\s*\n\s*push:\s*\n\s*tags:/)
     expect(workflow).toMatch(/-\s+['"]v\*['"]/)

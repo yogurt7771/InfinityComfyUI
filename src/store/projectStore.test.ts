@@ -5,7 +5,7 @@ import { createOpenAILlmFunction, OPENAI_LLM_FUNCTION_ID } from '../domain/opena
 import { GEMINI_LLM_FUNCTION_ID } from '../domain/geminiLlm'
 import { OPENAI_IMAGE_FUNCTION_ID } from '../domain/openaiImage'
 import { GEMINI_IMAGE_FUNCTION_ID } from '../domain/geminiImage'
-import { createRequestFunction, REQUEST_FUNCTION_ID } from '../domain/requestFunction'
+import { REQUEST_FUNCTION_ID } from '../domain/requestFunction'
 import { LOCAL_TEXT_TRIM_FUNCTION_ID } from '../domain/localTransforms'
 import type { GenerationFunction } from '../domain/types'
 
@@ -25,16 +25,6 @@ describe('project store actions', () => {
       await new Promise((resolve) => setTimeout(resolve, 0))
     }
     throw new Error('Timed out waiting for project store state')
-  }
-
-  const primitiveAssetValue = (slice: ReturnType<typeof createProjectSlice>, resourceId: string) => {
-    const resource = slice.getState().project.resources[resourceId]
-    expect(resource?.value).toMatchObject({ assetId: `asset_${resourceId}` })
-    const assetId =
-      typeof resource?.value === 'object' && resource.value !== null && 'assetId' in resource.value
-        ? String(resource.value.assetId)
-        : ''
-    return slice.getState().project.assets[assetId]?.primitiveValue
   }
 
   const testComfyWorkflow = () => ({
@@ -257,7 +247,7 @@ describe('project store actions', () => {
       expect(slice.getState().project.tasks.task_1.status).toBe('succeeded')
       expect(slice.getState().project.resources.res_text_1).toMatchObject({
         type: 'text',
-        value: { assetId: 'asset_res_text_1', kind: 'text' },
+        value: 'The image shows a warm interior.',
         source: {
           kind: 'function_output',
           functionNodeId: 'node_openai',
@@ -265,7 +255,6 @@ describe('project store actions', () => {
           outputKey: 'text',
         },
       })
-      expect(primitiveAssetValue(slice, 'res_text_1')).toBe('The image shows a warm interior.')
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -343,7 +332,7 @@ describe('project store actions', () => {
       })
       expect(slice.getState().project.resources.res_text_1).toMatchObject({
         type: 'text',
-        value: { assetId: 'asset_res_text_1', kind: 'text' },
+        value: 'Gemini text result',
         source: {
           kind: 'function_output',
           functionNodeId: 'node_gemini',
@@ -351,7 +340,6 @@ describe('project store actions', () => {
           outputKey: 'text',
         },
       })
-      expect(primitiveAssetValue(slice, 'res_text_1')).toBe('Gemini text result')
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -826,72 +814,16 @@ describe('project store actions', () => {
 
     expect(slice.getState().project.resources.res_text_default).toMatchObject({
       type: 'text',
-      value: { assetId: 'asset_res_text_default', kind: 'text' },
+      value: '',
     })
-    expect(slice.getState().project.assets.asset_res_text_default.primitiveValue).toBe('')
     expect(slice.getState().project.resources.res_text_initial).toMatchObject({
       type: 'text',
-      value: { assetId: 'asset_res_text_initial', kind: 'text' },
+      value: 'low quality',
     })
-    expect(slice.getState().project.assets.asset_res_text_initial.primitiveValue).toBe('low quality')
     expect(slice.getState().project.resources.res_number_initial).toMatchObject({
       type: 'number',
-      value: { assetId: 'asset_res_number_initial', kind: 'number' },
+      value: 1.5,
     })
-    expect(slice.getState().project.assets.asset_res_number_initial.primitiveValue).toBe(1.5)
-  })
-
-  it('creates canvas assets for text, number, image, video, and audio with library entries and history', () => {
-    const ids = [
-      'res_text',
-      'res_number',
-      'res_image',
-      'asset_image',
-      'res_video',
-      'asset_video',
-      'res_audio',
-      'asset_audio',
-    ]
-    const slice = createProjectSlice({
-      idFactory: () => ids.shift() ?? 'fallback',
-      now: () => '2026-05-09T00:00:00.000Z',
-      randomInt: () => 1,
-    })
-
-    slice.getState().addEmptyResourceAtPosition('text', { x: 100, y: 100 }, 'hello')
-    slice.getState().addEmptyResourceAtPosition('number', { x: 100, y: 280 }, 7)
-    slice.getState().addEmptyResourceAtPosition('image', { x: 100, y: 460 })
-    slice.getState().addEmptyResourceAtPosition('video', { x: 100, y: 640 })
-    slice.getState().addEmptyResourceAtPosition('audio', { x: 100, y: 820 })
-
-    expect(slice.getState().project.resources).toMatchObject({
-      res_text: { type: 'text', value: { assetId: 'asset_res_text', kind: 'text' } },
-      res_number: { type: 'number', value: { assetId: 'asset_res_number', kind: 'number' } },
-      res_image: { type: 'image', value: { assetId: 'asset_image', url: '', mimeType: 'image/*' } },
-      res_video: { type: 'video', value: { assetId: 'asset_video', url: '', mimeType: 'video/*' } },
-      res_audio: { type: 'audio', value: { assetId: 'asset_audio', url: '', mimeType: 'audio/*' } },
-    })
-    expect(slice.getState().project.assets).toMatchObject({
-      asset_res_text: { id: 'asset_res_text', primitiveValue: 'hello' },
-      asset_res_number: { id: 'asset_res_number', primitiveValue: 7 },
-      asset_image: { id: 'asset_image', mimeType: 'image/*' },
-      asset_video: { id: 'asset_video', mimeType: 'video/*' },
-      asset_audio: { id: 'asset_audio', mimeType: 'audio/*' },
-    })
-    expect(slice.getState().project.canvas.nodes.map((node) => node.data.resourceType)).toEqual([
-      'text',
-      'number',
-      'image',
-      'video',
-      'audio',
-    ])
-    expect(slice.getState().project.history?.undoStack.map((entry) => entry.label)).toEqual([
-      'Create text asset',
-      'Create number asset',
-      'Create image asset',
-      'Create video asset',
-      'Create audio asset',
-    ])
   })
 
   it('uses the OpenAI image edit endpoint when an image input is connected', async () => {
@@ -1377,18 +1309,12 @@ describe('project store actions', () => {
       { id: 'node_res_input', resourceId: 'res_input' },
       { id: 'node_res_output', resourceId: 'res_output' },
     ])
-    expect(state.project.resources.res_output.value).toMatchObject({ assetId: 'asset_res_output', kind: 'text' })
-    expect(state.project.assets.asset_res_output.primitiveValue).toBe('warm kitchen')
-    expect(state.project.resources.res_output.source).toEqual({
+    expect(state.project.resources.res_output.value).toBe('warm kitchen')
+    expect(state.project.resources.res_output.source).toMatchObject({
       kind: 'function_output',
-      runId: 'task_1',
+      functionNodeId: 'task_1',
+      taskId: 'task_1',
       outputKey: 'text',
-    })
-    expect(state.project.runs!.task_1).toMatchObject({
-      id: 'task_1',
-      provider: 'local_transform',
-      status: 'succeeded',
-      outputRefs: { text: [{ resourceId: 'res_output', type: 'text' }] },
     })
     expect(state.project.tasks.task_1.inputRefs).toEqual({
       text: { resourceId: 'res_input', type: 'text' },
@@ -1396,273 +1322,6 @@ describe('project store actions', () => {
     expect(state.project.tasks.task_1.outputRefs).toEqual({
       text: [{ resourceId: 'res_output', type: 'text' }],
     })
-  })
-
-  it('runs OpenAI LLM from popup inputs as asset-only run snapshots', async () => {
-    const ids = ['task_openai', 'res_text']
-    const originalFetch = globalThis.fetch
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ choices: [{ message: { content: 'openai text' } }] }),
-    })
-    globalThis.fetch = fetchMock as typeof fetch
-    const slice = createProjectSlice({
-      idFactory: () => ids.shift() ?? 'fallback',
-      now: () => '2026-05-08T09:00:00.000Z',
-    })
-
-    try {
-      slice.setState((state) => ({
-        project: {
-          ...state.project,
-          functions: {
-            ...state.project.functions,
-            [OPENAI_LLM_FUNCTION_ID]: {
-              ...state.project.functions[OPENAI_LLM_FUNCTION_ID]!,
-              openai: {
-                baseUrl: 'https://api.openai.com/v1',
-                apiKey: 'sk-test',
-                model: 'gpt-4.1-mini',
-                messages: [{ role: 'user', content: [{ type: 'text', content: 'Say ok' }] }],
-              },
-            },
-          },
-        },
-      }))
-
-      await slice.getState().runFunctionAtPosition(OPENAI_LLM_FUNCTION_ID, {}, { x: 240, y: 0 }, 1)
-
-      const state = slice.getState().project
-      expect(state.canvas.nodes.filter((node) => node.type === 'function' || node.type === 'result_group')).toEqual([])
-      expect(state.tasks.task_openai).toMatchObject({
-        status: 'succeeded',
-        outputRefs: { text: [{ resourceId: 'res_text', type: 'text' }] },
-      })
-      expect(state.runs!.task_openai).toMatchObject({
-        provider: 'openai_llm',
-        status: 'succeeded',
-        outputRefs: { text: [{ resourceId: 'res_text', type: 'text' }] },
-      })
-      expect(state.resources.res_text).toMatchObject({
-        type: 'text',
-        value: { assetId: 'asset_res_text', kind: 'text' },
-        source: { kind: 'function_output', runId: 'task_openai', outputKey: 'text' },
-      })
-      expect(primitiveAssetValue(slice, 'res_text')).toBe('openai text')
-    } finally {
-      globalThis.fetch = originalFetch
-    }
-  })
-
-  it('runs Gemini LLM from popup inputs as asset-only run snapshots', async () => {
-    const ids = ['task_gemini', 'res_text']
-    const originalFetch = globalThis.fetch
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ candidates: [{ content: { parts: [{ text: 'gemini text' }] } }] }),
-    })
-    globalThis.fetch = fetchMock as typeof fetch
-    const slice = createProjectSlice({
-      idFactory: () => ids.shift() ?? 'fallback',
-      now: () => '2026-05-08T09:00:00.000Z',
-    })
-
-    try {
-      slice.setState((state) => ({
-        project: {
-          ...state.project,
-          functions: {
-            ...state.project.functions,
-            [GEMINI_LLM_FUNCTION_ID]: {
-              ...state.project.functions[GEMINI_LLM_FUNCTION_ID]!,
-              gemini: {
-                baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
-                apiKey: 'gemini-test',
-                model: 'gemini-2.5-flash',
-                messages: [{ role: 'user', content: [{ type: 'text', content: 'Say ok' }] }],
-              },
-            },
-          },
-        },
-      }))
-
-      await slice.getState().runFunctionAtPosition(GEMINI_LLM_FUNCTION_ID, {}, { x: 240, y: 0 }, 1)
-
-      const state = slice.getState().project
-      expect(state.canvas.nodes.filter((node) => node.type === 'function' || node.type === 'result_group')).toEqual([])
-      expect(state.runs!.task_gemini).toMatchObject({
-        provider: 'gemini_llm',
-        status: 'succeeded',
-        outputRefs: { text: [{ resourceId: 'res_text', type: 'text' }] },
-      })
-      expect(state.resources.res_text).toMatchObject({
-        type: 'text',
-        value: { assetId: 'asset_res_text', kind: 'text' },
-        source: { kind: 'function_output', runId: 'task_gemini', outputKey: 'text' },
-      })
-      expect(primitiveAssetValue(slice, 'res_text')).toBe('gemini text')
-    } finally {
-      globalThis.fetch = originalFetch
-    }
-  })
-
-  it('runs OpenAI image and Gemini image from popup inputs as asset-only run snapshots', async () => {
-    const ids = ['task_openai_image', 'res_openai_image', 'asset_openai_image', 'task_gemini_image', 'res_gemini_image', 'asset_gemini_image']
-    const originalFetch = globalThis.fetch
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ data: [{ b64_json: 'aW1hZ2U=', output_format: 'png' }] }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: 'Z2VtaW5p' } }] } }],
-        }),
-      })
-    globalThis.fetch = fetchMock as typeof fetch
-    const slice = createProjectSlice({
-      idFactory: () => ids.shift() ?? 'fallback',
-      now: () => '2026-05-08T09:00:00.000Z',
-    })
-
-    try {
-      slice.setState((state) => ({
-        project: {
-          ...state.project,
-          functions: {
-            ...state.project.functions,
-            [OPENAI_IMAGE_FUNCTION_ID]: {
-              ...state.project.functions[OPENAI_IMAGE_FUNCTION_ID]!,
-              openaiImage: {
-                baseUrl: 'https://api.openai.com/v1',
-                apiKey: 'sk-image',
-                model: 'gpt-image-2',
-                size: 'auto',
-                quality: 'auto',
-                background: 'auto',
-                outputFormat: 'png',
-                outputCompression: 100,
-                user: '',
-              },
-            },
-            [GEMINI_IMAGE_FUNCTION_ID]: {
-              ...state.project.functions[GEMINI_IMAGE_FUNCTION_ID]!,
-              geminiImage: {
-                baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
-                apiKey: 'gemini-image',
-                model: 'gemini-3.1-flash-image-preview',
-                responseModalities: 'IMAGE',
-                aspectRatio: 'auto',
-                imageSize: 'auto',
-              },
-            },
-          },
-        },
-      }))
-
-      await slice.getState().runFunctionAtPosition(OPENAI_IMAGE_FUNCTION_ID, { prompt: 'make image' }, { x: 240, y: 0 }, 1)
-      await slice.getState().runFunctionAtPosition(GEMINI_IMAGE_FUNCTION_ID, { prompt: 'make image' }, { x: 520, y: 0 }, 1)
-
-      const state = slice.getState().project
-      expect(state.canvas.nodes.filter((node) => node.type === 'function' || node.type === 'result_group')).toEqual([])
-      expect(state.runs!.task_openai_image).toMatchObject({
-        provider: 'openai_image',
-        status: 'succeeded',
-        outputRefs: { image: [{ resourceId: 'res_openai_image', type: 'image' }] },
-      })
-      expect(state.resources.res_openai_image.source).toEqual({
-        kind: 'function_output',
-        runId: 'task_openai_image',
-        outputKey: 'image',
-      })
-      expect(state.runs!.task_gemini_image).toMatchObject({
-        provider: 'gemini_image',
-        status: 'succeeded',
-        outputRefs: { image: [{ resourceId: 'res_gemini_image', type: 'image' }] },
-      })
-      expect(state.resources.res_gemini_image.source).toEqual({
-        kind: 'function_output',
-        runId: 'task_gemini_image',
-        outputKey: 'image',
-      })
-    } finally {
-      globalThis.fetch = originalFetch
-    }
-  })
-
-  it('runs HTTP request functions from popup inputs as asset-only run snapshots', async () => {
-    const ids = ['task_request', 'res_request']
-    const originalFetch = globalThis.fetch
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ result: { text: 'request text' } }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      }),
-    )
-    globalThis.fetch = fetchMock as typeof fetch
-    const slice = createProjectSlice({
-      idFactory: () => ids.shift() ?? 'fallback',
-      now: () => '2026-05-08T09:00:00.000Z',
-    })
-    const requestFunction = {
-      ...createRequestFunction('fn_request_popup', 'Popup Request', '2026-05-08T09:00:00.000Z'),
-      request: {
-        url: 'https://api.example.com/render',
-        method: 'POST',
-        headers: {},
-        body: '{"prompt":""}',
-        responseParse: 'json' as const,
-        responseEncoding: 'utf-8',
-      },
-      inputs: [
-        {
-          key: 'prompt',
-          label: 'Prompt',
-          type: 'text' as const,
-          required: true,
-          bind: { path: '$.prompt', requestTarget: 'body' as const },
-          upload: { strategy: 'none' as const },
-        },
-      ],
-      outputs: [
-        {
-          key: 'text',
-          label: 'Text',
-          type: 'text' as const,
-          bind: {},
-          extract: { source: 'response_json_path' as const, path: '$.result.text' },
-        },
-      ],
-    }
-
-    try {
-      slice.setState((state) => ({
-        project: {
-          ...state.project,
-          functions: { ...state.project.functions, [requestFunction.id]: requestFunction },
-        },
-      }))
-
-      await slice.getState().runFunctionAtPosition('fn_request_popup', { prompt: 'kitchen' }, { x: 240, y: 0 }, 1)
-
-      const state = slice.getState().project
-      expect(state.canvas.nodes.filter((node) => node.type === 'function' || node.type === 'result_group')).toEqual([])
-      expect(state.runs!.task_request).toMatchObject({
-        provider: 'http_request',
-        status: 'succeeded',
-        outputRefs: { text: [{ resourceId: 'res_request', type: 'text' }] },
-      })
-      expect(state.resources.res_request).toMatchObject({
-        type: 'text',
-        value: { assetId: 'asset_res_request', kind: 'text' },
-        source: { kind: 'function_output', runId: 'task_request', outputKey: 'text' },
-      })
-      expect(primitiveAssetValue(slice, 'res_request')).toBe('request text')
-    } finally {
-      globalThis.fetch = originalFetch
-    }
   })
 
   it('uses the function node run count and appends result nodes to the right', () => {
@@ -1761,77 +1420,6 @@ describe('project store actions', () => {
     expect(slice.getState().project.canvas.nodes[0].position).toEqual({ x: 320, y: 180 })
   })
 
-  it('records native asset node moves with their resource key in history', () => {
-    const slice = createProjectSlice({
-      now: () => '2026-05-08T09:00:00.000Z',
-      randomInt: () => 1,
-    })
-    slice.setState((state) => ({
-      project: {
-        ...state.project,
-        resources: {
-          res_native: {
-            id: 'res_native',
-            type: 'text',
-            name: 'Prompt',
-            value: 'warm kitchen',
-            source: { kind: 'manual_input' },
-            metadata: { createdAt: '2026-05-08T09:00:00.000Z' },
-          },
-        },
-        canvas: {
-          ...state.project.canvas,
-          nodes: [
-            {
-              id: 'node_native_asset',
-              type: 'asset',
-              position: { x: 80, y: 120 },
-              data: { resourceId: 'res_native', title: 'Prompt' },
-            },
-            {
-              id: 'node_output_asset',
-              type: 'asset',
-              position: { x: 480, y: 120 },
-              data: { resourceId: 'res_output', title: 'Output' },
-            },
-          ],
-          edges: [
-            {
-              id: 'lineage:run_1:prompt:res_native:res_output',
-              runId: 'run_1',
-              inputKey: 'prompt',
-              sourceResourceId: 'res_native',
-              targetResourceId: 'res_output',
-            } as never,
-          ],
-        },
-      },
-    }))
-
-    slice.getState().updateNodePosition('node_native_asset', { x: 320, y: 180 })
-
-    expect(slice.getState().project.canvas.nodes.find((node) => node.id === 'node_native_asset')?.position).toEqual({
-      x: 320,
-      y: 180,
-    })
-    expect(slice.getState().project.canvas.edges).toEqual([
-      {
-        id: 'lineage:run_1:prompt:res_native:res_output',
-        runId: 'run_1',
-        inputKey: 'prompt',
-        sourceResourceId: 'res_native',
-        targetResourceId: 'res_output',
-      },
-    ])
-    expect(slice.getState().project.history?.undoStack.at(-1)).toEqual(
-      expect.objectContaining({
-        label: 'Move node',
-        affectedIds: expect.objectContaining({ assetIds: ['res_native'], nodeIds: ['node_native_asset'] }),
-        preview: expect.objectContaining({ assetIds: ['res_native'], nodeIds: ['node_native_asset'] }),
-      }),
-    )
-  })
-
   it('can create resources and function nodes at a requested canvas position', () => {
     const ids = ['res_1', 'fn_1', 'node_fn_1']
     const slice = createProjectSlice({
@@ -1903,139 +1491,6 @@ describe('project store actions', () => {
         sizeBytes: 6,
       },
     })
-  })
-
-  it('records replacing an asset media value as one undoable history entry', () => {
-    const ids = ['res_image', 'asset_image', 'asset_replacement']
-    const slice = createProjectSlice({
-      idFactory: () => ids.shift() ?? 'fallback',
-      now: () => '2026-05-09T00:00:00.000Z',
-      randomInt: () => 1,
-    })
-
-    slice.getState().addEmptyResourceAtPosition('image', { x: 120, y: 160 })
-    const beforeHistoryLength = slice.getState().project.history?.undoStack.length ?? 0
-
-    slice.getState().replaceResourceMedia('res_image', 'image', {
-      url: 'data:image/png;base64,cmVuZGVy',
-      filename: 'render.png',
-      mimeType: 'image/png',
-      sizeBytes: 6,
-    })
-
-    expect(slice.getState().project.history?.undoStack).toHaveLength(beforeHistoryLength + 1)
-    expect(slice.getState().project.history?.undoStack.at(-1)).toEqual(
-      expect.objectContaining({
-        label: 'Replace image asset',
-        transactionType: 'asset',
-        affectedIds: expect.objectContaining({ assetIds: ['res_image'] }),
-      }),
-    )
-    expect(slice.getState().project.resources.res_image.name).toBe('render.png')
-
-    slice.getState().undoLastProjectChange()
-
-    expect(slice.getState().project.resources.res_image).toMatchObject({
-      type: 'image',
-      name: 'Image',
-      value: expect.objectContaining({
-        assetId: 'asset_image',
-        url: '',
-      }),
-    })
-  })
-
-  it('replaces an existing asset with a different resource type without changing its node', () => {
-    const ids = ['res_image', 'asset_image']
-    const slice = createProjectSlice({
-      idFactory: () => ids.shift() ?? 'fallback',
-      now: () => '2026-05-09T00:00:00.000Z',
-      randomInt: () => 1,
-    })
-
-    slice.getState().addEmptyResourceAtPosition('image', { x: 120, y: 160 })
-    slice.getState().selectNode('node_res_image')
-    slice.getState().replaceAssetResource('res_image', {
-      type: 'text',
-      name: 'prompt.txt',
-      value: 'warm kitchen',
-    })
-
-    expect(slice.getState().project.resources.res_image).toMatchObject({
-      id: 'res_image',
-      type: 'text',
-      name: 'prompt.txt',
-      value: { assetId: 'asset_res_image', kind: 'text' },
-    })
-    expect(slice.getState().project.assets.asset_res_image.primitiveValue).toBe('warm kitchen')
-    expect(slice.getState().project.canvas.nodes).toEqual([
-      expect.objectContaining({
-        id: 'node_res_image',
-        position: { x: 120, y: 160 },
-        data: expect.objectContaining({ resourceId: 'res_image', resourceType: 'text' }),
-      }),
-    ])
-    expect(slice.getState().selectedNodeId).toBe('node_res_image')
-    expect(slice.getState().project.history?.undoStack.at(-1)).toEqual(
-      expect.objectContaining({
-        label: 'Replace text asset',
-        affectedIds: expect.objectContaining({
-          assetIds: ['res_image'],
-          nodeIds: ['node_res_image'],
-        }),
-      }),
-    )
-  })
-
-  it('creates multiple file assets as one vertical batch history entry', () => {
-    const ids = ['res_image', 'asset_image', 'res_text']
-    const slice = createProjectSlice({
-      idFactory: () => ids.shift() ?? 'fallback',
-      now: () => '2026-05-09T00:00:00.000Z',
-      randomInt: () => 1,
-    })
-
-    const nodeIds = slice.getState().addAssetResourcesAtPositions([
-      {
-        type: 'image',
-        name: 'render.png',
-        media: {
-          url: 'data:image/png;base64,cmVuZGVy',
-          filename: 'render.png',
-          mimeType: 'image/png',
-          sizeBytes: 6,
-        },
-        position: { x: 200, y: 240 },
-      },
-      {
-        type: 'text',
-        name: 'prompt.txt',
-        value: 'warm kitchen',
-        position: { x: 200, y: 430 },
-      },
-    ])
-
-    expect(nodeIds).toEqual(['node_res_image', 'node_res_text'])
-    expect(slice.getState().project.canvas.nodes).toEqual([
-      expect.objectContaining({ id: 'node_res_image', position: { x: 200, y: 240 } }),
-      expect.objectContaining({ id: 'node_res_text', position: { x: 200, y: 430 } }),
-    ])
-    expect(slice.getState().project.resources).toMatchObject({
-      res_image: { type: 'image', name: 'render.png' },
-      res_text: { type: 'text', name: 'prompt.txt', value: { assetId: 'asset_res_text', kind: 'text' } },
-    })
-    expect(slice.getState().project.assets.asset_res_text.primitiveValue).toBe('warm kitchen')
-    expect(slice.getState().project.history?.undoStack).toHaveLength(1)
-    expect(slice.getState().project.history?.undoStack.at(-1)).toEqual(
-      expect.objectContaining({
-        label: 'Create assets',
-        transactionType: 'asset',
-        affectedIds: expect.objectContaining({
-          assetIds: ['res_image', 'res_text'],
-          nodeIds: ['node_res_image', 'node_res_text'],
-        }),
-      }),
-    )
   })
 
   it('does not auto-bind direct-created Comfy function inputs', () => {
@@ -2383,12 +1838,12 @@ describe('project store actions', () => {
 
     slice.getState().redoProjectChange()
 
-    expect(primitiveAssetValue(slice, 'res_1')).toBe('warm kitchen')
+    expect(slice.getState().project.resources.res_1.value).toBe('warm kitchen')
     expect(slice.getState().project.history?.undoStack).toHaveLength(1)
     expect(slice.getState().project.history?.redoStack).toHaveLength(0)
   })
 
-  it('keeps asset content out of history snapshots and rehydrates asset library values on redo', () => {
+  it('keeps media blob urls out of history snapshots and rehydrates them on redo', () => {
     const ids = ['res_image', 'asset_image']
     const slice = createProjectSlice({
       idFactory: () => ids.shift() ?? 'fallback',
@@ -2425,17 +1880,6 @@ describe('project store actions', () => {
     const mediaValue = slice.getState().project.resources.res_image.value
     expect(typeof mediaValue === 'object' && mediaValue !== null && 'url' in mediaValue ? mediaValue.url : undefined).toBe(imageUrl)
     expect(slice.getState().project.assets.asset_image.blobUrl).toBe(imageUrl)
-
-    slice.getState().addTextResourceAtPosition('Secret Prompt', 'do not embed this text in history', { x: 200, y: 220 })
-    const textEntryJson = JSON.stringify(slice.getState().project.history?.undoStack.at(-1))
-    expect(textEntryJson).not.toContain('do not embed this text in history')
-
-    slice.getState().undoLastProjectChange()
-    expect(slice.getState().project.resources).not.toHaveProperty('fallback')
-    expect(slice.getState().project.assets.asset_fallback.primitiveValue).toBe('do not embed this text in history')
-
-    slice.getState().redoProjectChange()
-    expect(primitiveAssetValue(slice, 'fallback')).toBe('do not embed this text in history')
   })
 
   it('groups selected canvas nodes, ungroups them, and records both commands', () => {
@@ -2539,10 +1983,9 @@ describe('project store actions', () => {
     )
     expect(slice.getState().project.resources.res_3).toMatchObject({
       name: 'Prompt 1 Copy',
-      value: { assetId: 'asset_res_3', kind: 'text' },
+      value: 'first',
       source: { kind: 'duplicated', parentResourceId: 'res_1' },
     })
-    expect(primitiveAssetValue(slice, 'res_3')).toBe('first')
     expect(slice.getState().project.history?.undoStack.at(-1)).toEqual(
       expect.objectContaining({
         label: 'Create template instance',
@@ -2692,10 +2135,9 @@ describe('project store actions', () => {
     expect(state.project.resources.res_copy_1).toMatchObject({
       id: 'res_copy_1',
       name: 'Hero Prompt Copy',
-      value: { assetId: 'asset_res_copy_1', kind: 'text' },
+      value: 'warm kitchen',
       source: { kind: 'duplicated', parentResourceId: 'res_1' },
     })
-    expect(primitiveAssetValue(slice, 'res_copy_1')).toBe('warm kitchen')
     expect(state.project.canvas.nodes).toMatchObject([
       { id: 'node_res_1', position: { x: 100, y: 120 } },
       { id: 'node_res_copy_1', position: { x: 140, y: 160 } },
@@ -2725,10 +2167,9 @@ describe('project store actions', () => {
     )
     expect(slice.getState().project.resources.res_copy_1).toMatchObject({
       name: 'Prompt Copy',
-      value: { assetId: 'asset_res_copy_1', kind: 'text' },
+      value: 'warm kitchen',
       source: { kind: 'duplicated', parentResourceId: 'res_1' },
     })
-    expect(primitiveAssetValue(slice, 'res_copy_1')).toBe('warm kitchen')
     expect(slice.getState().project.canvas.edges).toEqual([
       expect.objectContaining({ id: 'edge_node_res_1_node_fn_1_prompt' }),
     ])
@@ -3021,13 +2462,10 @@ describe('project store actions', () => {
     })
     expect(state.project.resources.res_text_1).toMatchObject({
       type: 'text',
-      value: { assetId: 'asset_res_text_1', kind: 'text' },
+      value: 'Generated caption',
     })
-    expect(primitiveAssetValue(slice, 'res_text_1')).toBe('Generated caption')
     expect(state.project.assets.asset_1.blobUrl).toBe(
-      typeof state.project.resources.res_img_1.value === 'object' && 'url' in state.project.resources.res_img_1.value
-        ? state.project.resources.res_img_1.value.url
-        : undefined,
+      typeof state.project.resources.res_img_1.value === 'object' ? state.project.resources.res_img_1.value.url : undefined,
     )
     expect(state.project.tasks.task_1.outputRefs).toEqual({
       image: [{ resourceId: 'res_img_1', type: 'image' }],
@@ -4290,7 +3728,7 @@ describe('project store actions', () => {
     expect(randomInt).not.toHaveBeenCalled()
     expect(state.project.canvas.nodes.filter((node) => node.type === 'result_group')).toHaveLength(1)
     expect(state.project.resources.stale_resource).toBeUndefined()
-    expect(state.project.assets.stale_asset).toBeDefined()
+    expect(state.project.assets.stale_asset).toBeUndefined()
     expect(state.project.tasks.task_1).toMatchObject({
       status: 'succeeded',
       comfyPromptId: 'prompt_retry',
@@ -4548,9 +3986,8 @@ describe('project store actions', () => {
     })
     expect(state.resources.resource_request).toMatchObject({
       type: 'text',
-      value: { assetId: 'asset_resource_request', kind: 'text' },
+      value: 'ok from request',
     })
-    expect(primitiveAssetValue(slice, 'resource_request')).toBe('ok from request')
   })
 
   it('keeps custom OpenAI and Gemini functions editable even when they use provider formats', () => {
@@ -4670,9 +4107,8 @@ describe('project store actions', () => {
     expect(state.resources.resource_text).toMatchObject({
       type: 'text',
       name: 'Text',
-      value: { assetId: 'asset_resource_text', kind: 'text' },
+      value: 'json request result',
     })
-    expect(primitiveAssetValue(slice, 'resource_text')).toBe('json request result')
     globalThis.fetch = originalFetch
   })
 

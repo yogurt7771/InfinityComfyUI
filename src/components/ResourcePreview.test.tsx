@@ -1,7 +1,6 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ResourcePreview } from './ResourcePreview'
-import { FullResourcePreviewModal } from './ResourcePreviewModal'
 import type { Resource } from '../domain/types'
 import { projectStore } from '../store/projectStore'
 
@@ -93,13 +92,6 @@ describe('ResourcePreview', () => {
     )
   })
 
-  it('renders empty media resources as an empty-state preview instead of object text', () => {
-    render(<ResourcePreview resource={mediaResource('image', '')} />)
-
-    expect(screen.getByText('No image')).toBeVisible()
-    expect(screen.queryByText('[object Object]')).not.toBeInTheDocument()
-  })
-
   it('renders text, video, and audio resources inline', () => {
     render(
       <>
@@ -126,50 +118,5 @@ describe('ResourcePreview', () => {
       'src',
       'http://127.0.0.1:27707/view?filename=a.wav',
     )
-  })
-
-  it('opens full previews for text, number, image, video, and audio resources and closes with Escape', () => {
-    const onClose = vi.fn()
-    const resources: Resource[] = [
-      {
-        id: 'res_text',
-        type: 'text',
-        name: 'Prompt',
-        value: 'Generated caption',
-        source: { kind: 'function_output' },
-      },
-      {
-        id: 'res_number',
-        type: 'number',
-        name: 'Seed',
-        value: 42,
-        source: { kind: 'function_output' },
-      },
-      mediaResource('image', '/image.png'),
-      mediaResource('video', '/video.mp4'),
-      mediaResource('audio', '/audio.wav'),
-    ]
-
-    const { rerender } = render(
-      <FullResourcePreviewModal resource={resources[0]} resources={resources} onClose={onClose} />,
-    )
-    expect(screen.getByRole('dialog', { name: 'Preview Prompt.txt' })).toBeVisible()
-    expect(screen.getByText('Generated caption')).toBeVisible()
-
-    rerender(<FullResourcePreviewModal resource={resources[1]} resources={resources} onClose={onClose} />)
-    expect(screen.getByRole('dialog', { name: 'Preview Seed.txt' })).toBeVisible()
-    expect(screen.getByText('42')).toBeVisible()
-
-    rerender(<FullResourcePreviewModal resource={resources[2]} resources={resources} onClose={onClose} />)
-    expect(screen.getByRole('img', { name: 'image.png' })).toHaveAttribute('src', '/image.png')
-
-    rerender(<FullResourcePreviewModal resource={resources[3]} resources={resources} onClose={onClose} />)
-    expect(screen.getByLabelText('video.png full preview')).toHaveAttribute('src', '/video.mp4')
-
-    rerender(<FullResourcePreviewModal resource={resources[4]} resources={resources} onClose={onClose} />)
-    expect(screen.getByLabelText('audio.png full preview')).toHaveAttribute('src', '/audio.wav')
-
-    fireEvent.keyDown(window, { key: 'Escape' })
-    expect(onClose).toHaveBeenCalledTimes(1)
   })
 })

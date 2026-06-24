@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Resource } from '../domain/types'
-import { resolvedResourceDisplayValue } from '../domain/resourceValues'
-import { projectStore, useProjectStore } from '../store/projectStore'
+import { projectStore } from '../store/projectStore'
 
 const mediaValue = (resource: Resource) =>
   typeof resource.value === 'object' && resource.value !== null && 'url' in resource.value
@@ -55,18 +54,16 @@ function useMediaSource(resource: Resource) {
       canceled = true
       if (nextObjectUrl) URL.revokeObjectURL(nextObjectUrl)
     }
-  }, [key, resource.id])
+  }, [key, resource])
 
   if (!media?.url) return undefined
   return key ? (objectUrl?.key === key ? objectUrl.url : undefined) : media.url
 }
 
 export function ResourcePreview({ resource }: { resource: Resource }) {
-  const assets = useProjectStore((state) => state.project.assets)
-  const previewResource = { ...resource, value: resolvedResourceDisplayValue(resource, assets) }
-  const media = mediaValue(previewResource)
-  const label = resourceLabel(previewResource)
-  const mediaSource = useMediaSource(previewResource)
+  const media = mediaValue(resource)
+  const label = resourceLabel(resource)
+  const mediaSource = useMediaSource(resource)
 
   if (resource.type === 'image' && mediaSource) {
     return <img className="resource-preview-image" src={mediaSource} alt={label} />
@@ -80,10 +77,6 @@ export function ResourcePreview({ resource }: { resource: Resource }) {
     return <audio aria-label={`${label} audio`} className="resource-preview-audio" src={mediaSource} controls />
   }
 
-  if ((resource.type === 'image' || resource.type === 'video' || resource.type === 'audio') && media && !media.url) {
-    return <p className="resource-preview-text resource-preview-empty">No {resource.type}</p>
-  }
-
   if (media?.url) return <p className="resource-preview-text">Loading {resource.type}</p>
-  return <p className="resource-preview-text">{String(previewResource.value)}</p>
+  return <p className="resource-preview-text">{String(resource.value)}</p>
 }

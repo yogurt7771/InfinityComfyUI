@@ -34,7 +34,6 @@ import { defaultGeminiLlmConfig, isGeminiLlmFunction, mergedGeminiLlmConfig } fr
 import { getNodeRunHistory } from '../domain/runHistory'
 import { formatDurationMs, formatHistoryTimestamp, runDurationMs } from '../domain/runTiming'
 import { collectProjectAssetFiles, hydrateProjectAssetFiles, type ProjectAssetFileEntry } from '../domain/projectAssets'
-import { resolvedResourceDisplayValue } from '../domain/resourceValues'
 import type {
   ComfyEndpointConfig,
   ComfyUiWorkflow,
@@ -89,16 +88,11 @@ const mediaValue = (resource: Resource) =>
 
 const resourceLabel = (resource: Resource) => resource.name ?? resource.id
 
-const resourceSummary = (resource: Resource, assets: ProjectState['assets'] = {}) => {
+const resourceSummary = (resource: Resource) => {
   const media = mediaValue(resource)
   if (media?.filename) return media.filename
-  return String(resolvedResourceDisplayValue(resource, assets))
+  return String(resource.value)
 }
-
-const canvasNodeResourceId = (node: ProjectState['canvas']['nodes'][number]) =>
-  (node.type === 'asset' || node.type === 'resource') && typeof node.data.resourceId === 'string'
-    ? node.data.resourceId
-    : undefined
 
 const resourceOwnerNodeId = (project: ProjectState, resource: Resource) => {
   const nodeExists = (nodeId: string | undefined) =>
@@ -106,7 +100,9 @@ const resourceOwnerNodeId = (project: ProjectState, resource: Resource) => {
   const sourceNodeId = [resource.source.resultGroupNodeId, resource.source.functionNodeId].find(nodeExists)
   if (sourceNodeId) return sourceNodeId
 
-  const resourceNode = project.canvas.nodes.find((node) => canvasNodeResourceId(node) === resource.id)
+  const resourceNode = project.canvas.nodes.find(
+    (node) => node.type === 'resource' && typeof node.data.resourceId === 'string' && node.data.resourceId === resource.id,
+  )
   if (resourceNode) return resourceNode.id
 
   const resultNode = project.canvas.nodes.find(
@@ -161,7 +157,7 @@ function useResourceMediaSource(resource: Resource) {
       canceled = true
       if (nextObjectUrl) URL.revokeObjectURL(nextObjectUrl)
     }
-  }, [key, resource.id])
+  }, [key, resource])
 
   if (!media?.url) return undefined
   return key ? (objectUrl?.key === key ? objectUrl.url : undefined) : media.url
@@ -296,7 +292,6 @@ async function readPackageFile(file: File) {
 }
 
 function ResourceListPreview({ resource }: { resource: Resource }) {
-  const assets = useProjectStore((state) => state.project.assets)
   const label = resourceLabel(resource)
   const mediaSource = useResourceMediaSource(resource)
 
@@ -324,7 +319,7 @@ function ResourceListPreview({ resource }: { resource: Resource }) {
     )
   }
 
-  return <span className="asset-thumb-text">{String(resolvedResourceDisplayValue(resource, assets)).slice(0, 2) || '--'}</span>
+  return <span className="asset-thumb-text">{String(resource.value).slice(0, 2) || '--'}</span>
 }
 
 function EndpointStatusList({
@@ -379,7 +374,9 @@ const inputTargetNodeId = (project: ProjectState, task: ExecutionTask, input: Ex
   if (input.source === 'inline' || input.source === 'default') return task.functionNodeId
   if (!input.resourceId) return undefined
 
-  const directResourceNode = project.canvas.nodes.find((node) => canvasNodeResourceId(node) === input.resourceId)
+  const directResourceNode = project.canvas.nodes.find(
+    (node) => node.type === 'resource' && node.data.resourceId === input.resourceId,
+  )
   if (directResourceNode) return directResourceNode.id
 
   const resource = project.resources[input.resourceId]
@@ -3231,7 +3228,7 @@ export function LeftPanel() {
                   <ResourceListPreview resource={resource} />
                   <span className="asset-list-copy">
                     <span>{resourceLabel(resource)}</span>
-                    <small>{resourceSummary(resource, project.assets)}</small>
+                    <small>{resourceSummary(resource)}</small>
                   </span>
                   <strong>{resource.type}</strong>
                 </button>

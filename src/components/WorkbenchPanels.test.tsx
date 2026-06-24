@@ -187,12 +187,6 @@ describe('LeftPanel', () => {
 
   it('shows visual operation history with asset previews and undo/redo actions', () => {
     const project = panelProject()
-    project.canvas.nodes.push({
-      id: 'node_image_asset',
-      type: 'asset',
-      position: { x: 140, y: 220 },
-      data: { resourceId: 'res_image', title: 'Render.png' },
-    })
     project.resources.res_image = {
       ...project.resources.res_image,
       source: {
@@ -252,8 +246,6 @@ describe('LeftPanel', () => {
 
     const undoSpy = vi.spyOn(projectStore.getState(), 'undoLastProjectChange')
     const redoSpy = vi.spyOn(projectStore.getState(), 'redoProjectChange')
-    const focusSpy = vi.fn()
-    window.addEventListener('infinity-focus-node', focusSpy)
 
     render(<LeftPanel />)
 
@@ -270,22 +262,11 @@ describe('LeftPanel', () => {
     expect(within(historyList).getByText('4.5s')).toBeVisible()
     expect(within(historyList).getByRole('img', { name: 'Render.png' })).toBeVisible()
 
-    fireEvent.click(within(historyList).getByRole('button', { name: 'Preview Render.png' }))
-    expect(screen.getByRole('dialog', { name: 'Preview render.png' })).toBeVisible()
-    fireEvent.click(screen.getByRole('button', { name: 'Close full preview' }))
-
-    const row = within(historyList).getByText('Create image asset').closest('article')
-    expect(row).not.toBeNull()
-    fireEvent.doubleClick(row!)
-    expect(projectStore.getState().selectedNodeId).toBe('node_image_asset')
-    expect(focusSpy).toHaveBeenCalledWith(expect.objectContaining({ detail: { nodeId: 'node_image_asset' } }))
-
     fireEvent.click(screen.getByRole('button', { name: 'Undo last operation' }))
     expect(undoSpy).toHaveBeenCalled()
 
     fireEvent.click(screen.getByRole('button', { name: 'Redo last operation' }))
     expect(redoSpy).toHaveBeenCalled()
-    window.removeEventListener('infinity-focus-node', focusSpy)
   })
 
   it('refreshes the open operation history list after an idle delay', () => {

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const styles = readFileSync(resolve(__dirname, 'styles.css'), 'utf8').replace(/\r\n?/g, '\n')
+const styles = readFileSync(resolve(__dirname, 'styles.css'), 'utf8')
 
 const cssBlock = (selector: string) => {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -89,43 +89,5 @@ describe('canvas resource UI CSS', () => {
     expect(buttonBlock).toContain('min-height: 30px')
     expect(buttonBlock).toContain('border-color: transparent')
     expect(buttonBlock).toContain('box-shadow: none')
-  })
-
-  it('renders the asset canvas context menu as a visible overlay', () => {
-    const menuBlock = cssBlock('.asset-canvas-context-menu')
-
-    expect(menuBlock).toContain('position: fixed')
-    expect(menuBlock).toContain('z-index:')
-    expect(menuBlock).toContain('display: grid')
-  })
-
-  it('renders asset canvas nodes as bounded cards instead of bare text', () => {
-    const nodeBlock = cssBlock('.asset-canvas-node')
-    const headerBlock = cssBlock('.asset-canvas-node header')
-    const metaBlock = cssBlock('.asset-canvas-node-meta')
-    const runErrorBlock = cssBlock('.asset-run-error')
-    const previewBlock = cssBlock('.asset-canvas-node-preview')
-    const previewMediaBlock = cssBlock(
-      '.asset-canvas-node-preview .resource-preview-image,\n.asset-canvas-node-preview .resource-preview-video',
-    )
-
-    expect(nodeBlock).toContain('display: grid')
-    expect(nodeBlock).toContain('width:')
-    expect(nodeBlock).toContain('padding:')
-    expect(nodeBlock).toContain('border:')
-    expect(nodeBlock).toContain('border-radius:')
-    expect(nodeBlock).toContain('background:')
-    expect(nodeBlock).toContain('box-sizing: border-box')
-    expect(headerBlock).toContain('display: flex')
-    expect(headerBlock).toContain('min-width: 0')
-    expect(metaBlock).toContain('display: flex')
-    expect(metaBlock).toContain('overflow: hidden')
-    expect(runErrorBlock).toContain('text-overflow: ellipsis')
-    expect(previewBlock).toContain('display: grid')
-    expect(previewBlock).toContain('min-height:')
-    expect(previewBlock).toContain('overflow: hidden')
-    expect(previewBlock).toContain('background: var(--media-preview-surface)')
-    expect(previewMediaBlock).toContain('object-fit: contain')
-    expect(previewMediaBlock).toContain('object-position: center')
   })
 })

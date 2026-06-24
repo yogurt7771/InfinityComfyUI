@@ -1,5 +1,4 @@
 import type { AssetRecord, MediaResourceValue, ProjectState, Resource } from './types'
-import { isMediaResourceValue } from './resourceValues'
 
 export type ProjectAssetFileSource = 'embedded' | 'data_url' | 'comfyui' | 'external_reference'
 
@@ -25,7 +24,7 @@ export type CollectedProjectAssetFiles = {
 }
 
 const mediaValue = (resource: Resource): MediaResourceValue | undefined =>
-  isMediaResourceValue(resource.value) ? resource.value : undefined
+  typeof resource.value === 'object' && resource.value !== null && 'assetId' in resource.value ? resource.value : undefined
 
 const safePackageSegment = (value: string, fallback: string) => {
   const cleaned = value

@@ -20,11 +20,6 @@ const resultResourceIds = (node: CanvasNode) => {
     .filter((resourceId): resourceId is string => Boolean(resourceId))
 }
 
-const canvasNodeResourceId = (node: CanvasNode) =>
-  (node.type === 'asset' || node.type === 'resource') && typeof node.data.resourceId === 'string'
-    ? node.data.resourceId
-    : undefined
-
 const resourceHandleId = (resourceId: string) => `resource:${resourceId}`
 const resourceTargetHandleId = (resourceId: string) => `resource-target:${resourceId}`
 const resultHandleId = (resourceId: string) => `result:${resourceId}`
@@ -50,12 +45,11 @@ const resourceNodeByResourceId = (nodes: CanvasNode[]) => {
   const resourceNodes = new Map<string, { nodeId: string; sourceHandleId: string; targetHandleId?: string }>()
 
   for (const node of nodes) {
-    const resourceId = canvasNodeResourceId(node)
-    if (resourceId) {
-      resourceNodes.set(resourceId, {
+    if (node.type === 'resource' && typeof node.data.resourceId === 'string') {
+      resourceNodes.set(node.data.resourceId, {
         nodeId: node.id,
-        sourceHandleId: resourceHandleId(resourceId),
-        targetHandleId: resourceTargetHandleId(resourceId),
+        sourceHandleId: resourceHandleId(node.data.resourceId),
+        targetHandleId: resourceTargetHandleId(node.data.resourceId),
       })
     }
   }
@@ -97,7 +91,7 @@ const functionOutputHandleForResult = (project: ProjectState, node: CanvasNode) 
 const sourceHandleForResult = (project: ProjectState, node: CanvasNode) => {
   const sourceNodeId = typeof node.data.sourceFunctionNodeId === 'string' ? node.data.sourceFunctionNodeId : undefined
   const sourceNode = sourceNodeId ? project.canvas.nodes.find((item) => item.id === sourceNodeId) : undefined
-  if (sourceNode?.type === 'asset' || sourceNode?.type === 'resource' || sourceNode?.type === 'result_group') {
+  if (sourceNode?.type === 'resource' || sourceNode?.type === 'result_group') {
     const taskId = typeof node.data.taskId === 'string' ? node.data.taskId : undefined
     const firstInputRef = taskId ? Object.values(project.tasks[taskId]?.inputRefs ?? {})[0] : undefined
     if (isResourceRef(firstInputRef)) {
