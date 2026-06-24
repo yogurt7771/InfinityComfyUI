@@ -1,5 +1,5 @@
 import '@xyflow/react/dist/style.css'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Activity,
   Boxes,
@@ -20,8 +20,17 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [theme, setTheme] = useState<'light' | 'dark'>('light')
   const project = useProjectStore((state) => state.project)
+  const projectLibrary = useProjectStore((state) => state.projectLibrary)
+  const switchProject = useProjectStore((state) => state.switchProject)
   const checkComfyEndpointStatuses = useProjectStore((state) => state.checkComfyEndpointStatuses)
   const nextTheme = theme === 'light' ? 'dark' : 'light'
+  const projectOptions = useMemo(() => {
+    const projects = {
+      ...projectLibrary,
+      [project.project.id]: project,
+    }
+    return Object.values(projects).sort((left, right) => left.project.name.localeCompare(right.project.name))
+  }, [project, projectLibrary])
 
   useEffect(() => {
     void checkComfyEndpointStatuses()
@@ -36,9 +45,20 @@ export default function App() {
       <header className="topbar">
         <div className="brand">
           <Boxes size={24} />
-          <div>
+          <div className="brand-copy">
             <h1>Infinity ComfyUI</h1>
-            <span>{project.project.name}</span>
+            <select
+              className="project-switcher"
+              aria-label="Current project"
+              value={project.project.id}
+              onChange={(event) => switchProject(event.target.value)}
+            >
+              {projectOptions.map((item) => (
+                <option key={item.project.id} value={item.project.id}>
+                  {item.project.name || 'Untitled Project'}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
         <nav className="topbar-metrics" aria-label="Project metrics">

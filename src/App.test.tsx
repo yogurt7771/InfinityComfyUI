@@ -5,6 +5,8 @@ import { projectStore } from './store/projectStore'
 
 describe('App', () => {
   const originalCheckComfyEndpointStatuses = projectStore.getState().checkComfyEndpointStatuses
+  const originalProject = projectStore.getState().project
+  const originalProjectLibrary = projectStore.getState().projectLibrary
 
   beforeEach(() => {
     projectStore.setState({
@@ -16,6 +18,8 @@ describe('App', () => {
     cleanup()
     projectStore.setState({
       checkComfyEndpointStatuses: originalCheckComfyEndpointStatuses,
+      project: originalProject,
+      projectLibrary: originalProjectLibrary,
     } as Partial<ReturnType<typeof projectStore.getState>>)
     vi.restoreAllMocks()
     vi.useRealTimers()
@@ -58,5 +62,24 @@ describe('App', () => {
       vi.advanceTimersByTime(1)
     })
     expect(checkComfyEndpointStatuses).toHaveBeenCalledTimes(2)
+  })
+
+  it('switches projects from the topbar project selector', () => {
+    projectStore.getState().updateProjectMetadata({ name: 'Kitchen Board' })
+    const firstProjectId = projectStore.getState().project.project.id
+    const secondProjectId = projectStore.getState().createProject({ name: 'Mood Board' })
+    projectStore.getState().switchProject(firstProjectId)
+
+    render(<App />)
+
+    const projectSelector = screen.getByRole('combobox', { name: 'Current project' })
+    expect(projectSelector).toHaveValue(firstProjectId)
+    expect(screen.getByRole('option', { name: 'Kitchen Board' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Mood Board' })).toBeInTheDocument()
+
+    fireEvent.change(projectSelector, { target: { value: secondProjectId } })
+
+    expect(projectSelector).toHaveValue(secondProjectId)
+    expect(projectSelector).toHaveDisplayValue('Mood Board')
   })
 })

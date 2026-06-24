@@ -81,11 +81,39 @@
   letter-spacing: 0;
 }
 
-.brand span {
+.brand-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.project-switcher {
   display: block;
-  margin-top: 3px;
+  width: fit-content;
+  min-width: 150px;
+  max-width: min(280px, 34vw);
+  height: 26px;
+  padding: 2px 28px 2px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
   color: var(--muted);
+  background:
+    linear-gradient(180deg, rgba(94, 234, 212, 0.08), rgba(15, 23, 42, 0.02)),
+    var(--panel);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+  font: inherit;
   font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.project-switcher:focus-visible {
+  outline: none;
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-focus);
 }
 
 .topbar-metrics {
