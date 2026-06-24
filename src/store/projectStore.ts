@@ -676,6 +676,11 @@ const withBuiltInFunctions = (project: ProjectState, now: string): ProjectState 
   }
 }
 
+const withRuntimeHistory = (project: ProjectState): ProjectState => ({
+  ...project,
+  history: emptyProjectHistory(),
+})
+
 const activeJobs = (tasks: Record<string, ExecutionTask>) =>
   Object.values(tasks).reduce<Record<string, number>>((counts, task) => {
     if (!task.endpointId) return counts
@@ -7584,7 +7589,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
     importProject: (payload) => {
       const now = runtime.now()
-      const importedProject = withBuiltInFunctions(payload.project, now)
+      const importedProject = withRuntimeHistory(withBuiltInFunctions(payload.project, now))
       set((state) => ({
         project: importedProject,
         projectLibrary: {
@@ -7631,7 +7636,7 @@ const PROJECT_STORAGE_KEY = 'infinity-comfyui.project.v1'
 const PROJECT_LIBRARY_STORAGE_KEY = 'infinity-comfyui.projects.v1'
 
 const persistentProjectSnapshot = (project: ProjectState): ProjectState => {
-  const baseProject = withoutBuiltInProjectFunctions(project)
+  const { history: _history, ...baseProject } = withoutBuiltInProjectFunctions(project)
   return {
     ...baseProject,
     comfy: {
@@ -7661,7 +7666,7 @@ const loadProjectLibrary = (payload: ProjectLibraryPackage | undefined, now: str
   if (projectEntries.length === 0) return false
 
   const projects = Object.fromEntries(
-    projectEntries.map(([projectId, project]) => [projectId, withBuiltInFunctions(project, now)]),
+    projectEntries.map(([projectId, project]) => [projectId, withRuntimeHistory(withBuiltInFunctions(project, now))]),
   ) as Record<string, ProjectState>
   const activeProject = projects[payload?.currentProjectId ?? ''] ?? Object.values(projects)[0]
   if (!activeProject) return false
@@ -7682,7 +7687,7 @@ const loadIndexedDbProjectLibrary = () =>
 
       const savedProject = await getIdb<ProjectState>(PROJECT_STORAGE_KEY)
       if (!savedProject) return
-      const project = withBuiltInFunctions(savedProject, now)
+      const project = withRuntimeHistory(withBuiltInFunctions(savedProject, now))
       projectStore.setState({
         project,
         projectLibrary: { [project.project.id]: project },

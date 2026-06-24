@@ -156,6 +156,91 @@ describe('desktop project persistence', () => {
     expect(savedLibrary.projects[savedLibrary.currentProjectId].project.name).toBe('Edited Project')
   })
 
+  it('keeps operation history in memory and excludes it from desktop saves', async () => {
+    vi.useFakeTimers()
+    const loadProjectLibrary = vi.fn().mockResolvedValue(undefined)
+    const saveProjectLibrary = vi.fn().mockResolvedValue({ ok: true, rootPath: 'C:/Infinity/projects' })
+
+    Object.defineProperty(window, 'infinityComfyUIStorage', {
+      configurable: true,
+      value: {
+        loadProjectLibrary,
+        saveProjectLibrary,
+      },
+    })
+
+    const { projectStore } = await import('./projectStore')
+    await Promise.resolve()
+    await Promise.resolve()
+
+    projectStore.getState().addTextResourceAtPosition('Prompt', 'history stays in memory', { x: 100, y: 120 })
+    expect(projectStore.getState().project.history?.undoStack).toHaveLength(1)
+
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(saveProjectLibrary).toHaveBeenCalledTimes(1)
+    const savedLibrary = saveProjectLibrary.mock.calls.at(-1)?.[0]
+    const savedProject = savedLibrary.projects[savedLibrary.currentProjectId]
+    const savedResources = savedProject.resources as Record<string, { value: unknown }>
+    expect(Object.values(savedResources).map((resource) => resource.value)).toContain('history stays in memory')
+    expect(savedProject.history).toBeUndefined()
+  })
+
+  it('drops persisted operation history when loading a desktop library', async () => {
+    vi.useFakeTimers()
+    const savedProject = {
+      schemaVersion: '1.0.0',
+      project: {
+        id: 'saved_project',
+        name: 'Saved Project',
+        createdAt: '2026-05-09T00:00:00.000Z',
+        updatedAt: '2026-05-09T00:00:00.000Z',
+      },
+      canvas: { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } },
+      resources: {},
+      assets: {},
+      functions: {},
+      tasks: {},
+      history: {
+        schemaVersion: '1.0.0',
+        undoStack: [
+          {
+            id: 'history_legacy',
+            label: 'Legacy saved history',
+            transactionType: 'asset',
+            createdAt: '2026-05-09T00:00:01.000Z',
+            preview: { title: 'Legacy saved history' },
+            before: {},
+            after: {},
+          },
+        ],
+        redoStack: [],
+      },
+      templates: {},
+      comfy: { endpoints: [], scheduler: { strategy: 'least_busy', retry: { maxAttempts: 1, fallbackToOtherEndpoint: true } } },
+    }
+    const loadProjectLibrary = vi.fn().mockResolvedValue({
+      currentProjectId: savedProject.project.id,
+      projects: { [savedProject.project.id]: savedProject },
+    })
+    const saveProjectLibrary = vi.fn().mockResolvedValue({ ok: true, rootPath: 'C:/Infinity/projects' })
+
+    Object.defineProperty(window, 'infinityComfyUIStorage', {
+      configurable: true,
+      value: {
+        loadProjectLibrary,
+        saveProjectLibrary,
+      },
+    })
+
+    const { projectStore } = await import('./projectStore')
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(projectStore.getState().project.history?.undoStack).toEqual([])
+    expect(projectStore.getState().project.history?.redoStack).toEqual([])
+  })
+
   it('retries a failed desktop save without requiring another project edit', async () => {
     vi.useFakeTimers()
     const loadProjectLibrary = vi.fn().mockResolvedValue(undefined)

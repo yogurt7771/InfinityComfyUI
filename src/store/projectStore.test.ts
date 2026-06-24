@@ -669,6 +669,38 @@ describe('project store actions', () => {
     expect(geminiImageFunction.geminiImage?.baseUrl).toBe('https://gemini-proxy.local/v1beta')
   })
 
+  it('drops operation history from imported project files and keeps a fresh in-memory history', () => {
+    const slice = createProjectSlice({
+      now: () => '2026-05-09T00:00:00.000Z',
+    })
+    const savedProject = slice.getState().project
+
+    slice.getState().importProject({
+      project: {
+        ...savedProject,
+        history: {
+          schemaVersion: '1.0.0',
+          undoStack: [
+            {
+              id: 'history_legacy',
+              label: 'Legacy imported history',
+              transactionType: 'asset',
+              createdAt: '2026-05-09T00:00:01.000Z',
+              preview: { title: 'Legacy imported history' },
+              affectedIds: { nodeIds: [], assetIds: [], groupIds: [], templateIds: [] },
+              before: savedProject,
+              after: savedProject,
+            },
+          ],
+          redoStack: [],
+        },
+      },
+    })
+
+    expect(slice.getState().project.history?.undoStack).toEqual([])
+    expect(slice.getState().project.history?.redoStack).toEqual([])
+  })
+
   it('does not update or delete built-in functions through function management actions', () => {
     const slice = createProjectSlice({
       now: () => '2026-05-09T00:00:00.000Z',

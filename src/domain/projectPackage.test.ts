@@ -81,6 +81,30 @@ describe('project package helpers', () => {
     expect(exported.project.tasks.task_1.status).toBe('succeeded')
   })
 
+  it('excludes operation history from full project exports', () => {
+    const exported = createProjectPackage({
+      ...project,
+      history: {
+        schemaVersion: '1.0.0',
+        undoStack: [
+          {
+            id: 'history_1',
+            label: 'Create asset',
+            transactionType: 'asset',
+            createdAt: '2026-05-08T09:01:00.000Z',
+            preview: { title: 'Create asset' },
+            affectedIds: { nodeIds: [], assetIds: [], groupIds: [], templateIds: [] },
+            before: project,
+            after: project,
+          },
+        ],
+        redoStack: [],
+      },
+    })
+
+    expect(exported.project.history).toBeUndefined()
+  })
+
   it('excludes canvas, resources, assets, tasks, and secrets from config exports', () => {
     const exported = createConfigPackage(project)
 
