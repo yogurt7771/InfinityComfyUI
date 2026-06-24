@@ -122,6 +122,7 @@ export function selectedResourcesForAssetNodes(project: ProjectState, selectedNo
 
 function CanvasSurface() {
   const project = useProjectStore((state) => state.project)
+  const addEmptyResourceAtPosition = useProjectStore((state) => state.addEmptyResourceAtPosition)
   const runFunctionAtPosition = useProjectStore((state) => state.runFunctionAtPosition)
   const { screenToFlowPosition } = useReactFlow()
   const [contextMenuPosition, setContextMenuPosition] = useState<ContextMenuState>()
@@ -198,6 +199,10 @@ function CanvasSurface() {
       <CanvasContextMenus
         functions={Object.values(project.functions)}
         position={contextMenuPosition?.client}
+        onCreateAsset={(type) => {
+          addEmptyResourceAtPosition(type, contextMenuPosition?.flow ?? { x: 0, y: 0 })
+          setContextMenuPosition(undefined)
+        }}
         onRunFunction={(functionId) => {
           setContextMenuPosition(undefined)
           setCommandFunctionId(functionId)
