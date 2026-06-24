@@ -531,6 +531,8 @@ function CanvasSurface() {
       <ReactFlow
         nodes={nodes}
         edges={projection.edges}
+        autoPanOnNodeDrag={false}
+        fitViewOptions={{ maxZoom: 1 }}
         nodeTypes={assetCanvasNodeTypes}
         fitView
         onNodeContextMenu={openAssetMenu}

@@ -122,3 +122,9 @@ The product target is an asset-first canvas:
 | 2026-06-24 | `docker compose build && docker compose up -d` | PASS | Runtime image rebuilt from the main project directory and service restarted on port 7930. |
 | 2026-06-24 | `Invoke-WebRequest -UseBasicParsing http://127.0.0.1:7930/` | PASS | Final Docker-served app returned HTTP 200. |
 | 2026-06-24 | `npm run browser:smoke -- --reporter=line` | PASS | Final Docker-served browser smoke passed with persistence reload and drag/minimap assertions. |
+| 2026-06-24 | `npm run browser:smoke -- --reporter=line` | FAIL -> PASS | Added a regression for edge dragging: while dragging an asset node near the viewport edge, at least one main-canvas asset node must remain visible and minimap asset count must match React Flow asset nodes. |
+| 2026-06-24 | `npm test` | PASS | Full suite after drag-visibility fix: 47 files, 299 tests. |
+| 2026-06-24 | `npm run build` | PASS | Final TypeScript/Vite build passed after disabling node-drag auto-pan and adding dragging visibility override. |
+| 2026-06-24 | `docker compose build && docker compose up -d` | PASS | Runtime image rebuilt and restarted with the drag-visibility fix. |
+| 2026-06-24 | `Invoke-WebRequest -UseBasicParsing http://127.0.0.1:7930/` | PASS | Docker-served app returned HTTP 200 after the drag-visibility fix. |
+| 2026-06-24 | `npm run browser:smoke -- --reporter=line` | PASS | Final Docker-served browser smoke passed with edge-drag visible-node, minimap count, persistence reload, preview, batch drop, and replacement assertions. |

@@ -53,6 +53,16 @@ async function nodeTranslate(locator: Locator) {
   return { x: 0, y: 0 }
 }
 
+async function visibleAssetNodeCount(page: Page) {
+  return page.locator('.react-flow__node-asset').evaluateAll((nodes) =>
+    nodes.filter((node) => {
+      const style = getComputedStyle(node)
+      const rect = node.getBoundingClientRect()
+      return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0' && rect.width > 0 && rect.height > 0
+    }).length,
+  )
+}
+
 test('supports asset-first canvas creation, preview, drop, and replacement', async ({ page }) => {
   await page.goto('/')
 
@@ -98,12 +108,23 @@ test('supports asset-first canvas creation, preview, drop, and replacement', asy
   await expect.poll(async () => (await nodeTranslate(firstAssetWrapper)).x).toBeGreaterThan(beforeDrag.x + 60)
   await expect.poll(async () => (await nodeTranslate(firstAssetWrapper)).y).toBeGreaterThan(beforeDrag.y + 40)
   const afterDrag = await nodeTranslate(firstAssetWrapper)
+
+  const afterDragBox = await firstAssetWrapper.boundingBox()
+  if (!afterDragBox) throw new Error('Asset node disappeared after normal drag')
+  await page.mouse.move(afterDragBox.x + 80, afterDragBox.y + 30)
+  await page.mouse.down()
+  await page.mouse.move(1960, 930, { steps: 24 })
+  await expect.poll(async () => visibleAssetNodeCount(page)).toBeGreaterThanOrEqual(1)
+  await expect(page.locator('.comfy-minimap-node-asset')).toHaveCount(await page.locator('.react-flow__node-asset').count())
+  await page.mouse.up()
+  const afterEdgeDrag = await nodeTranslate(firstAssetWrapper)
+
   await page.waitForTimeout(5500)
   await page.reload()
   await expect(page.getByLabel('Asset canvas workspace')).toBeVisible()
   await expect(page.locator('.asset-canvas-node').first()).toBeVisible()
-  await expect.poll(async () => Math.abs((await nodeTranslate(page.locator('.react-flow__node-asset').first())).x - afterDrag.x)).toBeLessThan(1)
-  await expect.poll(async () => Math.abs((await nodeTranslate(page.locator('.react-flow__node-asset').first())).y - afterDrag.y)).toBeLessThan(1)
+  await expect.poll(async () => Math.abs((await nodeTranslate(page.locator('.react-flow__node-asset').first())).x - afterEdgeDrag.x)).toBeLessThan(1)
+  await expect.poll(async () => Math.abs((await nodeTranslate(page.locator('.react-flow__node-asset').first())).y - afterEdgeDrag.y)).toBeLessThan(1)
 
   await firstAssetNode.click({ button: 'right' })
   await expect(page.getByRole('menu', { name: 'Asset canvas menu' })).toBeVisible()
