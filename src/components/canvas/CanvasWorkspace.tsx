@@ -1,7 +1,8 @@
 import { Background, Controls, ReactFlow, ReactFlowProvider, useReactFlow, type NodeTypes } from '@xyflow/react'
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type DragEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { createAssetLineageEdge, type AssetGraphNode, type AssetLineageEdge } from '../../domain/assetGraph'
 import { buildAssetGraphProjection } from '../../domain/assetGraphProjection'
+import { readFileAsMediaResource } from '../../domain/resourceFiles'
 import type { CanvasNode, ProjectState, Resource, ResourceRef, ResourceType } from '../../domain/types'
 import { useProjectStore } from '../../store/projectStore'
 import { FunctionCommandModal } from '../functions/FunctionCommandModal'
@@ -123,6 +124,7 @@ export function selectedResourcesForAssetNodes(project: ProjectState, selectedNo
 function CanvasSurface() {
   const project = useProjectStore((state) => state.project)
   const addEmptyResourceAtPosition = useProjectStore((state) => state.addEmptyResourceAtPosition)
+  const addMediaResourceAtPosition = useProjectStore((state) => state.addMediaResourceAtPosition)
   const runFunctionAtPosition = useProjectStore((state) => state.runFunctionAtPosition)
   const { screenToFlowPosition } = useReactFlow()
   const [contextMenuPosition, setContextMenuPosition] = useState<ContextMenuState>()
@@ -160,21 +162,58 @@ function CanvasSurface() {
         .filter((resource): resource is Resource => Boolean(resource)),
     [project.resources, selectedResourceIds],
   )
+  const openCanvasMenu = (event: MouseEvent | ReactMouseEvent<Element>) => {
+    if (event.defaultPrevented) return
+    const target = event.target instanceof Element ? event.target : undefined
+    if (
+      target?.closest('.asset-canvas-context-menu') ||
+      target?.closest('.react-flow__node') ||
+      target?.closest('.react-flow__controls')
+    ) {
+      return
+    }
+    event.preventDefault()
+    setContextMenuPosition({
+      client: { x: event.clientX, y: event.clientY },
+      flow: screenToFlowPosition({ x: event.clientX, y: event.clientY }),
+    })
+  }
+  const handleDragOver = (event: DragEvent<HTMLElement>) => {
+    if (!event.dataTransfer?.types.includes('Files')) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'copy'
+  }
+  const handleDrop = (event: DragEvent<HTMLElement>) => {
+    const files = Array.from(event.dataTransfer?.files ?? [])
+    if (!files.length) return
+    event.preventDefault()
+    const dropPosition = screenToFlowPosition({ x: event.clientX, y: event.clientY })
+    void Promise.all(
+      files.map(async (file, index) => {
+        const mediaResource = await readFileAsMediaResource(file)
+        if (!mediaResource) return
+        addMediaResourceAtPosition(mediaResource.type, file.name, mediaResource.media, {
+          x: dropPosition.x + index * 28,
+          y: dropPosition.y + index * 28,
+        })
+      }),
+    ).catch(() => undefined)
+  }
 
   return (
-    <section className="canvas-workspace asset-only-canvas-workspace" aria-label="Asset canvas workspace">
+    <section
+      className="workspace-canvas canvas-workspace asset-only-canvas-workspace"
+      aria-label="Asset canvas workspace"
+      onContextMenu={openCanvasMenu}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
       <ReactFlow
         nodes={nodes}
         edges={projection.edges}
         nodeTypes={assetCanvasNodeTypes}
         fitView
-        onPaneContextMenu={(event) => {
-          event.preventDefault()
-          setContextMenuPosition({
-            client: { x: event.clientX, y: event.clientY },
-            flow: screenToFlowPosition({ x: event.clientX, y: event.clientY }),
-          })
-        }}
+        onPaneContextMenu={openCanvasMenu}
         onPaneClick={() => setContextMenuPosition(undefined)}
         onNodeClick={(_, node) => {
           if (!pickMode || node.type !== 'asset') return

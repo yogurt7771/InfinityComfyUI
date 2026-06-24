@@ -90,4 +90,12 @@ describe('canvas resource UI CSS', () => {
     expect(buttonBlock).toContain('border-color: transparent')
     expect(buttonBlock).toContain('box-shadow: none')
   })
+
+  it('renders the asset canvas context menu as a visible overlay', () => {
+    const menuBlock = cssBlock('.asset-canvas-context-menu')
+
+    expect(menuBlock).toContain('position: fixed')
+    expect(menuBlock).toContain('z-index:')
+    expect(menuBlock).toContain('display: grid')
+  })
 })
