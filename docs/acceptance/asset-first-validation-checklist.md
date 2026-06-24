@@ -114,3 +114,11 @@ The product target is an asset-first canvas:
 | 2026-06-24 | `docker compose up -d` | PASS | Docker service recreated and started. |
 | 2026-06-24 | `Invoke-WebRequest -UseBasicParsing http://127.0.0.1:7930/` | PASS | Docker-served app returned HTTP 200. |
 | 2026-06-24 | `npm run browser:smoke -- --reporter=line` | PASS | Browser smoke passed again against the Docker service on port 7930. |
+| 2026-06-24 | `npm test -- src/store/projectPersistence.test.ts -t "saves edits made before startup loading finishes"` | PASS | Regression for startup persistence race: edits before storage load now save after load completes. |
+| 2026-06-24 | `npm test -- src/store/projectPersistence.test.ts src/domain/persistence/projectPersistence.test.ts src/domain/persistence/projectSerializer.test.ts` | PASS | Rechecked persistence controller/serializer behavior after the startup-race fix. |
+| 2026-06-24 | `npm run browser:smoke -- --reporter=line` | PASS | Rechecked Docker-served browser flow with explicit drag-in-progress assertions: main canvas nodes stay visible and minimap asset nodes remain present. |
+| 2026-06-24 | `npm test` | PASS | Final regression pass after startup persistence fix: 47 files, 299 tests. |
+| 2026-06-24 | `npm run build` | PASS | Final TypeScript/Vite build passed; Vite chunk-size warning only. |
+| 2026-06-24 | `docker compose build && docker compose up -d` | PASS | Runtime image rebuilt from the main project directory and service restarted on port 7930. |
+| 2026-06-24 | `Invoke-WebRequest -UseBasicParsing http://127.0.0.1:7930/` | PASS | Final Docker-served app returned HTTP 200. |
+| 2026-06-24 | `npm run browser:smoke -- --reporter=line` | PASS | Final Docker-served browser smoke passed with persistence reload and drag/minimap assertions. |

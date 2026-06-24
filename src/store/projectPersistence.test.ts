@@ -40,6 +40,47 @@ describe('desktop project persistence', () => {
     expect(savedLibrary.projects[savedLibrary.currentProjectId].project.name).toBe('Desktop Saved Project')
   })
 
+  it('saves edits made before startup loading finishes when no saved library exists', async () => {
+    vi.useFakeTimers()
+    let resolveLoad: (value: unknown) => void = () => undefined
+    const loadProjectLibrary = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveLoad = resolve
+        }),
+    )
+    const saveProjectLibrary = vi.fn().mockResolvedValue({ ok: true, rootPath: 'C:/Infinity/projects' })
+
+    Object.defineProperty(window, 'infinityComfyUIStorage', {
+      configurable: true,
+      value: {
+        loadProjectLibrary,
+        saveProjectLibrary,
+      },
+    })
+
+    const { projectStore } = await import('./projectStore')
+    await Promise.resolve()
+
+    projectStore.getState().updateProjectMetadata({ name: 'Created Before Load Finished' })
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(saveProjectLibrary).not.toHaveBeenCalled()
+
+    resolveLoad(undefined)
+    await Promise.resolve()
+    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(4999)
+
+    expect(saveProjectLibrary).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(1)
+
+    expect(saveProjectLibrary).toHaveBeenCalledTimes(1)
+    const savedLibrary = saveProjectLibrary.mock.calls.at(-1)?.[0]
+    expect(savedLibrary.projects[savedLibrary.currentProjectId].project.name).toBe('Created Before Load Finished')
+  })
+
   it('does not overwrite a saved desktop library while startup loading is still pending', async () => {
     vi.useFakeTimers()
     let resolveLoad: (value: unknown) => void = () => undefined

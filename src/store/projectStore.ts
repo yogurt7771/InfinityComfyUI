@@ -8213,20 +8213,22 @@ const loadIndexedDbProjectLibrary = () =>
   getIdb<ProjectLibraryPackage>(PROJECT_LIBRARY_STORAGE_KEY)
     .then(async (savedLibrary) => {
       const now = new Date().toISOString()
-      if (loadProjectLibrary(savedLibrary, now)) return
+      if (loadProjectLibrary(savedLibrary, now)) return true
 
       const savedProject = await getIdb<ProjectState>(PROJECT_STORAGE_KEY)
-      if (!savedProject) return
+      if (!savedProject) return false
       const project = withBuiltInFunctions(savedProject, now)
       projectStore.setState({
         project,
         projectLibrary: { [project.project.id]: project },
         ...selectedState([]),
       })
+      return true
     })
-    .catch(() => undefined)
+    .catch(() => false)
 
 const startIndexedDbProjectPersistence = () => {
+  const startupRevisionKey = createProjectLibraryRevisionKey(projectStore.getState())
   const controller = createIdleProjectPersistenceController<ProjectLibraryPackage>({
     idleMs: PROJECT_PERSIST_IDLE_MS,
     getRevisionKey: () => createProjectLibraryRevisionKey(projectStore.getState()),
@@ -8245,8 +8247,9 @@ const startIndexedDbProjectPersistence = () => {
     },
   })
 
-  void loadIndexedDbProjectLibrary().finally(() => {
-    controller.markLoaded()
+  void loadIndexedDbProjectLibrary().then((restoredProject) => {
+    controller.markLoaded(restoredProject ? undefined : startupRevisionKey)
+    controller.schedule()
   })
 
   projectStore.subscribe(() => controller.schedule())
@@ -8257,6 +8260,7 @@ const startIndexedDbProjectPersistence = () => {
 }
 
 const startDesktopProjectPersistence = (storage: DesktopProjectStorage) => {
+  const startupRevisionKey = createProjectLibraryRevisionKey(projectStore.getState())
   const controller = createIdleProjectPersistenceController<ProjectLibraryPackage>({
     idleMs: PROJECT_PERSIST_IDLE_MS,
     getRevisionKey: () => createProjectLibraryRevisionKey(projectStore.getState()),
@@ -8276,11 +8280,13 @@ const startDesktopProjectPersistence = (storage: DesktopProjectStorage) => {
     .loadProjectLibrary()
     .then((savedLibrary) => {
       const now = new Date().toISOString()
-      loadProjectLibrary(savedLibrary, now)
-      controller.markLoaded()
+      const restoredProject = loadProjectLibrary(savedLibrary, now)
+      controller.markLoaded(restoredProject ? undefined : startupRevisionKey)
+      controller.schedule()
     })
     .catch(() => {
-      controller.markLoaded()
+      controller.markLoaded(startupRevisionKey)
+      controller.schedule()
     })
 
   projectStore.subscribe(() => controller.schedule())

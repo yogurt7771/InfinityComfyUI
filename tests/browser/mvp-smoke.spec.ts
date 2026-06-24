@@ -130,6 +130,19 @@ test('supports asset-first canvas creation, preview, drop, and replacement', asy
   await expect(canvas.getByText('prompt.txt')).toBeVisible()
   await expectNoObjectObject(page)
 
+  const afterBatchCount = await page.locator('.asset-canvas-node').count()
+  const draggedBatchWrapper = page.locator('.react-flow__node-asset').nth(afterBatchCount - 1)
+  const draggedBatchBox = await draggedBatchWrapper.boundingBox()
+  if (!draggedBatchBox) throw new Error('Batch asset node is not visible for dragging')
+  await page.mouse.move(draggedBatchBox.x + 60, draggedBatchBox.y + 30)
+  await page.mouse.down()
+  await page.mouse.move(draggedBatchBox.x + 150, draggedBatchBox.y + 100, { steps: 8 })
+  await expect(page.locator('.asset-canvas-node')).toHaveCount(afterBatchCount)
+  await expect(page.locator('.asset-canvas-node').first()).toBeVisible()
+  await expect(page.locator('.comfy-minimap-node-asset')).toHaveCount(afterBatchCount)
+  await page.mouse.up()
+  await expect(page.locator('.asset-canvas-node')).toHaveCount(afterBatchCount)
+
   const beforeReplaceCount = await page.locator('.asset-canvas-node').count()
   await dropFiles(
     page,
