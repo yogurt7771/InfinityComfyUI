@@ -401,6 +401,13 @@ export const sameFlowEdgesForSync = (left: Edge[], right: Edge[]) => {
   })
 }
 
+export const selectedEdgeIdsFromSelectionChange = (current: string[], changedEdgeIds: string[]) => {
+  if (changedEdgeIds.length === 0) return current
+  return current.length === changedEdgeIds.length && current.every((edgeId, index) => edgeId === changedEdgeIds[index])
+    ? current
+    : changedEdgeIds
+}
+
 type SelectionHighlightNodeLike = Pick<Node, 'id'>
 type SelectionHighlightEdgeLike = Pick<Edge, 'id' | 'source' | 'target'>
 
@@ -2238,11 +2245,7 @@ function CanvasSurface() {
 
   const handleSelectionChange = ({ nodes: changedNodes, edges: changedEdges }: { nodes: Node[]; edges: Edge[] }) => {
     const changedEdgeIds = changedEdges.map((edge) => edge.id)
-    setSelectedEdgeIds((current) =>
-      current.length === changedEdgeIds.length && current.every((edgeId, index) => edgeId === changedEdgeIds[index])
-        ? current
-        : changedEdgeIds,
-    )
+    setSelectedEdgeIds((current) => selectedEdgeIdsFromSelectionChange(current, changedEdgeIds))
     if (changedEdgeIds.length > 0) {
       selectNode(undefined)
       setTraceHighlightNodeIds([])

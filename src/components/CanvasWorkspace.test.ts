@@ -12,6 +12,7 @@ import {
   visibleCanvasNodes,
   minimapPointToFlowPosition,
   sameFlowEdgesForSync,
+  selectedEdgeIdsFromSelectionChange,
 } from './CanvasWorkspace'
 
 const projectWithOptionalInput = (inputValues: Record<string, unknown> = {}): ProjectState => ({
@@ -186,6 +187,12 @@ describe('CanvasWorkspace helpers', () => {
     expect(sameFlowEdgesForSync(previous, next)).toBe(true)
     expect(sameFlowEdgesForSync([...previous].reverse(), next)).toBe(true)
     expect(sameFlowEdgesForSync(previous, [{ ...next[0], selected: true }])).toBe(false)
+  })
+
+  it('keeps explicit edge clicks selected when React Flow reports an empty edge selection', () => {
+    expect(selectedEdgeIdsFromSelectionChange(['edge_1'], [])).toEqual(['edge_1'])
+    expect(selectedEdgeIdsFromSelectionChange(['edge_1'], ['edge_2'])).toEqual(['edge_2'])
+    expect(selectedEdgeIdsFromSelectionChange([], [])).toEqual([])
   })
 
   it('keeps function and run nodes out of the visible canvas surface', () => {
