@@ -147,12 +147,18 @@ type FunctionEditorState = {
   functionId: string
 }
 
+type FunctionRunMode = 'replace' | 'new'
+
 type FunctionRunDialogState = {
   functionId: string
   temporaryFunction?: GenerationFunction
   inputValues: Record<string, PrimitiveInputValue | ResourceRef>
   runCount: number
   position: { x: number; y: number }
+  replaceTarget?: {
+    resourceId: string
+    outputKey?: string
+  }
 }
 
 type TemporaryComfyWorkflowState = {
@@ -1089,6 +1095,7 @@ export function FunctionRunDialog({
   values,
   runCount,
   resourcesById,
+  canReplaceCurrent = false,
   onClose,
   onPickInput,
   onRun,
@@ -1101,9 +1108,10 @@ export function FunctionRunDialog({
   values: Record<string, PrimitiveInputValue | ResourceRef>
   runCount: number
   resourcesById: Record<string, Resource>
+  canReplaceCurrent?: boolean
   onClose: () => void
   onPickInput: (input: { key: string; label: string; type: ResourceType }) => void
-  onRun: (values: Record<string, PrimitiveInputValue | ResourceRef>, runCount: number) => void
+  onRun: (values: Record<string, PrimitiveInputValue | ResourceRef>, runCount: number, mode: FunctionRunMode) => void
   onFunctionDefChange?: (functionDef: GenerationFunction) => void
   onEditComfyWorkflow?: () => void
   onRunCountChange: (runCount: number) => void
@@ -1119,6 +1127,14 @@ export function FunctionRunDialog({
   const missingRequiredInputs = functionDef.inputs.filter(
     (input) => input.required && !functionInputSatisfied(values[input.key], resourcesById),
   )
+  const disabledRunTitle =
+    missingRequiredInputs.length > 0
+      ? `Missing ${missingRequiredInputs.map((input) => input.label || input.key).join(', ')}`
+      : undefined
+  const handleRun = (mode: FunctionRunMode) => {
+    onRun(values, runCount, mode)
+    onClose()
+  }
   const canEditComfySlots = Boolean(onFunctionDefChange && functionDef.workflow.format === 'comfyui_api_json')
   const availableWorkflowSlots = useMemo(
     () => (canEditComfySlots ? workflowInputCandidates(functionDef.workflow.rawJson, functionDef.inputs) : []),
@@ -1637,19 +1653,40 @@ export function FunctionRunDialog({
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button
-            type="button"
-            aria-label="Run function from popup"
-            className="primary"
-            disabled={missingRequiredInputs.length > 0}
-            title={missingRequiredInputs.length > 0 ? `Missing ${missingRequiredInputs.map((input) => input.label || input.key).join(', ')}` : undefined}
-            onClick={() => {
-              onRun(values, runCount)
-              onClose()
-            }}
-          >
-            Run
-          </button>
+          {canReplaceCurrent ? (
+            <>
+              <button
+                type="button"
+                aria-label="Run and replace current output"
+                disabled={missingRequiredInputs.length > 0}
+                title={disabledRunTitle}
+                onClick={() => handleRun('replace')}
+              >
+                Run & Replace
+              </button>
+              <button
+                type="button"
+                aria-label="Run and create new output node"
+                className="primary"
+                disabled={missingRequiredInputs.length > 0}
+                title={disabledRunTitle}
+                onClick={() => handleRun('new')}
+              >
+                Run New Node
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              aria-label="Run function from popup"
+              className="primary"
+              disabled={missingRequiredInputs.length > 0}
+              title={disabledRunTitle}
+              onClick={() => handleRun('new')}
+            >
+              Run
+            </button>
+          )}
         </div>
         <FullResourcePreviewModal
           resource={previewResource}
@@ -1948,6 +1985,10 @@ function CanvasSurface() {
               y: sourceNode.position.y,
             }
           : { x: 0, y: 0 },
+        replaceTarget: {
+          resourceId,
+          outputKey: resource.source.kind === 'function_output' ? resource.source.outputKey : undefined,
+        },
       })
     },
     [flowNodeLayoutContext, openFunctionRunDialog, project.canvas.nodes, project.functions, project.resources, project.tasks],
@@ -2772,6 +2813,7 @@ function CanvasSurface() {
       inputValues: preservedInputValues,
       runCount: functionRunDialog?.runCount ?? temporaryFunction.runtimeDefaults?.runCount ?? 1,
       position: functionRunDialog?.position ?? temporaryComfyWorkflow.position,
+      replaceTarget: functionRunDialog?.replaceTarget,
     })
     setTemporaryComfyWorkflow({
       ...temporaryComfyWorkflow,
@@ -3349,6 +3391,7 @@ function CanvasSurface() {
           values={functionRunDialog.inputValues}
           runCount={functionRunDialog.runCount}
           resourcesById={project.resources}
+          canReplaceCurrent={Boolean(functionRunDialog.replaceTarget?.resourceId)}
           onClose={() => {
             setInputPickMode(undefined)
             setFunctionRunDialog(undefined)
@@ -3364,12 +3407,22 @@ function CanvasSurface() {
               inputType: input.type,
             })
           }}
-          onRun={(values, runCount) => {
+          onRun={(values, runCount, mode) => {
+            const options =
+              mode === 'replace' && functionRunDialog.replaceTarget
+                ? { replace: functionRunDialog.replaceTarget }
+                : undefined
             if (functionRunDialog.temporaryFunction) {
-              void runTemporaryFunctionAtPosition(functionRunDialog.temporaryFunction, values, functionRunDialog.position, runCount)
+              void runTemporaryFunctionAtPosition(
+                functionRunDialog.temporaryFunction,
+                values,
+                functionRunDialog.position,
+                runCount,
+                options,
+              )
               return
             }
-            void runFunctionAtPosition(functionRunDialog.functionId, values, functionRunDialog.position, runCount)
+            void runFunctionAtPosition(functionRunDialog.functionId, values, functionRunDialog.position, runCount, options)
           }}
           onFunctionDefChange={
             functionRunDialog.temporaryFunction

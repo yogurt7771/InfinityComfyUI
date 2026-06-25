@@ -54,7 +54,7 @@ describe('CanvasWorkspace', () => {
 
   const renderFunctionRunDialog = (
     initialFunction: GenerationFunction,
-    options: { onEditComfyWorkflow?: () => void } = {},
+    options: { onEditComfyWorkflow?: () => void; canReplaceCurrent?: boolean } = {},
   ) => {
     const onRun = vi.fn()
     const Wrapper = () => {
@@ -71,6 +71,7 @@ describe('CanvasWorkspace', () => {
           onClose={vi.fn()}
           onPickInput={vi.fn()}
           onRun={onRun}
+          canReplaceCurrent={options.canReplaceCurrent}
           onFunctionDefChange={setFunctionDef}
           onRunCountChange={vi.fn()}
           onValuesChange={setValues}
@@ -194,6 +195,43 @@ describe('CanvasWorkspace', () => {
 
     const field = screen.getByText('Image').closest('.function-run-field') as HTMLElement
     expect(within(field).getByRole('img', { name: 'reference.png' })).toBeInTheDocument()
+  })
+
+  it('runs either by replacing the current output or by creating a new node', () => {
+    const { onRun } = renderFunctionRunDialog(
+      {
+        id: 'temp_comfy',
+        name: 'ComfyUI Workflow',
+        category: 'Render',
+        workflow: {
+          format: 'comfyui_api_json',
+          rawJson: {
+            '10': { class_type: 'LoadImage', _meta: { title: 'Load Image' }, inputs: { image: 'reference.png' } },
+          },
+        },
+        inputs: [
+          {
+            key: 'image',
+            label: 'Image',
+            type: 'image',
+            required: true,
+            bind: { nodeId: '10', nodeTitle: 'Load Image', path: 'inputs.image' },
+            upload: { strategy: 'comfy_upload' },
+          },
+        ],
+        outputs: [{ key: 'image', label: 'Image', type: 'image', bind: { nodeId: '20' } }],
+        createdAt: '2026-06-25T00:00:00.000Z',
+        updatedAt: '2026-06-25T00:00:00.000Z',
+      },
+      { canReplaceCurrent: true },
+    )
+
+    const dialog = screen.getByRole('dialog', { name: 'Run ComfyUI Workflow' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Run and replace current output' }))
+    expect(onRun).toHaveBeenLastCalledWith(expect.any(Object), 1, 'replace')
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Run and create new output node' }))
+    expect(onRun).toHaveBeenLastCalledWith(expect.any(Object), 1, 'new')
   })
 
   it('allows temporary ComfyUI runners to expose and remove workflow input slots', () => {

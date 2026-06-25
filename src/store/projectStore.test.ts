@@ -1405,6 +1405,66 @@ describe('project store actions', () => {
     })
   })
 
+  it('replaces an existing output asset when running a function from explicit popup inputs in replace mode', async () => {
+    const ids = ['res_input', 'res_output', 'task_1', 'res_new']
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now: () => '2026-05-08T09:00:00.000Z',
+    })
+
+    slice.getState().addTextResourceAtPosition('Prompt', '  refreshed copy  ', { x: 0, y: 0 })
+    slice.getState().addTextResourceAtPosition('Existing output', 'stale copy', { x: 360, y: 0 })
+    slice.setState((state) => ({
+      project: {
+        ...state.project,
+        resources: {
+          ...state.project.resources,
+          res_output: {
+            ...state.project.resources.res_output!,
+            source: {
+              kind: 'function_output',
+              functionNodeId: 'task_previous',
+              taskId: 'task_previous',
+              outputKey: 'text',
+            },
+          },
+        },
+      },
+    }))
+
+    await slice.getState().runFunctionAtPosition(
+      LOCAL_TEXT_TRIM_FUNCTION_ID,
+      { text: { resourceId: 'res_input', type: 'text' } },
+      { x: 720, y: 0 },
+      1,
+      { replace: { resourceId: 'res_output', outputKey: 'text' } },
+    )
+
+    const state = slice.getState()
+    expect(state.project.resources.res_output).toMatchObject({
+      type: 'text',
+      value: 'refreshed copy',
+      source: {
+        kind: 'function_output',
+        functionNodeId: 'task_1',
+        taskId: 'task_1',
+        outputKey: 'text',
+      },
+    })
+    expect(state.project.tasks.task_1.outputRefs).toEqual({
+      text: [{ resourceId: 'res_output', type: 'text' }],
+    })
+    expect(
+      state.project.canvas.nodes
+        .filter((node) => node.type === 'resource')
+        .map((node) => ({ id: node.id, resourceId: node.data.resourceId })),
+    ).toEqual([
+      { id: 'node_res_input', resourceId: 'res_input' },
+      { id: 'node_res_output', resourceId: 'res_output' },
+    ])
+    expect(state.project.resources.res_new).toBeUndefined()
+  })
+
   it('runs a temporary function draft from popup inputs without saving it as a function template', async () => {
     const ids = ['res_input', 'task_1', 'res_output']
     const slice = createProjectSlice({

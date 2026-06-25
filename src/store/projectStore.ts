@@ -99,6 +99,12 @@ type ConnectNodesOptions = {
 type AddFunctionNodeOptions = {
   autoBindRequiredInputs?: boolean
 }
+type RunFunctionAtPositionOptions = {
+  replace?: {
+    resourceId: string
+    outputKey?: string
+  }
+}
 type NodeSelectionMode = 'replace' | 'add' | 'remove' | 'toggle'
 type FunctionEditScope = 'node' | 'all'
 
@@ -292,12 +298,14 @@ export type ProjectStoreState = {
     inputValues: Record<string, PrimitiveInputValue | ResourceRef>,
     position: { x: number; y: number },
     runCount?: number,
+    options?: RunFunctionAtPositionOptions,
   ) => Promise<string | undefined>
   runTemporaryFunctionAtPosition: (
     functionDef: GenerationFunction,
     inputValues: Record<string, PrimitiveInputValue | ResourceRef>,
     position: { x: number; y: number },
     runCount?: number,
+    options?: RunFunctionAtPositionOptions,
   ) => Promise<string | undefined>
   runFunctionNode: (nodeId: string, runCount?: number) => void
   runFunctionNodeWithComfy: (nodeId: string, runCount?: number) => Promise<void>
@@ -5458,7 +5466,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       return id
     },
 
-    runFunctionAtPosition: async (functionId, inputValues, position, runCount) => {
+    runFunctionAtPosition: async (functionId, inputValues, position, runCount, options) => {
       const state = get()
       const functionDef = functionDefinitionById(functionId)
       if (!functionDef) return undefined
@@ -5471,9 +5479,30 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       }
 
       const hasPendingDependencies = hasPendingInputRefs(runtimeInputValues)
+      const replaceResourceId =
+        options?.replace?.resourceId && state.project.resources[options.replace.resourceId]
+          ? options.replace.resourceId
+          : undefined
+      const replaceOutputKey =
+        replaceResourceId && options?.replace?.outputKey && functionDef.outputs.some((output) => output.key === options.replace?.outputKey)
+          ? options.replace.outputKey
+          : replaceResourceId
+            ? functionDef.outputs[0]?.key
+            : undefined
+      let replacementConsumed = false
       const tasks: Record<string, ExecutionTask> = {}
       const resources: Record<string, Resource> = {}
       const nodes: CanvasNode[] = []
+      const replacementNodeDataByResourceId: Record<
+        string,
+        {
+          resourceType: ResourceType
+          functionId: string
+          taskId: string
+          outputKey: string
+          status: ExecutionTask['status']
+        }
+      > = {}
       const queuedLocalRuns: Array<{
         taskId: string
         runIndex: number
@@ -5523,14 +5552,13 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         const outputRefs: Record<string, ResourceRef[]> = {}
 
         functionDef.outputs.forEach((output, outputIndex) => {
-          const resourceId = runtime.idFactory()
+          const shouldReplace =
+            !replacementConsumed &&
+            index === 0 &&
+            Boolean(replaceResourceId) &&
+            output.key === replaceOutputKey
+          const resourceId = shouldReplace ? replaceResourceId! : runtime.idFactory()
           const ref: ResourceRef = { resourceId, type: output.type }
-          const nodePosition = nonOverlappingNodePosition(
-            [...state.project.canvas.nodes, ...nodes],
-            state.project.functions,
-            commandOutputPosition(position, index, outputIndex),
-            { width: 230, height: 180 },
-          )
           outputRefs[output.key] = [ref]
           resources[resourceId] = {
             id: resourceId,
@@ -5550,24 +5578,41 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
               createdAt: now,
             },
           }
-          nodes.push(
-            markNewCanvasNode(
-              {
-                id: resourceNodeId(resourceId),
-                type: 'resource',
-                position: nodePosition,
-                data: {
-                  resourceId,
-                  resourceType: output.type,
-                  functionId,
-                  taskId,
-                  outputKey: output.key,
-                  status: hasPendingDependencies ? 'pending' : 'queued',
+          if (shouldReplace) {
+            replacementConsumed = true
+            replacementNodeDataByResourceId[resourceId] = {
+              resourceType: output.type,
+              functionId,
+              taskId,
+              outputKey: output.key,
+              status: hasPendingDependencies ? 'pending' : 'queued',
+            }
+          } else {
+            const nodePosition = nonOverlappingNodePosition(
+              [...state.project.canvas.nodes, ...nodes],
+              state.project.functions,
+              commandOutputPosition(position, index, outputIndex),
+              { width: 230, height: 180 },
+            )
+            nodes.push(
+              markNewCanvasNode(
+                {
+                  id: resourceNodeId(resourceId),
+                  type: 'resource',
+                  position: nodePosition,
+                  data: {
+                    resourceId,
+                    resourceType: output.type,
+                    functionId,
+                    taskId,
+                    outputKey: output.key,
+                    status: hasPendingDependencies ? 'pending' : 'queued',
+                  },
                 },
-              },
-              now,
-            ),
-          )
+                now,
+              ),
+            )
+          }
         })
 
         tasks[taskId] = {
@@ -5658,7 +5703,16 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           project: { ...state.project.project, updatedAt: now },
           resources: { ...state.project.resources, ...resources },
           tasks: { ...state.project.tasks, ...tasks },
-          canvas: { ...state.project.canvas, nodes: [...state.project.canvas.nodes, ...nodes] },
+          canvas: {
+            ...state.project.canvas,
+            nodes: [
+              ...state.project.canvas.nodes.map((node) => {
+                const replacement = replacementNodeDataByResourceId[String(node.data.resourceId)]
+                return replacement ? { ...node, data: { ...node.data, ...replacement } } : node
+              }),
+              ...nodes,
+            ],
+          },
         },
       }))
 
@@ -6678,9 +6732,9 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       return firstTaskId
     },
 
-    runTemporaryFunctionAtPosition: async (functionDef, inputValues, position, runCount) => {
+    runTemporaryFunctionAtPosition: async (functionDef, inputValues, position, runCount, options) => {
       if (!get().project.functions[functionDef.id]) temporaryFunctionDrafts.set(functionDef.id, functionDef)
-      return await get().runFunctionAtPosition(functionDef.id, inputValues, position, runCount)
+      return await get().runFunctionAtPosition(functionDef.id, inputValues, position, runCount, options)
     },
 
     updateFunctionNodeRunCount: (nodeId, runCount) => {
