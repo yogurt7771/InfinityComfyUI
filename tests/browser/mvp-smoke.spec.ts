@@ -195,6 +195,9 @@ test.skip('runs a canvas workflow in a browser', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Run MVP' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Settings' })).toBeVisible()
   await expect(page.getByLabel('Function list')).toHaveCount(0)
+  await expect(page.getByLabel('ComfyUI server list')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'ComfyUI Servers' })).toBeVisible()
+  await page.getByRole('button', { name: 'ComfyUI Servers' }).click()
   await expect(page.getByLabel('ComfyUI server list')).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Packages' })).toHaveCount(0)
 
@@ -258,12 +261,9 @@ test.skip('runs a canvas workflow in a browser', async ({ page }) => {
   await firstResultNode.click()
   await expect(firstResultNode.getByRole('button', { name: 'Delete node' })).toBeVisible()
   await expect(firstResultNode.getByRole('button', { name: 'Rerun result' })).toBeVisible()
-  const runInspector = page.getByLabel('Run execution details')
-  await expect(runInspector.getByRole('heading', { name: 'Run Details' })).toBeVisible()
-  await expect(runInspector.getByRole('heading', { name: 'Inputs' })).toBeVisible()
-  await expect(runInspector).toContainText('sunlit modern kitchen, realistic interior render')
-  await expect(runInspector.getByRole('heading', { name: 'Final Workflow' })).toBeVisible()
-  await expect(runInspector).toContainText('Positive Prompt')
+  await expect(page.getByRole('heading', { name: 'Run Queue' })).toBeVisible()
+  await expect(page.getByLabel('Selected node run history')).toContainText('Run 1/3')
+  await expect(page.getByRole('heading', { name: 'Inspector' })).toHaveCount(0)
   await expect
     .poll(async () => {
       const deleteBox = await firstResultNode.getByRole('button', { name: 'Delete node' }).boundingBox()
@@ -363,7 +363,7 @@ test.skip('collapses and expands both side panels without moving the page', asyn
   const afterLeft = await canvas.evaluate((element) => element.getBoundingClientRect().width)
   await page.getByRole('button', { name: 'Collapse right panel' }).click()
   await expect(rightPanel).toHaveClass(/is-collapsed/)
-  await expect(rightPanel.getByRole('heading', { name: 'Inspector' })).toBeHidden()
+  await expect(rightPanel.getByRole('button', { name: 'ComfyUI Servers' })).toBeHidden()
   await expect(page.getByRole('button', { name: 'Expand right panel' })).toBeVisible()
 
   await expect
@@ -375,7 +375,7 @@ test.skip('collapses and expands both side panels without moving the page', asyn
   await expect(leftPanel).not.toHaveClass(/is-collapsed/)
   await expect(rightPanel).not.toHaveClass(/is-collapsed/)
   await expect(leftPanel.getByRole('heading', { name: 'Assets' })).toBeVisible()
-  await expect(rightPanel.getByRole('heading', { name: 'Inspector' })).toBeVisible()
+  await expect(rightPanel.getByRole('button', { name: 'ComfyUI Servers' })).toBeVisible()
   await expect
     .poll(async () =>
       page.evaluate(() => ({

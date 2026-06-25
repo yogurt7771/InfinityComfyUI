@@ -445,7 +445,7 @@ const buildHistoryDockRows = (project: ProjectState): HistoryDockRow[] => {
   return [...undoRows.toReversed(), ...redoRows.toReversed()]
 }
 
-function RunInspector({
+export function RunInspector({
   project,
   task,
   onFocusNode,
@@ -3398,27 +3398,25 @@ export function RightPanel() {
   const selectNode = useProjectStore((state) => state.selectNode)
   const fetchComfyHistory = useProjectStore((state) => state.fetchComfyHistory)
   const [expandedTaskId, setExpandedTaskId] = useState<string | undefined>()
-  const [tasksOpen, setTasksOpen] = useState(false)
+  const [openDock, setOpenDock] = useState<'servers' | 'tasks'>()
   const [historyDialog, setHistoryDialog] = useState<{
     title: string
     status: 'loading' | 'loaded' | 'failed'
     content: string
   }>()
+  const serversOpen = openDock === 'servers'
+  const tasksOpen = openDock === 'tasks'
   const selectedNode = project.canvas.nodes.find((node) => node.id === selectedNodeId)
-  const selectedRunTask =
-    selectedNode?.type === 'result_group' && typeof selectedNode.data.taskId === 'string'
-      ? project.tasks[selectedNode.data.taskId]
-      : undefined
   const selectedRunHistory = getNodeRunHistory(project, selectedNodeId)
   const projectTasks = Object.values(project.tasks).reverse()
   const queueCounts = useMemo(() => endpointQueueCounts(project.tasks), [project.tasks])
   useEffect(() => {
-    if (selectedNodeId) setTasksOpen(false)
+    if (selectedNodeId) setOpenDock((current) => (current === 'tasks' ? undefined : current))
   }, [selectedNodeId])
 
   const focusCanvasNode = (nodeId: string) => {
     selectNode(nodeId)
-    setTasksOpen(false)
+    setOpenDock(undefined)
     window.dispatchEvent(new CustomEvent('infinity-focus-node', { detail: { nodeId } }))
   }
   const openHistory = (runLabel: string, endpointId: string | undefined, promptId: string | undefined) => {
@@ -3443,11 +3441,11 @@ export function RightPanel() {
 
   return (
     <aside
-      aria-label="Inspector panel"
-      className={`side-panel right-panel ${tasksOpen ? 'right-panel-popover-open' : ''}`}
-      onMouseLeave={() => setTasksOpen(false)}
+      aria-label="Right tools panel"
+      className={`side-panel right-panel ${openDock ? 'right-panel-popover-open' : ''}`}
+      onMouseLeave={() => setOpenDock(undefined)}
       onKeyDown={(event) => {
-        if (event.key === 'Escape') setTasksOpen(false)
+        if (event.key === 'Escape') setOpenDock(undefined)
       }}
     >
       {historyDialog ? (
@@ -3460,28 +3458,34 @@ export function RightPanel() {
           </div>
         </ModalShell>
       ) : null}
-      <section>
-        <div className="panel-title">
-          <Route size={16} />
-          <h2>Inspector</h2>
-        </div>
-        {selectedNode ? (
-          <div className="inspector-block">
-            <strong>{selectedNode.type}</strong>
-            <code>{selectedNode.id}</code>
-            {selectedRunTask ? <RunInspector project={project} task={selectedRunTask} onFocusNode={focusCanvasNode} /> : null}
-            <pre>{JSON.stringify(selectedNode.data, null, 2)}</pre>
-          </div>
-        ) : (
-          <div className="inspector-empty">No selection</div>
-        )}
-      </section>
-      <section>
-        <div className="panel-title">
-          <Network size={16} />
-          <h2>ComfyUI Servers</h2>
-        </div>
-        <EndpointStatusList endpoints={project.comfy.endpoints} queueCounts={queueCounts} />
+      <section className="task-dock" aria-label="ComfyUI server dock">
+        <button
+          type="button"
+          className={`assets-dock-button task-dock-button${serversOpen ? ' is-active' : ''}`}
+          aria-label="ComfyUI Servers"
+          aria-expanded={serversOpen}
+          aria-controls="comfyui-servers-popover"
+          onClick={() => setOpenDock((current) => (current === 'servers' ? undefined : 'servers'))}
+        >
+          <Network size={20} />
+          <span className="task-dock-badge" aria-hidden="true">
+            {project.comfy.endpoints.length}
+          </span>
+        </button>
+        {serversOpen ? (
+          <section
+            id="comfyui-servers-popover"
+            className="task-popover"
+            aria-label="ComfyUI Servers popover"
+          >
+            <div className="panel-title asset-popover-title">
+              <Network size={16} />
+              <h2>ComfyUI Servers</h2>
+              <span>{project.comfy.endpoints.length}</span>
+            </div>
+            <EndpointStatusList endpoints={project.comfy.endpoints} queueCounts={queueCounts} />
+          </section>
+        ) : null}
       </section>
       {selectedNode ? (
         <section>
@@ -3536,11 +3540,11 @@ export function RightPanel() {
         <section className="task-dock" aria-label="Project task dock">
           <button
             type="button"
-            className="assets-dock-button task-dock-button"
+            className={`assets-dock-button task-dock-button${tasksOpen ? ' is-active' : ''}`}
             aria-label="Project Tasks"
             aria-expanded={tasksOpen}
             aria-controls="project-tasks-popover"
-            onClick={() => setTasksOpen((value) => !value)}
+            onClick={() => setOpenDock((current) => (current === 'tasks' ? undefined : 'tasks'))}
           >
             <Zap size={20} />
             <span className="task-dock-badge" aria-hidden="true">

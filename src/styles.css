@@ -949,7 +949,7 @@ div.server-list-item {
   box-shadow: 0 8px 18px rgba(15, 23, 42, 0.14);
 }
 
-.right-panel-popover-open .task-dock-button {
+.task-dock-button.is-active {
   border-color: rgba(94, 234, 212, 0.62);
   color: var(--teal);
   background:
@@ -2028,6 +2028,89 @@ textarea[aria-invalid="true"] {
   color: currentColor;
   font-size: 12px;
   font-weight: 900;
+}
+
+.asset-inspector-dialog {
+  width: min(760px, calc(100vw - 48px));
+  max-height: min(760px, calc(100dvh - 48px));
+  overflow: hidden;
+}
+
+.asset-inspector-body {
+  min-height: 0;
+  max-height: min(640px, calc(100dvh - 170px));
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.asset-inspector-body h3 {
+  margin: 6px 0 0;
+  color: var(--muted-light);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.asset-inspector-resources {
+  display: grid;
+  gap: 10px;
+}
+
+.asset-inspector-resource {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background:
+    linear-gradient(135deg, var(--media-preview-accent), transparent 62%),
+    var(--panel);
+}
+
+.asset-inspector-resource-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.asset-inspector-resource-title strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-inspector-resource-title em {
+  flex: 0 0 auto;
+  color: var(--teal);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.asset-inspector-preview {
+  min-height: 96px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  border: 1px dashed rgba(13, 148, 136, 0.26);
+  border-radius: 8px;
+  background: var(--media-preview-surface);
+  cursor: pointer;
+}
+
+.asset-inspector-preview:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+
+.asset-inspector-preview .resource-preview-image,
+.asset-inspector-preview .resource-preview-video {
+  max-width: 100%;
+  max-height: 220px;
+  object-fit: contain;
 }
 
 .local-action-fields {

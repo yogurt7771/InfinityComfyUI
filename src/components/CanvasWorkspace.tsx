@@ -45,7 +45,7 @@ import {
   X,
 } from 'lucide-react'
 import { EmptyNodeView, FunctionNodeView, GroupNodeView, ResourceNodeView, ResultGroupNodeView } from './NodeViews'
-import { ComfyWorkflowEditorDialog, FunctionManager, type EmbeddedComfySave } from './WorkbenchPanels'
+import { ComfyWorkflowEditorDialog, FunctionManager, RunInspector, type EmbeddedComfySave } from './WorkbenchPanels'
 import { ResourcePreview } from './ResourcePreview'
 import { FullResourcePreviewModal } from './ResourcePreviewModal'
 import { buildCanvasFlowEdges } from '../domain/canvasEdges'
@@ -1803,6 +1803,110 @@ function FunctionInputPickStrip({
   )
 }
 
+export function AssetInspectorDialog({
+  project,
+  inspectedNode,
+  inspectedResources,
+  inspectedTask,
+  previewResource,
+  onPreviewResourceChange,
+  onClose,
+  onFocusNode,
+}: {
+  project: ProjectState
+  inspectedNode: CanvasNode
+  inspectedResources: Resource[]
+  inspectedTask?: ExecutionTask
+  previewResource?: Resource
+  onPreviewResourceChange: (resource: Resource | undefined) => void
+  onClose: () => void
+  onFocusNode: (nodeId: string) => void
+}) {
+  return (
+    <div
+      className="local-action-backdrop asset-inspector-backdrop nodrag nopan"
+      onContextMenu={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+      }}
+      onMouseDown={(event) => {
+        event.stopPropagation()
+        if (event.target === event.currentTarget) onClose()
+      }}
+    >
+      <section
+        className="local-action-dialog asset-inspector-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Asset Inspector"
+        onContextMenu={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+        }}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header>
+          <div>
+            <h2>Asset Inspector</h2>
+            <span>{inspectedNode.type}</span>
+          </div>
+          <button type="button" aria-label="Close asset inspector" onClick={onClose}>
+            <X aria-hidden="true" size={16} />
+          </button>
+        </header>
+        <div className="inspector-block asset-inspector-body">
+          <strong>{inspectedNode.type}</strong>
+          <code>{inspectedNode.id}</code>
+          {inspectedResources.length > 0 ? (
+            <div className="asset-inspector-resources" aria-label="Inspected resources">
+              {inspectedResources.map((resource) => (
+                <article key={resource.id} className="asset-inspector-resource">
+                  <div className="asset-inspector-resource-title">
+                    <strong>{resource.name ?? resource.id}</strong>
+                    <em>{resource.type}</em>
+                  </div>
+                  <code>{resource.id}</code>
+                  <div
+                    className="asset-inspector-preview"
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Open ${resource.name ?? resource.id} preview`}
+                    onClick={() => onPreviewResourceChange(resource)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        onPreviewResourceChange(resource)
+                      }
+                    }}
+                  >
+                    <ResourcePreview resource={resource} />
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : null}
+          {inspectedTask ? <RunInspector project={project} task={inspectedTask} onFocusNode={onFocusNode} /> : null}
+          <h3>Node</h3>
+          <pre>{JSON.stringify({ id: inspectedNode.id, type: inspectedNode.type, data: inspectedNode.data }, null, 2)}</pre>
+          {inspectedResources.length > 0 ? (
+            <>
+              <h3>Resources</h3>
+              <pre>{JSON.stringify(inspectedResources, null, 2)}</pre>
+            </>
+          ) : null}
+        </div>
+        <FullResourcePreviewModal
+          resource={previewResource}
+          resources={
+            previewResource ? inspectedResources.filter((resource) => resource.type === previewResource.type) : []
+          }
+          onClose={() => onPreviewResourceChange(undefined)}
+        />
+      </section>
+    </div>
+  )
+}
+
 function CanvasSurface() {
   const project = useProjectStore((state) => state.project)
   const selectedNodeId = useProjectStore((state) => state.selectedNodeId)
@@ -1854,6 +1958,8 @@ function CanvasSurface() {
   const { screenToFlowPosition, setCenter } = useReactFlow()
   const [addMenu, setAddMenu] = useState<AddNodeMenuState | null>(null)
   const [quickToolbar, setQuickToolbar] = useState<QuickToolbarState>()
+  const [inspectorNodeId, setInspectorNodeId] = useState<string>()
+  const [inspectorPreviewResource, setInspectorPreviewResource] = useState<Resource>()
   const [functionNodeMenu, setFunctionNodeMenu] = useState<FunctionNodeMenuState>()
   const [groupNodeMenu, setGroupNodeMenu] = useState<GroupNodeMenuState>()
   const [functionEditor, setFunctionEditor] = useState<FunctionEditorState>()
@@ -2408,10 +2514,35 @@ function CanvasSurface() {
   }, [project.functions, sourceResourceRefs])
 
   const quickToolbarSourceNodeId = quickToolbar?.sourceNodeId
+  const quickToolbarResourceRefs = useMemo(
+    () => sourceResourceRefs(quickToolbarSourceNodeId),
+    [sourceResourceRefs, quickToolbarSourceNodeId],
+  )
   const localQuickActions = useMemo(
     () => quickActionsForSourceNode(quickToolbarSourceNodeId),
     [quickActionsForSourceNode, quickToolbarSourceNodeId],
   )
+  const inspectedNode = useMemo(
+    () => project.canvas.nodes.find((node) => node.id === inspectorNodeId),
+    [inspectorNodeId, project.canvas.nodes],
+  )
+  const inspectedResourceRefs = useMemo(
+    () => sourceResourceRefs(inspectorNodeId),
+    [sourceResourceRefs, inspectorNodeId],
+  )
+  const inspectedResources = useMemo(
+    () =>
+      inspectedResourceRefs
+        .map((ref) => project.resources[ref.resourceId])
+        .filter((resource): resource is Resource => Boolean(resource)),
+    [inspectedResourceRefs, project.resources],
+  )
+  const inspectedPrimaryResource = inspectedResources[0]
+  const inspectedTaskId =
+    inspectedNode?.type === 'result_group' && typeof inspectedNode.data.taskId === 'string'
+      ? inspectedNode.data.taskId
+      : inspectedPrimaryResource?.source.taskId
+  const inspectedTask = inspectedTaskId ? project.tasks[inspectedTaskId] : undefined
 
   useEffect(() => {
     setQuickToolbar((current) => {
@@ -2435,8 +2566,8 @@ function CanvasSurface() {
   }, [activeSelectedNodeIds])
 
   useEffect(() => {
-    if (quickToolbar && localQuickActions.length === 0) setQuickToolbar(undefined)
-  }, [localQuickActions.length, quickToolbar])
+    if (quickToolbar && quickToolbarResourceRefs.length === 0) setQuickToolbar(undefined)
+  }, [quickToolbar, quickToolbarResourceRefs.length])
 
   useLayoutEffect(() => {
     if (!quickToolbar) return
@@ -2451,7 +2582,7 @@ function CanvasSurface() {
 
     toolbar.style.left = `${left}px`
     toolbar.style.top = `${top}px`
-  }, [localQuickActions.length, quickToolbar])
+  }, [localQuickActions.length, quickToolbar, quickToolbarResourceRefs.length])
 
   useLayoutEffect(() => {
     if (!functionNodeMenu) return
@@ -2646,11 +2777,9 @@ function CanvasSurface() {
     if (selectedQuickSourceNodeId !== node.id) {
       recordNodeSelectionRecency([node.id])
       selectNode(node.id)
-      setQuickToolbar(undefined)
-      return
     }
 
-    if (quickActionsForSourceNode(node.id).length === 0) {
+    if (sourceResourceRefs(node.id).length === 0) {
       setQuickToolbar(undefined)
       return
     }
@@ -2660,6 +2789,45 @@ function CanvasSurface() {
       left: event.clientX,
       top: event.clientY,
     })
+  }
+
+  const openAssetInspector = (nodeId: string) => {
+    setQuickToolbar(undefined)
+    setFunctionNodeMenu(undefined)
+    setGroupNodeMenu(undefined)
+    setInspectorNodeId(nodeId)
+  }
+
+  const closeAssetInspector = () => {
+    setInspectorNodeId(undefined)
+    setInspectorPreviewResource(undefined)
+  }
+
+  useEffect(() => {
+    if (!inspectorNodeId) return undefined
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (inspectorPreviewResource) return
+      if (event.key === 'Escape') {
+        setInspectorNodeId(undefined)
+        setInspectorPreviewResource(undefined)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [inspectorNodeId, inspectorPreviewResource])
+
+  useEffect(() => {
+    if (inspectorNodeId && !inspectedNode) {
+      setInspectorNodeId(undefined)
+      setInspectorPreviewResource(undefined)
+    }
+  }, [inspectedNode, inspectorNodeId])
+
+  const focusInspectorNode = (nodeId: string) => {
+    selectNode(nodeId)
+    closeAssetInspector()
+    window.dispatchEvent(new CustomEvent('infinity-focus-node', { detail: { nodeId } }))
   }
 
   const openFunctionEditorForNode = (nodeId: string, scope: 'node' | 'all') => {
@@ -3298,7 +3466,7 @@ function CanvasSurface() {
           ) : null}
         </div>
       ) : null}
-      {quickToolbar && localQuickActions.length > 0 ? (
+      {quickToolbar && quickToolbarResourceRefs.length > 0 ? (
         <div
           ref={quickToolbarRef}
           aria-label="Resource quick actions"
@@ -3309,6 +3477,15 @@ function CanvasSurface() {
           }}
           onMouseDown={(event) => event.stopPropagation()}
         >
+          <button
+            type="button"
+            aria-label="Inspect Asset"
+            title="Inspect asset"
+            onClick={() => openAssetInspector(quickToolbar.sourceNodeId)}
+          >
+            <Info size={16} />
+            <span>Inspect</span>
+          </button>
           {localQuickActions.map((fn) => (
             <button
               key={fn.id}
@@ -3319,8 +3496,9 @@ function CanvasSurface() {
                 const inputValues = buildFunctionRunInputDraft(
                   fn,
                   project.resources,
-                  uniqueResourceRefs(sourceResourceRefs(quickToolbar.sourceNodeId)),
+                  uniqueResourceRefs(quickToolbarResourceRefs),
                 )
+                setQuickToolbar(undefined)
                 openFunctionRunDialog({
                   functionId: fn.id,
                   inputValues,
@@ -3334,6 +3512,18 @@ function CanvasSurface() {
             </button>
           ))}
         </div>
+      ) : null}
+      {inspectedNode ? (
+        <AssetInspectorDialog
+          project={project}
+          inspectedNode={inspectedNode}
+          inspectedResources={inspectedResources}
+          inspectedTask={inspectedTask}
+          previewResource={inspectorPreviewResource}
+          onPreviewResourceChange={setInspectorPreviewResource}
+          onClose={closeAssetInspector}
+          onFocusNode={focusInspectorNode}
+        />
       ) : null}
       {functionNodeMenu ? (
         <div

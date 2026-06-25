@@ -31,7 +31,9 @@ describe('App', () => {
     expect(screen.getByRole('heading', { name: 'Infinity ComfyUI' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Assets' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Functions' })).not.toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'ComfyUI Servers' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Inspector' })).not.toBeInTheDocument()
+    expect(screen.queryByText('No selection')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'ComfyUI Servers' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Run MVP' })).not.toBeInTheDocument()
   })
 

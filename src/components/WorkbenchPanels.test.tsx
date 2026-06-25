@@ -1040,17 +1040,25 @@ describe('LeftPanel', () => {
     expect(within(dialog).getByLabelText('Workflow editor ComfyUI server Flux Render')).toHaveValue('endpoint_local')
   })
 
-  it('shows ComfyUI server status on the right panel and edits servers in management', () => {
-    render(
-      <>
-        <RightPanel />
-        <SettingsPage onClose={() => undefined} />
-      </>,
-    )
+  it('shows ComfyUI server status from a right-panel dock popover', () => {
+    render(<RightPanel />)
 
+    expect(screen.queryByLabelText('ComfyUI server list')).not.toBeInTheDocument()
+
+    const serverToggle = screen.getByRole('button', { name: 'ComfyUI Servers' })
+    expect(serverToggle).toBeVisible()
+    expect(serverToggle).toHaveAttribute('aria-expanded', 'false')
+
+    fireEvent.click(serverToggle)
+
+    expect(serverToggle).toHaveAttribute('aria-expanded', 'true')
     const serverList = screen.getByLabelText('ComfyUI server list')
     expect(within(serverList).getByText(/online/)).toBeVisible()
     expect(within(serverList).getByText(/queue 1/)).toBeVisible()
+  })
+
+  it('edits ComfyUI servers from settings management', () => {
+    render(<SettingsPage onClose={() => undefined} />)
 
     fireEvent.click(screen.getByRole('button', { name: 'ComfyUI Server Management' }))
     const dialog = screen.getByRole('dialog', { name: 'ComfyUI Server Management' })
@@ -1215,7 +1223,7 @@ describe('LeftPanel', () => {
     expect(screen.getAllByText('task_failed')[0]).toBeVisible()
   })
 
-  it('shows selected run execution inputs, workflow, timing, and node navigation in the inspector', () => {
+  it('keeps selected run queue visible without showing static inspector details', () => {
     const state = panelProject()
     state.resources.res_prompt = {
       id: 'res_prompt',
@@ -1292,34 +1300,17 @@ describe('LeftPanel', () => {
       },
     }
     projectStore.setState({ project: state, selectedNodeId: 'node_result_1' })
-    const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
 
-    const { container } = render(<RightPanel />)
+    render(<RightPanel />)
 
-    expect(screen.getByRole('heading', { name: 'Run Details' })).toBeVisible()
-    expect(screen.getByText('Started')).toBeVisible()
-    expect(screen.getByRole('textbox', { name: 'Run detail Status' }).tagName).toBe('INPUT')
-    expect(screen.getByRole('textbox', { name: 'Run detail Started' })).toHaveValue('2026-05-09T00:00:05.000Z')
-    expect(screen.getByText('Completed')).toBeVisible()
-    expect(screen.getByRole('textbox', { name: 'Run detail Completed' })).toHaveValue('2026-05-09T00:00:10.000Z')
-    expect(screen.getByRole('heading', { name: 'Inputs' })).toBeVisible()
-    expect(screen.getByText('Prompt')).toBeVisible()
-    expect(screen.getByText('required')).toBeVisible()
-    expect(screen.getByRole('textbox', { name: 'Input value Prompt' })).toHaveValue('sunlit kitchen')
-    expect(screen.getByText('Batch Size')).toBeVisible()
-    expect(screen.getByText('optional')).toBeVisible()
-    expect(screen.getByRole('textbox', { name: 'Input value Batch Size' })).toHaveValue('2')
-    expect(screen.getByRole('heading', { name: 'Final Workflow' })).toBeVisible()
-    expect(screen.getByText(/EmptyFlux2LatentImage/)).toBeVisible()
-    expect(container.querySelector('.run-workflow-json .json-key')).not.toBeNull()
-    expect(container.querySelector('.run-workflow-json .json-string')).not.toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Locate Prompt node' }))
-    expect(projectStore.getState().selectedNodeId).toBe('node_res_prompt')
-    expect(dispatchSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'infinity-focus-node',
-      }),
-    )
+    expect(screen.queryByRole('heading', { name: 'Inspector' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Run Details' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Inputs' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Final Workflow' })).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Run Queue' })).toBeVisible()
+    const queue = screen.getByLabelText('Selected node run history')
+    expect(within(queue).getByText('task_audit')).toBeVisible()
+    expect(within(queue).getByText('Local ComfyUI')).toBeVisible()
   })
 
   it('shows project tasks from a task dock popover with expandable cards and run details', () => {
@@ -1384,7 +1375,7 @@ describe('LeftPanel', () => {
     expect(screen.getByRole('heading', { name: 'Final Workflow' })).toBeVisible()
     expect(screen.getByText(/CLIPTextEncode/)).toBeVisible()
 
-    fireEvent.keyDown(screen.getByRole('complementary', { name: 'Inspector panel' }), { key: 'Escape' })
+    fireEvent.keyDown(screen.getByLabelText('Project Tasks popover'), { key: 'Escape' })
     expect(screen.queryByLabelText('Project task list')).not.toBeInTheDocument()
   })
 

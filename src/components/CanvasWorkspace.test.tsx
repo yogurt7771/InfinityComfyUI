@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { buildCanvasNodeZIndexMap, CanvasWorkspace, FunctionRunDialog } from './CanvasWorkspace'
+import { AssetInspectorDialog, buildCanvasNodeZIndexMap, CanvasWorkspace, FunctionRunDialog } from './CanvasWorkspace'
 import { projectStore } from '../store/projectStore'
 import type { CanvasNode, GenerationFunction, PrimitiveInputValue, ProjectState, Resource, ResourceRef } from '../domain/types'
 
@@ -354,6 +354,198 @@ describe('CanvasWorkspace', () => {
     fireEvent.contextMenu(backdrop, { clientX: 220, clientY: 180 })
 
     expect(screen.queryByRole('menu', { name: 'Add node' })).not.toBeInTheDocument()
+  })
+
+  it('opens an inspector dialog from an asset node context menu', async () => {
+    const inspectProject: ProjectState = {
+      ...originalProject,
+      project: { ...originalProject.project, id: 'project_asset_inspector' },
+      canvas: {
+        nodes: [
+          {
+            id: 'node_asset_inspect',
+            type: 'resource',
+            position: { x: 0, y: 0 },
+            data: { resourceId: 'res_inspect', resourceType: 'image', title: 'Inspector Reference' },
+          },
+        ],
+        edges: [],
+        viewport: { x: 0, y: 0, zoom: 1 },
+      },
+      resources: {
+        res_inspect: {
+          id: 'res_inspect',
+          type: 'image',
+          name: 'Inspector Reference',
+          value: {
+            assetId: 'asset_inspect',
+            url: 'data:image/png;base64,abc',
+            filename: 'inspect.png',
+            mimeType: 'image/png',
+            sizeBytes: 123,
+          },
+          source: { kind: 'user_upload' },
+          metadata: { createdAt: '2026-06-25T00:00:00.000Z' },
+        },
+      },
+      functions: {},
+      tasks: {},
+    }
+    projectStore.setState({
+      project: inspectProject,
+      selectedNodeId: undefined,
+      selectedNodeIds: [],
+    } as Partial<ReturnType<typeof projectStore.getState>>)
+
+    const { container } = render(<CanvasWorkspace />)
+    const assetNode = await waitFor(() => {
+      const element = container.querySelector<HTMLElement>('.react-flow__node[data-id="node_asset_inspect"]')
+      expect(element).not.toBeNull()
+      return element!
+    })
+
+    fireEvent.contextMenu(assetNode, { clientX: 220, clientY: 160 })
+    fireEvent.click(screen.getByRole('button', { name: /Inspect|查看/ }))
+
+    const dialog = screen.getByRole('dialog', { name: /Inspector|查看/ })
+    expect(within(dialog).getByText('node_asset_inspect')).toBeVisible()
+    expect(dialog).toHaveTextContent('res_inspect')
+    expect(within(dialog).getByText('image')).toBeVisible()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Open Inspector Reference preview' }))
+    expect(screen.getByRole('dialog', { name: /Preview inspect\.png/ })).toBeVisible()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: /Preview inspect\.png/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: /Inspector|查看/ })).toBeVisible()
+  })
+
+  it('shows run details and navigation from a generated asset inspector', async () => {
+    const runProject: ProjectState = {
+      ...originalProject,
+      project: { ...originalProject.project, id: 'project_result_asset_inspector' },
+      canvas: {
+        nodes: [
+          { id: 'node_prompt', type: 'resource', position: { x: 0, y: 0 }, data: { resourceId: 'res_prompt', title: 'Prompt' } },
+          {
+            id: 'node_result_inspect',
+            type: 'resource',
+            position: { x: 320, y: 0 },
+            data: {
+              resourceId: 'res_result',
+              resourceType: 'text',
+              title: 'Generated Result',
+            },
+          },
+        ],
+        edges: [],
+        viewport: { x: 0, y: 0, zoom: 1 },
+      },
+      resources: {
+        res_prompt: {
+          id: 'res_prompt',
+          type: 'text',
+          name: 'Prompt',
+          value: 'sunlit kitchen',
+          source: { kind: 'manual_input' },
+          metadata: { createdAt: '2026-06-25T00:00:00.000Z' },
+        },
+        res_result: {
+          id: 'res_result',
+          type: 'text',
+          name: 'Generated Result',
+          value: 'rendered text',
+          source: {
+            kind: 'function_output',
+            taskId: 'task_result_inspect',
+            functionNodeId: 'node_function',
+            outputKey: 'text',
+          },
+          metadata: { createdAt: '2026-06-25T00:00:10.000Z' },
+        },
+      },
+      tasks: {
+        task_result_inspect: {
+          id: 'task_result_inspect',
+          functionNodeId: 'node_function',
+          functionId: 'fn_render',
+          runIndex: 1,
+          runTotal: 1,
+          status: 'succeeded',
+          inputRefs: {},
+          inputSnapshot: {},
+          inputValuesSnapshot: {
+            prompt: {
+              key: 'prompt',
+              label: 'Prompt',
+              type: 'text',
+              required: true,
+              source: 'resource',
+              resourceId: 'res_prompt',
+              resourceName: 'Prompt',
+              value: 'sunlit kitchen',
+            },
+          },
+          paramsSnapshot: {},
+          workflowTemplateSnapshot: {},
+          compiledWorkflowSnapshot: {
+            '6': {
+              class_type: 'CLIPTextEncode',
+              inputs: { text: 'sunlit kitchen' },
+            },
+          },
+          seedPatchLog: [],
+          outputRefs: {},
+          createdAt: '2026-06-25T00:00:01.000Z',
+          startedAt: '2026-06-25T00:00:02.000Z',
+          updatedAt: '2026-06-25T00:00:11.000Z',
+          completedAt: '2026-06-25T00:00:11.000Z',
+        },
+      },
+      functions: {
+        fn_render: {
+          id: 'fn_render',
+          name: 'Render',
+          type: 'comfyui',
+          description: '',
+          workflow: { format: 'comfyui_api_json', rawJson: {} },
+          inputs: [],
+          outputs: [],
+          createdAt: '2026-06-25T00:00:00.000Z',
+          updatedAt: '2026-06-25T00:00:00.000Z',
+        },
+      },
+    }
+    projectStore.setState({
+      project: runProject,
+      selectedNodeId: undefined,
+      selectedNodeIds: [],
+    } as Partial<ReturnType<typeof projectStore.getState>>)
+    const onFocusNode = vi.fn()
+    const resultNode = runProject.canvas.nodes.find((node) => node.id === 'node_result_inspect')
+    expect(resultNode).toBeDefined()
+
+    render(
+      <AssetInspectorDialog
+        project={runProject}
+        inspectedNode={resultNode!}
+        inspectedResources={[runProject.resources.res_result!]}
+        inspectedTask={runProject.tasks.task_result_inspect}
+        previewResource={undefined}
+        onPreviewResourceChange={vi.fn()}
+        onClose={vi.fn()}
+        onFocusNode={onFocusNode}
+      />,
+    )
+
+    const dialog = screen.getByRole('dialog', { name: /Inspector|查看/ })
+    expect(within(dialog).getByRole('heading', { name: 'Run Details' })).toBeVisible()
+    expect(within(dialog).getByRole('heading', { name: 'Inputs' })).toBeVisible()
+    expect(within(dialog).getByRole('textbox', { name: 'Input value Prompt' })).toHaveValue('sunlit kitchen')
+    expect(within(dialog).getByRole('heading', { name: 'Final Workflow' })).toBeVisible()
+    expect(within(dialog).getByText(/CLIPTextEncode/)).toBeVisible()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Locate Prompt node' }))
+    expect(onFocusNode).toHaveBeenCalledWith('node_prompt')
   })
 
   it('keeps group nodes below assets and orders assets by selection recency before creation time', () => {
