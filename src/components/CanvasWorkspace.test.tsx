@@ -1,7 +1,9 @@
+import { useState } from 'react'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { CanvasWorkspace } from './CanvasWorkspace'
+import { CanvasWorkspace, FunctionRunDialog } from './CanvasWorkspace'
 import { projectStore } from '../store/projectStore'
+import type { GenerationFunction, PrimitiveInputValue, Resource, ResourceRef } from '../domain/types'
 
 describe('CanvasWorkspace', () => {
   const originalProject = projectStore.getState().project
@@ -34,6 +36,47 @@ describe('CanvasWorkspace', () => {
     render(<CanvasWorkspace />)
     fireEvent.contextMenu(screen.getByLabelText('Canvas'), { clientX: 180, clientY: 160 })
     return screen.getByRole('menu', { name: 'Add node' })
+  }
+
+  const imageResource: Resource = {
+    id: 'res_image',
+    type: 'image',
+    name: 'reference.png',
+    value: {
+      assetId: 'asset_image',
+      url: 'data:image/png;base64,abc',
+      filename: 'reference.png',
+      mimeType: 'image/png',
+      sizeBytes: 12,
+    },
+    source: { kind: 'user_upload' },
+  }
+
+  const renderFunctionRunDialog = (initialFunction: GenerationFunction) => {
+    const onRun = vi.fn()
+    const Wrapper = () => {
+      const [functionDef, setFunctionDef] = useState(initialFunction)
+      const [values, setValues] = useState<Record<string, PrimitiveInputValue | ResourceRef>>({
+        image: { resourceId: 'res_image', type: 'image' },
+      })
+      return (
+        <FunctionRunDialog
+          functionDef={functionDef}
+          values={values}
+          runCount={1}
+          resourcesById={{ res_image: imageResource }}
+          onClose={vi.fn()}
+          onPickInput={vi.fn()}
+          onRun={onRun}
+          onFunctionDefChange={setFunctionDef}
+          onRunCountChange={vi.fn()}
+          onValuesChange={setValues}
+        />
+      )
+    }
+
+    render(<Wrapper />)
+    return { onRun }
   }
 
   it('separates built-in runners from saved function templates in the add menu', () => {
@@ -117,5 +160,79 @@ describe('CanvasWorkspace', () => {
     expect(within(dialog).getByRole('combobox', { name: 'ComfyUI server for temporary workflow' })).toBeInTheDocument()
     expect(within(dialog).getByRole('button', { name: 'Edit temporary workflow in ComfyUI' })).toBeInTheDocument()
     expect(screen.queryByRole('menu', { name: 'Add node' })).not.toBeInTheDocument()
+  })
+
+  it('shows media input previews inside the function run slots', () => {
+    renderFunctionRunDialog({
+      id: 'temp_comfy',
+      name: 'ComfyUI Workflow',
+      category: 'Render',
+      workflow: {
+        format: 'comfyui_api_json',
+        rawJson: {
+          '10': { class_type: 'LoadImage', _meta: { title: 'Load Image' }, inputs: { image: 'reference.png' } },
+        },
+      },
+      inputs: [
+        {
+          key: 'image',
+          label: 'Image',
+          type: 'image',
+          required: true,
+          bind: { nodeId: '10', nodeTitle: 'Load Image', path: 'inputs.image' },
+          upload: { strategy: 'comfy_upload' },
+        },
+      ],
+      outputs: [],
+      createdAt: '2026-06-25T00:00:00.000Z',
+      updatedAt: '2026-06-25T00:00:00.000Z',
+    })
+
+    const field = screen.getByText('Image').closest('.function-run-field') as HTMLElement
+    expect(within(field).getByRole('img', { name: 'reference.png' })).toBeInTheDocument()
+  })
+
+  it('allows temporary ComfyUI runners to expose and remove workflow input slots', () => {
+    renderFunctionRunDialog({
+      id: 'temp_comfy',
+      name: 'ComfyUI Workflow',
+      category: 'Render',
+      workflow: {
+        format: 'comfyui_api_json',
+        rawJson: {
+          '10': { class_type: 'LoadImage', _meta: { title: 'Load Image' }, inputs: { image: 'reference.png' } },
+          '20': {
+            class_type: 'Boolean',
+            _meta: { title: 'Enable Detailer' },
+            inputs: { value: true },
+          },
+        },
+      },
+      inputs: [
+        {
+          key: 'image',
+          label: 'Image',
+          type: 'image',
+          required: true,
+          bind: { nodeId: '10', nodeTitle: 'Load Image', path: 'inputs.image' },
+          upload: { strategy: 'comfy_upload' },
+        },
+      ],
+      outputs: [],
+      createdAt: '2026-06-25T00:00:00.000Z',
+      updatedAt: '2026-06-25T00:00:00.000Z',
+    })
+
+    const dialog = screen.getByRole('dialog', { name: 'Run ComfyUI Workflow' })
+    fireEvent.change(within(dialog).getByRole('combobox', { name: 'Workflow input slot' }), {
+      target: { value: '20\u001Finputs.value' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add input slot' }))
+
+    expect(within(dialog).getByLabelText('Manual input Value')).toHaveAttribute('type', 'checkbox')
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete input slot value' }))
+
+    expect(within(dialog).queryByLabelText('Manual input Value')).not.toBeInTheDocument()
   })
 })

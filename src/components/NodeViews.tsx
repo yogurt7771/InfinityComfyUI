@@ -148,7 +148,7 @@ const mediaValue = (resource: Resource) =>
 const resourcePreviewName = (resource: Resource) => {
   const media = mediaValue(resource)
   if (media?.filename) return media.filename
-  if (resource.type === 'text' || resource.type === 'number') {
+  if (resource.type === 'text' || resource.type === 'number' || resource.type === 'boolean') {
     const name = resource.name ?? resource.id
     return name.toLowerCase().endsWith('.txt') ? name : `${name}.txt`
   }
@@ -166,7 +166,7 @@ const connectedPrimitiveLabel = (resource: Resource | undefined, fallback: strin
 function optionalPrimitiveValue(input: FunctionInputDef, value: PrimitiveInputValue | ResourceRef | undefined) {
   if (isResourceRef(value)) return undefined
   if (value !== undefined && value !== null) return value
-  return input.defaultValue ?? (input.type === 'number' ? 0 : '')
+  return input.defaultValue ?? (input.type === 'number' ? 0 : input.type === 'boolean' ? false : '')
 }
 
 function primitiveValueAtPath(target: unknown, path?: string) {
@@ -176,7 +176,9 @@ function primitiveValueAtPath(target: unknown, path?: string) {
     if (!cursor || typeof cursor !== 'object' || !(part in cursor)) return undefined
     cursor = (cursor as Record<string, unknown>)[part]
   }
-  return typeof cursor === 'string' || typeof cursor === 'number' || cursor === null ? cursor : undefined
+  return typeof cursor === 'string' || typeof cursor === 'number' || typeof cursor === 'boolean' || cursor === null
+    ? cursor
+    : undefined
 }
 
 const normalizedWorkflowKey = (value: string) => value.trim().toLowerCase().replace(/[\s_-]+/g, '')
@@ -313,6 +315,21 @@ function OptionalPrimitiveInput({
     )
   }
 
+  if (input.type === 'boolean') {
+    return (
+      <label className="slot-inline-boolean nodrag nopan">
+        <input
+          aria-label={label}
+          checked={Boolean(value)}
+          type="checkbox"
+          onChange={(event) => onUpdate(nodeId, input.key, event.target.checked)}
+          onDoubleClick={(event) => event.stopPropagation()}
+        />
+        <span>{Boolean(value) ? 'true' : 'false'}</span>
+      </label>
+    )
+  }
+
   return (
     <CommittedTextarea
       ariaLabel={label}
@@ -386,7 +403,7 @@ function FunctionInputSlot({
   workflowValue?: PrimitiveInputValue
   textInputMinHeight?: number
 }) {
-  const canEditInline = !input.required && (input.type === 'text' || input.type === 'number')
+  const canEditInline = !input.required && (input.type === 'text' || input.type === 'number' || input.type === 'boolean')
   const connectedRef = isResourceRef(value) ? value : undefined
   const connectedResource = connectedRef ? resourcesById[connectedRef.resourceId] : undefined
   const inputLabel = input.label || input.key
@@ -406,7 +423,7 @@ function FunctionInputSlot({
   return (
     <div
       aria-invalid={missing ? 'true' : undefined}
-      className={`slot-row input-slot ${input.required ? 'required-slot' : 'optional-slot'} ${canEditInline ? 'primitive-slot' : ''} ${canEditInline && input.type === 'text' ? 'text-primitive-slot' : ''} ${canEditInline && input.type === 'number' ? 'number-primitive-slot' : ''} ${connectedRef ? 'connected-slot' : ''} ${connectedMediaPreview ? 'media-connected-slot' : ''} ${missing ? 'missing-slot' : ''}`}
+      className={`slot-row input-slot ${input.required ? 'required-slot' : 'optional-slot'} ${canEditInline ? 'primitive-slot' : ''} ${canEditInline && input.type === 'text' ? 'text-primitive-slot' : ''} ${canEditInline && input.type === 'number' ? 'number-primitive-slot' : ''} ${canEditInline && input.type === 'boolean' ? 'boolean-primitive-slot' : ''} ${connectedRef ? 'connected-slot' : ''} ${connectedMediaPreview ? 'media-connected-slot' : ''} ${missing ? 'missing-slot' : ''}`}
       data-testid={`function-input-slot-${input.key}`}
     >
       <Handle
@@ -658,7 +675,7 @@ const copyResource = async (resource: Resource) => {
 const resourceDownloadName = (resource: Resource) => {
   const media = mediaValue(resource)
   if (media?.filename) return media.filename
-  if (resource.type === 'text' || resource.type === 'number') {
+  if (resource.type === 'text' || resource.type === 'number' || resource.type === 'boolean') {
     const name = resource.name ?? resource.id
     return name.toLowerCase().endsWith('.txt') ? name : `${name}.txt`
   }
@@ -736,7 +753,8 @@ function ResourceActions({
   resource: Resource
   onUpload?: (file: File | undefined) => void
 }) {
-  const hasDownloadableValue = resource.type === 'text' || resource.type === 'number' || Boolean(mediaValue(resource)?.url)
+  const hasDownloadableValue =
+    resource.type === 'text' || resource.type === 'number' || resource.type === 'boolean' || Boolean(mediaValue(resource)?.url)
 
   return (
     <div className="resource-node-actions nodrag nopan">
@@ -1752,7 +1770,7 @@ function NodeReferenceResourcePreview({ referenceTitle, resource }: { referenceT
   const mediaSource = usePreviewMediaSource(resource)
   const mediaLabel = resource.name ?? mediaValue(resource)?.filename ?? resource.id
 
-  if (resource.type === 'text' || resource.type === 'number') {
+  if (resource.type === 'text' || resource.type === 'number' || resource.type === 'boolean') {
     return (
       <span
         aria-label={`${referenceTitle} reference ${resource.type} preview`}

@@ -7,7 +7,7 @@ import { createOpenAIImageFunction, OPENAI_IMAGE_FUNCTION_ID } from '../domain/o
 import { createGeminiImageFunction, GEMINI_IMAGE_FUNCTION_ID } from '../domain/geminiImage'
 import { REQUEST_FUNCTION_ID } from '../domain/requestFunction'
 import { LOCAL_TEXT_TRIM_FUNCTION_ID } from '../domain/localTransforms'
-import type { GenerationFunction } from '../domain/types'
+import type { FunctionInputDef, GenerationFunction } from '../domain/types'
 
 describe('project store actions', () => {
   const flushPromises = async () => {
@@ -54,7 +54,56 @@ describe('project store actions', () => {
   })
 
   const addTestWorkflowFunction = (slice: ReturnType<typeof createProjectSlice>) => {
-    slice.getState().addFunctionFromWorkflow('Interior Render Workflow', testComfyWorkflow())
+    const functionId = slice.getState().addFunctionFromWorkflow('Interior Render Workflow', testComfyWorkflow())
+    const promptInput: FunctionInputDef = {
+      key: 'prompt',
+      label: 'Prompt',
+      type: 'text',
+      required: true,
+      defaultValue: 'warm interior render',
+      bind: { nodeId: '6', nodeTitle: 'Positive Prompt', path: 'inputs.text' },
+      upload: { strategy: 'none' },
+    }
+    slice.setState((state) => ({
+      project: {
+        ...state.project,
+        functions: {
+          ...state.project.functions,
+          [functionId]: {
+            ...state.project.functions[functionId]!,
+            inputs: [promptInput, ...state.project.functions[functionId]!.inputs],
+          },
+        },
+      },
+    }))
+  }
+
+  const exposePromptInput = (
+    slice: ReturnType<typeof createProjectSlice>,
+    functionId: string,
+    options: { nodeId: string; nodeTitle: string; defaultValue?: string },
+  ) => {
+    const promptInput: FunctionInputDef = {
+      key: 'prompt',
+      label: 'Prompt',
+      type: 'text',
+      required: true,
+      defaultValue: options.defaultValue ?? '',
+      bind: { nodeId: options.nodeId, nodeTitle: options.nodeTitle, path: 'inputs.text' },
+      upload: { strategy: 'none' },
+    }
+    slice.setState((state) => ({
+      project: {
+        ...state.project,
+        functions: {
+          ...state.project.functions,
+          [functionId]: {
+            ...state.project.functions[functionId]!,
+            inputs: [promptInput, ...state.project.functions[functionId]!.inputs],
+          },
+        },
+      },
+    }))
   }
 
   it('creates, switches, edits, and deletes local projects', () => {
@@ -2200,7 +2249,7 @@ describe('project store actions', () => {
       await slice.getState().runFunctionNodeWithComfy('node_edit', 1)
 
       expect(slice.getState().project.canvas.nodes[1].data.inputValues).toEqual({})
-      expect(slice.getState().project.canvas.nodes[1].data.missingInputKeys).toEqual(['prompt', 'image'])
+      expect(slice.getState().project.canvas.nodes[1].data.missingInputKeys).toEqual(['image'])
       expect(uploadImage).not.toHaveBeenCalled()
       expect(queuedWorkflows).toEqual([])
       expect(slice.getState().project.tasks).toEqual({})
@@ -3702,7 +3751,7 @@ describe('project store actions', () => {
           },
         },
       }))
-      slice.getState().addFunctionFromWorkflow('Image Edit', {
+      const functionId = slice.getState().addFunctionFromWorkflow('Image Edit', {
         '9': { class_type: 'SaveImage', _meta: { title: 'Save Image' }, inputs: { images: ['75:65', 0] } },
         '76': { class_type: 'LoadImage', _meta: { title: 'Load Image' }, inputs: { image: 'old.png' } },
         '75:74': {
@@ -3710,6 +3759,11 @@ describe('project store actions', () => {
           _meta: { title: 'CLIP Text Encode (Positive Prompt)' },
           inputs: { text: 'old prompt' },
         },
+      })
+      exposePromptInput(slice, functionId, {
+        nodeId: '75:74',
+        nodeTitle: 'CLIP Text Encode (Positive Prompt)',
+        defaultValue: 'old prompt',
       })
       slice.getState().addFunctionNode('fn_1')
       slice.setState((state) => ({

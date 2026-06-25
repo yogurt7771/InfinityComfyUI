@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createGenerationFunctionFromWorkflow, injectWorkflowInputs, parseWorkflowNodes } from './workflow'
+import { createGenerationFunctionFromWorkflow, injectWorkflowInputs, parseWorkflowNodes, workflowInputCandidates } from './workflow'
 import type { FunctionInputDef, Resource } from './types'
 
 describe('workflow helpers', () => {
@@ -156,6 +156,32 @@ describe('workflow helpers', () => {
     expect(compiled['75:66']!.inputs!.text).toBe('unrelated legacy field')
   })
 
+  it('injects boolean primitive values into configured workflow paths', () => {
+    const workflow = {
+      '32': {
+        class_type: 'Boolean',
+        _meta: { title: 'Enable Detailer' },
+        inputs: {
+          value: false,
+        },
+      },
+    }
+    const inputs: FunctionInputDef[] = [
+      {
+        key: 'enable_detailer',
+        label: 'Enable Detailer',
+        type: 'boolean',
+        required: false,
+        bind: { nodeId: '32', nodeTitle: 'Enable Detailer', path: 'inputs.value' },
+      },
+    ]
+
+    const compiled = injectWorkflowInputs(workflow, inputs, { enable_detailer: true }, {})
+
+    expect(compiled['32']!.inputs!.value).toBe(true)
+    expect(workflow['32'].inputs.value).toBe(false)
+  })
+
   it.each([
     ['image', 'input/kitchen.png', 'image/png'],
     ['video', 'input/clip.mp4', 'video/mp4'],
@@ -202,8 +228,8 @@ describe('workflow helpers', () => {
     expect(compiled['76']!.inputs!.text).toBe('unrelated legacy field')
   })
 
-  it('infers Flux text-to-image prompt and SaveImage bindings from workflow node metadata', () => {
-    const fn = createGenerationFunctionFromWorkflow('fn_1', 'Flux Text', {
+  it('keeps Flux text prompts as manual candidates while still detecting SaveImage outputs', () => {
+    const workflow = {
       '9': {
         class_type: 'SaveImage',
         _meta: { title: 'Save Image' },
@@ -219,20 +245,24 @@ describe('workflow helpers', () => {
         _meta: { title: 'CLIP Text Encode (Positive Prompt)' },
         inputs: { text: 'warm room', clip: ['75:71', 0] },
       },
-    }, '2026-05-08T09:00:00.000Z')
+    }
+    const fn = createGenerationFunctionFromWorkflow('fn_1', 'Flux Text', workflow, '2026-05-08T09:00:00.000Z')
 
-    expect(fn.inputs).toMatchObject([
+    expect(fn.inputs).toEqual([])
+    expect(workflowInputCandidates(workflow)).toMatchObject([
       {
-        key: 'prompt',
-        type: 'text',
-        required: true,
-        bind: { nodeId: '75:74', nodeTitle: 'CLIP Text Encode (Positive Prompt)', path: 'inputs.text' },
-      },
-      {
-        key: 'negative_prompt',
+        key: 'text',
         type: 'text',
         required: false,
+        defaultValue: '',
         bind: { nodeId: '75:67', nodeTitle: 'CLIP Text Encode (Negative Prompt)', path: 'inputs.text' },
+      },
+      {
+        key: 'text_2',
+        type: 'text',
+        required: false,
+        defaultValue: 'warm room',
+        bind: { nodeId: '75:74', nodeTitle: 'CLIP Text Encode (Positive Prompt)', path: 'inputs.text' },
       },
     ])
     expect(fn.outputs).toEqual([
@@ -267,11 +297,6 @@ describe('workflow helpers', () => {
 
     expect(fn.inputs).toMatchObject([
       {
-        key: 'prompt',
-        type: 'text',
-        bind: { nodeId: '75:74', path: 'inputs.text' },
-      },
-      {
         key: 'image',
         type: 'image',
         required: true,
@@ -282,7 +307,7 @@ describe('workflow helpers', () => {
     expect(fn.category).toBe('Edit')
   })
 
-  it('infers numeric widget inputs from unlinked primitive workflow fields', () => {
+  it('keeps primitive workflow widget values internal by default', () => {
     const fn = createGenerationFunctionFromWorkflow('fn_1', 'Latent Size', {
       '14': {
         class_type: 'EmptyLatentImage',
@@ -290,6 +315,8 @@ describe('workflow helpers', () => {
         inputs: {
           width: 1024,
           height: 768,
+          enable_detailer: true,
+          prompt: 'keep internal',
           batch_size: ['11', 0],
         },
       },
@@ -300,22 +327,57 @@ describe('workflow helpers', () => {
       },
     }, '2026-05-08T09:00:00.000Z')
 
-    expect(fn.inputs).toMatchObject([
+    expect(fn.inputs).toEqual([])
+  })
+
+  it('lists primitive and media workflow input candidates for manual slot exposure', () => {
+    const candidates = workflowInputCandidates({
+      '14': {
+        class_type: 'EmptyLatentImage',
+        _meta: { title: 'Latent Size' },
+        inputs: {
+          width: 1024,
+          enable_detailer: true,
+          note: 'manual note',
+          image: ['11', 0],
+        },
+      },
+      '20': {
+        class_type: 'LoadVideo',
+        _meta: { title: 'Input Video' },
+        inputs: {
+          video: 'input.mp4',
+        },
+      },
+    })
+
+    expect(candidates).toMatchObject([
       {
         key: 'width',
         label: 'Width',
         type: 'number',
-        required: false,
         defaultValue: 1024,
         bind: { nodeId: '14', nodeTitle: 'Latent Size', path: 'inputs.width' },
       },
       {
-        key: 'height',
-        label: 'Height',
-        type: 'number',
-        required: false,
-        defaultValue: 768,
-        bind: { nodeId: '14', nodeTitle: 'Latent Size', path: 'inputs.height' },
+        key: 'enable_detailer',
+        label: 'Enable Detailer',
+        type: 'boolean',
+        defaultValue: true,
+        bind: { nodeId: '14', nodeTitle: 'Latent Size', path: 'inputs.enable_detailer' },
+      },
+      {
+        key: 'note',
+        label: 'Note',
+        type: 'text',
+        defaultValue: 'manual note',
+        bind: { nodeId: '14', nodeTitle: 'Latent Size', path: 'inputs.note' },
+      },
+      {
+        key: 'video',
+        label: 'Video',
+        type: 'video',
+        bind: { nodeId: '20', nodeTitle: 'Input Video', path: 'inputs.video' },
       },
     ])
   })

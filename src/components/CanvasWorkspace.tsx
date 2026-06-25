@@ -26,10 +26,27 @@ import {
   useReactFlow,
   useViewport,
 } from '@xyflow/react'
-import { CaseSensitive, GitCompareArrows, Grid2X2, Image, Info, Layers, MousePointer2, Pencil, Scissors, Shrink, Video, Volume2, X } from 'lucide-react'
+import {
+  CaseSensitive,
+  GitCompareArrows,
+  Grid2X2,
+  Image,
+  Info,
+  Layers,
+  MousePointer2,
+  Pencil,
+  Plus,
+  Scissors,
+  Shrink,
+  Trash2,
+  Video,
+  Volume2,
+  X,
+} from 'lucide-react'
 import { EmptyNodeView, FunctionNodeView, GroupNodeView, ResourceNodeView, ResultGroupNodeView } from './NodeViews'
 import { ComfyWorkflowEditorDialog, FunctionManager, type EmbeddedComfySave } from './WorkbenchPanels'
 import { ResourcePreview } from './ResourcePreview'
+import { FullResourcePreviewModal } from './ResourcePreviewModal'
 import { buildCanvasFlowEdges } from '../domain/canvasEdges'
 import { targetInputInitialResourceValue } from '../domain/inputInitialValue'
 import { buildNodeReferenceMap } from '../domain/nodeReferences'
@@ -52,12 +69,18 @@ import {
   resourceNodeMinSizeForCanvasNode,
   type ResourceNodeLayoutContext,
 } from '../domain/resourceNodeLayout'
-import { createGenerationFunctionFromWorkflow, workflowPrimitiveInputValue } from '../domain/workflow'
+import {
+  createGenerationFunctionFromWorkflow,
+  isMediaResourceType,
+  workflowInputCandidates,
+  workflowPrimitiveInputValue,
+} from '../domain/workflow'
 import { useProjectStore } from '../store/projectStore'
 import { shouldIgnoreCanvasShortcut } from './canvasKeyboard'
 import type {
   CanvasNode,
   ExecutionTask,
+  FunctionInputDef,
   GenerationFunction,
   ComfyEndpointConfig,
   PrimitiveInputValue,
@@ -224,7 +247,10 @@ const functionRunInputsFromTask = (task: ExecutionTask): Record<string, Primitiv
       values[key] = { resourceId: snapshot.resourceId, type: snapshot.type }
     } else if (
       snapshot.source !== 'pending' &&
-      (snapshot.value === null || typeof snapshot.value === 'string' || typeof snapshot.value === 'number')
+      (snapshot.value === null ||
+        typeof snapshot.value === 'string' ||
+        typeof snapshot.value === 'number' ||
+        typeof snapshot.value === 'boolean')
     ) {
       values[key] = snapshot.value
     }
@@ -257,9 +283,11 @@ export const buildFunctionRunInputDraft = (
       continue
     }
 
-    if (input.type === 'text' || input.type === 'number') {
+    if (input.type === 'text' || input.type === 'number' || input.type === 'boolean') {
       inputValues[input.key] =
-        input.defaultValue ?? workflowPrimitiveInputValue(functionDef, input) ?? (input.type === 'number' ? 0 : '')
+        input.defaultValue ??
+        workflowPrimitiveInputValue(functionDef, input) ??
+        (input.type === 'number' ? 0 : input.type === 'boolean' ? false : '')
     }
   }
 
@@ -830,7 +858,35 @@ function functionInputSatisfied(value: PrimitiveInputValue | ResourceRef | undef
   if (isResourceRefValue(value)) return Boolean(resourcesById[value.resourceId])
   if (typeof value === 'number') return Number.isFinite(value)
   if (typeof value === 'string') return value.trim().length > 0
+  if (typeof value === 'boolean') return true
   return value !== undefined && value !== null
+}
+
+const workflowSlotValueSeparator = '\u001F'
+
+const workflowSlotValue = (input: FunctionInputDef) =>
+  `${input.bind.nodeId ?? ''}${workflowSlotValueSeparator}${input.bind.path}`
+
+const workflowSlotDisplay = (input: FunctionInputDef) => {
+  const node = input.bind.nodeId ? `${input.bind.nodeId} · ${input.bind.nodeTitle ?? input.bind.nodeId}` : input.bind.nodeTitle
+  return `${node ?? 'Workflow'} / ${input.bind.path} · ${input.type}`
+}
+
+const uniqueRunInputKey = (baseKey: string, inputs: FunctionInputDef[]) => {
+  const normalized = baseKey.trim() || 'input'
+  const existing = new Set(inputs.map((input) => input.key))
+  if (!existing.has(normalized)) return normalized
+  let suffix = 2
+  while (existing.has(`${normalized}_${suffix}`)) suffix += 1
+  return `${normalized}_${suffix}`
+}
+
+const inputValueForNewSlot = (input: FunctionInputDef): PrimitiveInputValue | undefined => {
+  if (input.defaultValue !== undefined) return input.defaultValue
+  if (input.type === 'text') return ''
+  if (input.type === 'number') return 0
+  if (input.type === 'boolean') return false
+  return undefined
 }
 
 const textPromptFromProviderMessages = (
@@ -846,7 +902,7 @@ const providerImageContentParts = (functionDef: GenerationFunction) =>
     .filter((input) => input.type === 'image')
     .map((input) => ({ type: 'image_url' as const, content: input.key, detail: 'auto' as const }))
 
-function FunctionRunDialog({
+export function FunctionRunDialog({
   functionDef,
   values,
   runCount,
@@ -869,6 +925,8 @@ function FunctionRunDialog({
   onRunCountChange: (runCount: number) => void
   onValuesChange: (values: Record<string, PrimitiveInputValue | ResourceRef>) => void
 }) {
+  const [slotDraft, setSlotDraft] = useState('')
+  const [previewResource, setPreviewResource] = useState<Resource | undefined>()
   const selectedResources = functionDef.inputs
     .map((input) => values[input.key])
     .filter(isResourceRefValue)
@@ -877,6 +935,48 @@ function FunctionRunDialog({
   const missingRequiredInputs = functionDef.inputs.filter(
     (input) => input.required && !functionInputSatisfied(values[input.key], resourcesById),
   )
+  const canEditComfySlots = Boolean(onFunctionDefChange && functionDef.workflow.format === 'comfyui_api_json')
+  const availableWorkflowSlots = useMemo(
+    () => (canEditComfySlots ? workflowInputCandidates(functionDef.workflow.rawJson, functionDef.inputs) : []),
+    [canEditComfySlots, functionDef.inputs, functionDef.workflow.rawJson],
+  )
+  const selectedSlotValue =
+    availableWorkflowSlots.some((input) => workflowSlotValue(input) === slotDraft)
+      ? slotDraft
+      : (availableWorkflowSlots[0] ? workflowSlotValue(availableWorkflowSlots[0]) : '')
+
+  const addWorkflowInputSlot = () => {
+    if (!onFunctionDefChange || !selectedSlotValue) return
+    const candidate = availableWorkflowSlots.find((input) => workflowSlotValue(input) === selectedSlotValue)
+    if (!candidate) return
+    const key = uniqueRunInputKey(candidate.key, functionDef.inputs)
+    const input: FunctionInputDef = {
+      ...candidate,
+      key,
+      bind: { ...candidate.bind },
+      upload: candidate.upload ? { ...candidate.upload } : undefined,
+    }
+    onFunctionDefChange({
+      ...functionDef,
+      inputs: [...functionDef.inputs, input],
+      updatedAt: new Date().toISOString(),
+    })
+    const value = inputValueForNewSlot(input)
+    if (value !== undefined) onValuesChange({ ...values, [key]: value })
+    setSlotDraft('')
+  }
+
+  const deleteWorkflowInputSlot = (inputKey: string) => {
+    if (!onFunctionDefChange) return
+    onFunctionDefChange({
+      ...functionDef,
+      inputs: functionDef.inputs.filter((input) => input.key !== inputKey),
+      updatedAt: new Date().toISOString(),
+    })
+    const nextValues = { ...values }
+    delete nextValues[inputKey]
+    onValuesChange(nextValues)
+  }
 
   const setResourceValue = (inputKey: string, resourceId: string, type: ResourceType) => {
     if (!resourceId) {
@@ -1192,10 +1292,39 @@ function FunctionRunDialog({
             </label>
           </div>
         ) : null}
+        {canEditComfySlots ? (
+          <div className="function-run-slot-editor" aria-label="ComfyUI input slots">
+            <div>
+              <strong>Input slots</strong>
+              <span>Expose workflow fields only when they should be changed before reuse.</span>
+            </div>
+            <select
+              aria-label="Workflow input slot"
+              value={selectedSlotValue}
+              disabled={availableWorkflowSlots.length === 0}
+              onChange={(event) => setSlotDraft(event.target.value)}
+            >
+              {availableWorkflowSlots.length > 0 ? (
+                availableWorkflowSlots.map((input) => (
+                  <option key={workflowSlotValue(input)} value={workflowSlotValue(input)}>
+                    {workflowSlotDisplay(input)}
+                  </option>
+                ))
+              ) : (
+                <option value="">No hidden workflow inputs</option>
+              )}
+            </select>
+            <button type="button" aria-label="Add input slot" disabled={!selectedSlotValue} onClick={addWorkflowInputSlot}>
+              <Plus size={15} />
+              Add slot
+            </button>
+          </div>
+        ) : null}
         <div className="function-run-fields">
           {functionDef.inputs.map((input) => {
             const value = values[input.key]
             const resourceValue = isResourceRefValue(value) ? value : undefined
+            const selectedResource = resourceValue ? resourcesById[resourceValue.resourceId] : undefined
             const matchingResources = Object.values(resourcesById).filter((resource) => resource.type === input.type)
             const primitiveValue = isResourceRefValue(value) ? '' : value
             const inputLabel = input.label || input.key
@@ -1206,6 +1335,17 @@ function FunctionRunDialog({
                     {inputLabel}
                     {input.required ? <strong>Required</strong> : null}
                   </span>
+                  {canEditComfySlots ? (
+                    <button
+                      type="button"
+                      className="function-run-delete-slot"
+                      aria-label={`Delete input slot ${input.key}`}
+                      title="Delete input slot"
+                      onClick={() => deleteWorkflowInputSlot(input.key)}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  ) : null}
                 </div>
                 <div className="function-run-slot-row">
                   <select
@@ -1230,7 +1370,17 @@ function FunctionRunDialog({
                     <MousePointer2 aria-hidden="true" size={15} />
                   </button>
                 </div>
-                {(input.type === 'number' || input.type === 'text') && !resourceValue ? (
+                {selectedResource && isMediaResourceType(selectedResource.type) ? (
+                  <button
+                    type="button"
+                    className="function-run-input-preview"
+                    aria-label={`Preview ${inputLabel} input`}
+                    onClick={() => setPreviewResource(selectedResource)}
+                  >
+                    <ResourcePreview resource={selectedResource} />
+                  </button>
+                ) : null}
+                {(input.type === 'number' || input.type === 'text' || input.type === 'boolean') && !resourceValue ? (
                   <span className="function-run-manual-label">Manual value</span>
                 ) : null}
                 {input.type === 'number' ? (
@@ -1250,6 +1400,17 @@ function FunctionRunDialog({
                     value={String(primitiveValue ?? '')}
                     onChange={(event) => setPrimitiveValue(input.key, event.target.value)}
                   />
+                ) : input.type === 'boolean' ? (
+                  <label className="function-run-boolean-input">
+                    <input
+                      aria-label={`Manual input ${inputLabel}`}
+                      checked={Boolean(primitiveValue)}
+                      disabled={Boolean(resourceValue)}
+                      type="checkbox"
+                      onChange={(event) => setPrimitiveValue(input.key, event.target.checked)}
+                    />
+                    <span>{Boolean(primitiveValue) ? 'true' : 'false'}</span>
+                  </label>
                 ) : null}
               </div>
             )
@@ -1284,6 +1445,11 @@ function FunctionRunDialog({
             Run
           </button>
         </div>
+        <FullResourcePreviewModal
+          resource={previewResource}
+          resources={previewResource ? [previewResource] : []}
+          onClose={() => setPreviewResource(undefined)}
+        />
       </section>
     </div>
   )
@@ -2216,6 +2382,7 @@ function CanvasSurface() {
   const addMenuAssetOptions = [
     { type: 'text' as const, label: 'Text Asset' },
     { type: 'number' as const, label: 'Number Asset' },
+    { type: 'boolean' as const, label: 'Boolean Asset' },
     { type: 'image' as const, label: 'Image Asset' },
     { type: 'video' as const, label: 'Video Asset' },
     { type: 'audio' as const, label: 'Audio Asset' },

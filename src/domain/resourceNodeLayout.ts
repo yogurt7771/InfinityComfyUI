@@ -26,6 +26,7 @@ const PREVIEW_MIN_SIZE_BY_TYPE: Record<ResourceType, { width: number; height: nu
   audio: { width: 260, height: 44 },
   text: { width: 230, height: 92 },
   number: { width: 200, height: 42 },
+  boolean: { width: 200, height: 42 },
 }
 
 const visibleAssetStatuses = new Set(['pending', 'queued', 'running', 'fetching_outputs', 'failed'])
@@ -49,7 +50,12 @@ export type ResourceNodeLayoutContext = {
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(value, max))
 
 const typedResourceType = (value: unknown): ResourceType =>
-  value === 'image' || value === 'video' || value === 'audio' || value === 'number' || value === 'text'
+  value === 'image' ||
+  value === 'video' ||
+  value === 'audio' ||
+  value === 'number' ||
+  value === 'boolean' ||
+  value === 'text'
     ? value
     : 'text'
 

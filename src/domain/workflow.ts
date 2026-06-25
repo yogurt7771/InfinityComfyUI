@@ -19,6 +19,8 @@ export type ParsedWorkflowNode = {
   bindableInputPaths: string[]
 }
 
+export type WorkflowInputCandidate = FunctionInputDef
+
 type InputValues = Record<string, PrimitiveInputValue | ResourceRef>
 
 const cloneWorkflow = (workflow: ComfyWorkflow): ComfyWorkflow =>
@@ -85,7 +87,9 @@ const primitiveValueAtPath = (source: unknown, path: string) => {
     cursor = (cursor as Record<string, unknown>)[segment]
   }
 
-  return typeof cursor === 'string' || typeof cursor === 'number' || cursor === null ? cursor : undefined
+  return typeof cursor === 'string' || typeof cursor === 'number' || typeof cursor === 'boolean' || cursor === null
+    ? cursor
+    : undefined
 }
 
 const resolvedWorkflowBindPath = (node: WorkflowNode, input: FunctionInputDef) => {
@@ -121,73 +125,6 @@ export function parseWorkflowNodes(workflow: ComfyWorkflow): ParsedWorkflowNode[
 const nodeTitle = (id: string, node: WorkflowNode) => node._meta?.title?.trim() || id
 
 const normalized = (value: string) => value.toLowerCase()
-
-const isClipTextNode = (node: WorkflowNode) =>
-  node.class_type === 'CLIPTextEncode' && Object.prototype.hasOwnProperty.call(node.inputs ?? {}, 'text')
-
-const isNegativePromptTitle = (title: string) => {
-  const value = normalized(title)
-  return value.includes('negative') || title.includes('负向') || title.includes('反向')
-}
-
-const isPositivePromptTitle = (title: string) => {
-  const value = normalized(title)
-  return value.includes('positive') || title.includes('正向')
-}
-
-const inputDefaultValue = (node: WorkflowNode, key: string) => {
-  const value = node.inputs?.[key]
-  return typeof value === 'string' || typeof value === 'number' || value === null ? value : undefined
-}
-
-const promptInputsForWorkflow = (workflow: ComfyWorkflow): FunctionInputDef[] => {
-  const clipTextNodes = Object.entries(workflow).filter(([, node]) => isClipTextNode(node))
-  const positiveNode =
-    clipTextNodes.find(([id, node]) => isPositivePromptTitle(nodeTitle(id, node))) ??
-    clipTextNodes.find(([id, node]) => !isNegativePromptTitle(nodeTitle(id, node)))
-  const negativeNode = clipTextNodes.find(([id, node]) => isNegativePromptTitle(nodeTitle(id, node)))
-  const inputs: FunctionInputDef[] = []
-
-  if (positiveNode) {
-    const [id, node] = positiveNode
-    inputs.push({
-      key: 'prompt',
-      label: 'Prompt',
-      type: 'text',
-      required: true,
-      defaultValue: inputDefaultValue(node, 'text') ?? 'warm interior render',
-      bind: { nodeId: id, nodeTitle: nodeTitle(id, node), path: 'inputs.text' },
-      upload: { strategy: 'none' },
-    })
-  }
-
-  if (negativeNode) {
-    const [id, node] = negativeNode
-    inputs.push({
-      key: 'negative_prompt',
-      label: 'Negative Prompt',
-      type: 'text',
-      required: false,
-      defaultValue: inputDefaultValue(node, 'text') ?? '',
-      bind: { nodeId: id, nodeTitle: nodeTitle(id, node), path: 'inputs.text' },
-      upload: { strategy: 'none' },
-    })
-  }
-
-  return inputs
-}
-
-const imageInputsForWorkflow = (workflow: ComfyWorkflow): FunctionInputDef[] =>
-  Object.entries(workflow)
-    .filter(([, node]) => node.class_type === 'LoadImage' && Object.prototype.hasOwnProperty.call(node.inputs ?? {}, 'image'))
-    .map(([id, node], index) => ({
-      key: index === 0 ? 'image' : `image_${index + 1}`,
-      label: index === 0 ? 'Image' : `Image ${index + 1}`,
-      type: 'image',
-      required: true,
-      bind: { nodeId: id, nodeTitle: nodeTitle(id, node), path: 'inputs.image' },
-      upload: { strategy: 'comfy_upload', targetSubfolder: 'infinity-comfyui' },
-    }))
 
 const isGraphLinkValue = (value: unknown) =>
   Array.isArray(value) &&
@@ -226,17 +163,36 @@ const contextForWorkflowInput = (node: WorkflowNode, title: string, key: string)
 
 const contextHasAny = (context: string, words: string[]) => words.some((word) => context.includes(word))
 
+const valueLooksLikeFile = (value: unknown, extensions: string[]) =>
+  typeof value === 'string' && extensions.some((extension) => normalized(value).endsWith(extension))
+
+const isMediaWorkflowInput = (node: WorkflowNode, title: string, key: string, value: unknown, words: string[], extensions: string[]) => {
+  const classContext = normalized(node.class_type ?? '')
+  const keyContext = normalized(key)
+  const titleContext = normalized(title)
+  const genericFileKey = contextHasAny(keyContext, ['file', 'filename', 'path', 'input', 'source'])
+  const mediaNodeContext = `${classContext} ${titleContext}`
+
+  return (
+    contextHasAny(keyContext, words) ||
+    valueLooksLikeFile(value, extensions) ||
+    (genericFileKey && contextHasAny(mediaNodeContext, words))
+  )
+}
+
 const inferredInputType = (node: WorkflowNode, title: string, key: string, value: unknown): ResourceType | undefined => {
   if (isGraphLinkValue(value)) return undefined
 
   const context = contextForWorkflowInput(node, title, key)
   if (typeof value === 'number') return 'number'
-  if (contextHasAny(context, ['video', 'vhs', 'frame', 'frames', 'movie', 'mp4', 'webm'])) return 'video'
-  if (contextHasAny(context, ['audio', 'sound', 'voice', 'wav', 'mp3'])) return 'audio'
-  if (contextHasAny(context, ['image', 'picture', 'photo', 'mask'])) return 'image'
+  if (typeof value === 'boolean') return 'boolean'
   if (typeof value === 'string' || value === null) {
     if (contextHasAny(context, ['text', 'prompt', 'caption', 'string'])) return 'text'
   }
+  if (isMediaWorkflowInput(node, title, key, value, ['video', 'vhs', 'frame', 'frames', 'movie', 'mp4', 'webm'], ['.mp4', '.webm', '.mov', '.mkv', '.avi'])) return 'video'
+  if (isMediaWorkflowInput(node, title, key, value, ['audio', 'sound', 'voice', 'wav', 'mp3'], ['.wav', '.mp3', '.flac', '.m4a', '.ogg'])) return 'audio'
+  if (isMediaWorkflowInput(node, title, key, value, ['image', 'picture', 'photo', 'mask'], ['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif', '.tif', '.tiff'])) return 'image'
+  if (typeof value === 'string' || value === null) return 'text'
   return undefined
 }
 
@@ -260,12 +216,14 @@ const isLikelyOutputNode = (node: WorkflowNode) =>
 
 const inputBindKey = (nodeId: string, path: string) => `${nodeId}:${path}`
 
-const genericInputsForWorkflow = (workflow: ComfyWorkflow, existingInputs: FunctionInputDef[]): FunctionInputDef[] => {
+export const isMediaResourceType = (type: ResourceType) => type === 'image' || type === 'video' || type === 'audio'
+
+export const workflowInputCandidates = (workflow: ComfyWorkflow, existingInputs: FunctionInputDef[] = []): WorkflowInputCandidate[] => {
   const usedKeys = new Set(existingInputs.map((input) => input.key))
   const usedBindings = new Set(
     existingInputs.map((input) => input.bind.nodeId && input.bind.path ? inputBindKey(input.bind.nodeId, input.bind.path) : ''),
   )
-  const inputs: FunctionInputDef[] = []
+  const inputs: WorkflowInputCandidate[] = []
 
   for (const [id, node] of Object.entries(workflow)) {
     if (isLikelyOutputNode(node)) continue
@@ -280,9 +238,11 @@ const genericInputsForWorkflow = (workflow: ComfyWorkflow, existingInputs: Funct
 
       const baseKey = inputKeyFromPath(key)
       const inputKey = uniqueInputKey(baseKey, usedKeys)
-      const mediaInput = type === 'image' || type === 'video' || type === 'audio'
+      const mediaInput = isMediaResourceType(type)
       const primitiveDefault =
-        !mediaInput && (typeof value === 'string' || typeof value === 'number' || value === null) ? value : undefined
+        !mediaInput && (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' || value === null)
+          ? value
+          : undefined
 
       inputs.push({
         key: inputKey,
@@ -303,6 +263,9 @@ const genericInputsForWorkflow = (workflow: ComfyWorkflow, existingInputs: Funct
 
   return inputs
 }
+
+const mediaInputsForWorkflow = (workflow: ComfyWorkflow): FunctionInputDef[] =>
+  workflowInputCandidates(workflow).filter((input) => isMediaResourceType(input.type))
 
 const outputsForType = (workflow: ComfyWorkflow, type: ResourceType, label: string): FunctionOutputDef[] =>
   Object.entries(workflow)
@@ -348,8 +311,7 @@ export function createGenerationFunctionFromWorkflow(
     editor?: ComfyWorkflowEditorMetadata
   } = {},
 ): GenerationFunction {
-  const knownInputs = [...promptInputsForWorkflow(workflow), ...imageInputsForWorkflow(workflow)]
-  const inputs = [...knownInputs, ...genericInputsForWorkflow(workflow, knownInputs)]
+  const inputs = mediaInputsForWorkflow(workflow)
   const hasImageInput = inputs.some((input) => input.type === 'image')
 
   return {

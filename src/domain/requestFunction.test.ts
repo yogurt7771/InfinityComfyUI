@@ -86,8 +86,8 @@ describe('request function helpers', () => {
     expect(requestOutputSourcesForParse('text')).toEqual(['response_text_regex'])
     expect(requestOutputSourcesForParse('binary')).toEqual(['response_binary'])
 
-    expect(requestOutputTypesForParse('json')).toEqual(['text', 'number'])
-    expect(requestOutputTypesForParse('text')).toEqual(['text', 'number'])
+    expect(requestOutputTypesForParse('json')).toEqual(['text', 'number', 'boolean'])
+    expect(requestOutputTypesForParse('text')).toEqual(['text', 'number', 'boolean'])
     expect(requestOutputTypesForParse('binary')).toEqual(['image', 'video', 'audio'])
   })
 

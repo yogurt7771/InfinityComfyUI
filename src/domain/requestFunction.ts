@@ -28,7 +28,7 @@ export type ExtractedRequestOutput = {
   key: string
   label: string
   type: ResourceType
-  values: Array<string | RequestBinaryOutputValue>
+  values: Array<string | boolean | RequestBinaryOutputValue>
 }
 
 export const requestMethods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'] as const
@@ -38,7 +38,7 @@ export const requestDefaultEncoding = 'utf-8'
 
 export const isRequestFunction = (fn: GenerationFunction) => fn.workflow.format === 'http_request'
 
-const requestPrimitiveOutputTypes: ResourceType[] = ['text', 'number']
+const requestPrimitiveOutputTypes: ResourceType[] = ['text', 'number', 'boolean']
 const requestBinaryOutputTypes: ResourceType[] = ['image', 'video', 'audio']
 
 export const requestOutputTypesForParse = (responseParse: RequestFunctionConfig['responseParse']): ResourceType[] =>
@@ -273,10 +273,11 @@ const valueAtJsonPath = (source: unknown, path: string): unknown => {
   return cursor
 }
 
-const stringifyExtractedValue = (value: unknown): string | undefined => {
+const stringifyExtractedValue = (value: unknown): string | boolean | undefined => {
   if (value === undefined || value === null) return undefined
+  if (typeof value === 'boolean') return value
   if (typeof value === 'string') return value
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (typeof value === 'number') return String(value)
   return JSON.stringify(value)
 }
 

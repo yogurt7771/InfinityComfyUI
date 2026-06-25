@@ -62,7 +62,7 @@ import {
 import { projectStore, useProjectStore } from '../store/projectStore'
 import { FullResourcePreviewModal } from './ResourcePreviewModal'
 
-const resourceTypes: ResourceType[] = ['text', 'number', 'image', 'video', 'audio']
+const resourceTypes: ResourceType[] = ['text', 'number', 'boolean', 'image', 'video', 'audio']
 const outputSources: FunctionOutputDef['extract']['source'][] = [
   'history',
   'node_output',

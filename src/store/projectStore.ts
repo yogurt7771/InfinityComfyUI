@@ -251,7 +251,7 @@ export type ProjectStoreState = {
   addEmptyResourceAtPosition: (
     type: ResourceType,
     position: { x: number; y: number },
-    initialValue?: string | number | null,
+    initialValue?: PrimitiveInputValue,
   ) => string | undefined
   addMediaResourceAtPosition: (
     type: MediaResourceKind,
@@ -466,6 +466,7 @@ const resourceNodeId = (resourceId: string) => `node_${resourceId}`
 const emptyFunctionOutputValue = (type: ResourceType, resourceId: string): Resource['value'] => {
   if (type === 'number') return 0
   if (type === 'text') return ''
+  if (type === 'boolean') return false
   return {
     assetId: `pending_${resourceId}`,
     url: '',
@@ -722,10 +723,16 @@ const comfyWorkflowFunctionIds = (functions: Record<string, GenerationFunction>)
 
 const resourceNameForType = (type: ResourceType) => {
   if (type === 'text') return 'Prompt'
+  if (type === 'boolean') return 'Boolean'
   if (type === 'image') return 'Image'
   if (type === 'video') return 'Video'
   if (type === 'audio') return 'Audio'
   return 'Number'
+}
+
+const promptDefaultValue = (functionDef: GenerationFunction) => {
+  const value = functionDef.inputs.find((input) => input.key === 'prompt')?.defaultValue
+  return typeof value === 'string' || typeof value === 'number' || value === null ? value : undefined
 }
 
 const emptyMediaPayload = (type: MediaResourceKind): MediaResourcePayload => ({
@@ -824,6 +831,7 @@ const inputValueSatisfiesDefinition = (
   if (value === undefined || value === null) return false
   if (input.type === 'text') return String(value).trim().length > 0
   if (input.type === 'number') return Number.isFinite(Number(value))
+  if (input.type === 'boolean') return typeof value === 'boolean'
   return false
 }
 
@@ -2435,7 +2443,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
       try {
         if (!item.config.apiKey.trim()) throw new Error('OpenAI API key is required')
-        const defaultPrompt = item.functionDef.inputs.find((input) => input.key === 'prompt')?.defaultValue
+        const defaultPrompt = promptDefaultValue(item.functionDef)
         const request = await createOpenAIImageApiRequest(
           item.config,
           item.inputValues,
@@ -2663,7 +2671,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
       try {
         if (!item.config.apiKey.trim()) throw new Error('Gemini API key is required')
-        const defaultPrompt = item.functionDef.inputs.find((input) => input.key === 'prompt')?.defaultValue
+        const defaultPrompt = promptDefaultValue(item.functionDef)
         const request = await createGeminiImageGenerationRequest(
           item.config,
           item.inputValues,
@@ -2846,13 +2854,13 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
     const resourceForRequestOutput = (
       output: { key: string; label: string; type: ResourceType },
-      value: string | RequestBinaryOutputValue,
+      value: string | boolean | RequestBinaryOutputValue,
       item: QueuedRequestRun,
       now: string,
     ): { resource: Resource; asset?: ProjectState['assets'][string]; ref: ResourceRef } => {
       const resourceId = runtime.idFactory()
       if (output.type === 'number') {
-        const numericValue = Number(typeof value === 'string' ? value : value.sizeBytes)
+        const numericValue = Number(typeof value === 'string' || typeof value === 'boolean' ? value : value.sizeBytes)
         return {
           resource: {
             id: resourceId,
@@ -2875,7 +2883,34 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         }
       }
 
+      if (output.type === 'boolean') {
+        const booleanValue = typeof value === 'boolean' ? value : String(value).toLowerCase() === 'true'
+        return {
+          resource: {
+            id: resourceId,
+            type: 'boolean',
+            name: output.label,
+            value: booleanValue,
+            source: {
+              kind: 'function_output',
+              functionNodeId: item.functionNodeId,
+              resultGroupNodeId: item.resultNodeId,
+              taskId: item.taskId,
+              outputKey: output.key,
+            },
+            metadata: {
+              workflowFunctionId: item.functionId,
+              createdAt: now,
+            },
+          },
+          ref: { resourceId, type: 'boolean' },
+        }
+      }
+
       if (output.type === 'image' || output.type === 'video' || output.type === 'audio') {
+        if (typeof value === 'boolean') {
+          throw new Error(`Request output ${output.key} did not produce media data`)
+        }
         const assetId = runtime.idFactory()
         const filename = typeof value === 'string' ? value.split(/[/?#]/).filter(Boolean).at(-1) || output.label : value.filename
         const mimeType = typeof value === 'string' ? outputMimeType(output.type, filename) : value.mimeType
@@ -2923,7 +2958,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           id: resourceId,
           type: 'text',
           name: output.label,
-          value: typeof value === 'string' ? value : value.url,
+          value: typeof value === 'string' ? value : typeof value === 'boolean' ? String(value) : value.url,
           source: {
             kind: 'function_output',
             functionNodeId: item.functionNodeId,
@@ -2970,6 +3005,30 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
           },
           ref: { resourceId, type: 'number' },
+        }
+      }
+
+      if (output.type === 'boolean') {
+        return {
+          resource: {
+            id: resourceId,
+            type: 'boolean',
+            name: output.label,
+            value: Boolean(value),
+            source: {
+              kind: 'function_output',
+              functionNodeId: item.sourceNodeId,
+              resultGroupNodeId: item.resultNodeId,
+              taskId: item.taskId,
+              outputKey: output.key,
+            },
+            metadata: {
+              workflowFunctionId: item.functionId,
+              endpointId: 'local',
+              createdAt: now,
+            },
+          },
+          ref: { resourceId, type: 'boolean' },
         }
       }
 
@@ -3345,7 +3404,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           values[key] = { resourceId: snapshot.resourceId, type: snapshot.type }
         } else if (snapshot.source === 'pending' && snapshot.pendingTaskId && snapshot.outputKey) {
           values[key] = { pendingTaskId: snapshot.pendingTaskId, outputKey: snapshot.outputKey, type: snapshot.type }
-        } else if (snapshot.value === null || typeof snapshot.value === 'string' || typeof snapshot.value === 'number') {
+        } else if (
+          snapshot.value === null ||
+          typeof snapshot.value === 'string' ||
+          typeof snapshot.value === 'number' ||
+          typeof snapshot.value === 'boolean'
+        ) {
           values[key] = snapshot.value
         }
       }
@@ -4807,6 +4871,50 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         return nodeId
       }
 
+      if (type === 'boolean') {
+        const resourceId = runtime.idFactory()
+        const nodeId = `node_${resourceId}`
+        const now = runtime.now()
+        const resource: Resource = {
+          id: resourceId,
+          type,
+          name: resourceNameForType(type),
+          value: typeof initialValue === 'boolean' ? initialValue : false,
+          source: { kind: 'manual_input' },
+          metadata: { createdAt: now },
+        }
+        const node: CanvasNode = {
+          id: nodeId,
+          type: 'resource',
+          position,
+          data: { resourceId, resourceType: type },
+        }
+
+        set((state) => {
+          const nextProject = {
+            ...ensureProjectHistory(state.project),
+            project: { ...state.project.project, updatedAt: now },
+            resources: { ...state.project.resources, [resourceId]: resource },
+            canvas: { ...state.project.canvas, nodes: [...state.project.canvas.nodes, node] },
+          }
+          return {
+            project: projectWithRecordedHistory(state.project, nextProject, now, {
+              label: 'Create boolean asset',
+              transactionType: 'asset',
+              nodeIds: [nodeId],
+              assetIds: [resourceId],
+              preview: {
+                title: 'Create boolean asset',
+                subtitle: resource.name,
+                nodeIds: [nodeId],
+                assetIds: [resourceId],
+              },
+            }),
+          }
+        })
+        return nodeId
+      }
+
       return get().addMediaResourceAtPosition(type, resourceNameForType(type), emptyMediaPayload(type), position)
     },
 
@@ -5069,6 +5177,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
                     if (input.type === 'text') return typeof value === 'string'
                     if (input.type === 'number') return typeof value === 'number'
+                    if (input.type === 'boolean') return typeof value === 'boolean'
                     return false
                   }),
                 )
@@ -5483,6 +5592,24 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           }
         }
 
+        if (output.type === 'boolean') {
+          return {
+            resource: {
+              id: resourceId,
+              type: 'boolean',
+              name: output.label,
+              value: Boolean(value),
+              source: { kind: 'function_output', functionNodeId: taskId, taskId, outputKey: output.key },
+              metadata: {
+                workflowFunctionId: functionId,
+                functionSnapshot: structuredClone(functionDef),
+                endpointId: 'local',
+                createdAt: completedAt,
+              },
+            },
+          }
+        }
+
         if (output.type === 'image' || output.type === 'video' || output.type === 'audio') {
           if (typeof value !== 'object' || value === null || !('url' in value)) {
             throw new Error(`Local output ${output.key} did not produce a media payload`)
@@ -5596,7 +5723,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         }))
       }
 
-      type CommandOutputValue = string | number | MediaResourcePayload | RequestBinaryOutputValue
+      type CommandOutputValue = string | number | boolean | MediaResourcePayload | RequestBinaryOutputValue
       type CommandOutputItem = {
         key: string
         label: string
@@ -5626,6 +5753,19 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
               type: 'number',
               name: output.label,
               value: Number.isFinite(numericValue) ? numericValue : 0,
+              source: { kind: 'function_output', functionNodeId: taskId, taskId, outputKey: output.key },
+              metadata,
+            },
+          }
+        }
+
+        if (output.type === 'boolean') {
+          return {
+            resource: {
+              id: resourceId,
+              type: 'boolean',
+              name: output.label,
+              value: typeof value === 'boolean' ? value : String(value).toLowerCase() === 'true',
               source: { kind: 'function_output', functionNodeId: taskId, taskId, outputKey: output.key },
               metadata,
             },
@@ -6176,7 +6316,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         markCommandTaskRunning(queuedRun.taskId, 'openai_image')
         try {
           if (!config.apiKey.trim()) throw new Error('OpenAI API key is required')
-          const defaultPrompt = functionDef.inputs.find((input) => input.key === 'prompt')?.defaultValue
+          const defaultPrompt = promptDefaultValue(functionDef)
           const request = await createOpenAIImageApiRequest(
             config,
             queuedRun.inputValues,
@@ -6258,7 +6398,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         markCommandTaskRunning(queuedRun.taskId, 'gemini_image')
         try {
           if (!config.apiKey.trim()) throw new Error('Gemini API key is required')
-          const defaultPrompt = functionDef.inputs.find((input) => input.key === 'prompt')?.defaultValue
+          const defaultPrompt = promptDefaultValue(functionDef)
           const request = await createGeminiImageGenerationRequest(
             config,
             queuedRun.inputValues,
@@ -6447,9 +6587,10 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
               const functionId = typeof node.data.functionId === 'string' ? node.data.functionId : undefined
               const functionDef = functionId ? state.project.functions[functionId] : undefined
               const input = functionDef?.inputs.find((item) => item.key === inputKey)
-              if (!input || (input.type !== 'text' && input.type !== 'number')) return node
+              if (!input || (input.type !== 'text' && input.type !== 'number' && input.type !== 'boolean')) return node
 
-              const normalizedValue = input.type === 'number' ? Number(value) : String(value ?? '')
+              const normalizedValue =
+                input.type === 'number' ? Number(value) : input.type === 'boolean' ? Boolean(value) : String(value ?? '')
               if (input.type === 'number' && !Number.isFinite(normalizedValue)) return node
               const nextInputValues = {
                 ...((node.data.inputValues ?? {}) as RuntimeInputValues),
@@ -6974,7 +7115,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           const ref = sourceRefs.find((item) => item.type === input.type)
           if (!ref) return
           inputValues[input.key] = ref
-        } else if (input.key in primitiveInputs && (input.type === 'text' || input.type === 'number')) {
+        } else if (input.key in primitiveInputs && (input.type === 'text' || input.type === 'number' || input.type === 'boolean')) {
           inputValues[input.key] = primitiveInputs[input.key] ?? null
         }
       }

@@ -1,4 +1,4 @@
-export type ResourceType = 'text' | 'number' | 'image' | 'video' | 'audio'
+export type ResourceType = 'text' | 'number' | 'boolean' | 'image' | 'video' | 'audio'
 
 export type ResourceSourceKind =
   | 'user_upload'
@@ -42,7 +42,7 @@ export type Resource = {
   id: string
   type: ResourceType
   name?: string
-  value: string | number | MediaResourceValue
+  value: string | number | boolean | MediaResourceValue
   source: {
     kind: ResourceSourceKind
     functionNodeId?: string
@@ -74,7 +74,7 @@ export type PendingResourceRef = {
 
 export type InputResourceRef = ResourceRef | PendingResourceRef
 
-export type PrimitiveInputValue = string | number | null
+export type PrimitiveInputValue = string | number | boolean | null
 
 export type ExecutionInputSnapshot = {
   key: string
@@ -137,7 +137,7 @@ export type FunctionInputDef = {
   description?: string
   type: ResourceType
   required: boolean
-  defaultValue?: string | number | null
+  defaultValue?: PrimitiveInputValue
   bind: {
     nodeId?: string
     nodeTitle?: string

@@ -10,7 +10,7 @@ const mediaValue = (resource: Resource) =>
 export const resourceDownloadName = (resource: Resource) => {
   const media = mediaValue(resource)
   if (media?.filename) return media.filename
-  if (resource.type === 'text' || resource.type === 'number') {
+  if (resource.type === 'text' || resource.type === 'number' || resource.type === 'boolean') {
     const name = resource.name ?? resource.id
     return name.toLowerCase().endsWith('.txt') ? name : `${name}.txt`
   }
