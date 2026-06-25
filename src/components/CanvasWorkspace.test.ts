@@ -3,6 +3,7 @@ import { targetInputInitialResourceValue } from '../domain/inputInitialValue'
 import { buildNodeReferenceMap } from '../domain/nodeReferences'
 import type { ProjectState } from '../domain/types'
 import {
+  buildCanvasSelectionHighlights,
   buildComfyMinimapLayout,
   flowNodeStyle,
   buildFunctionRunInputDraft,
@@ -85,6 +86,74 @@ const projectWithOptionalInput = (inputValues: Record<string, unknown> = {}): Pr
 })
 
 describe('CanvasWorkspace helpers', () => {
+  it('marks selected graph items separately from directly related items', () => {
+    const nodes = [
+      { id: 'node_a' },
+      { id: 'node_b' },
+      { id: 'node_c' },
+      { id: 'node_d' },
+    ]
+    const edges = [
+      { id: 'edge_ab', source: 'node_a', target: 'node_b' },
+      { id: 'edge_bc', source: 'node_b', target: 'node_c' },
+      { id: 'edge_cd', source: 'node_c', target: 'node_d' },
+    ]
+
+    const nodeSelection = buildCanvasSelectionHighlights(nodes, edges, ['node_b'], [])
+
+    expect(nodeSelection.nodeClassNamesById).toEqual(
+      new Map([
+        ['node_a', 'selection-related'],
+        ['node_b', 'selection-primary'],
+        ['node_c', 'selection-related'],
+        ['node_d', 'selection-dimmed'],
+      ]),
+    )
+    expect(nodeSelection.edgeClassNamesById).toEqual(
+      new Map([
+        ['edge_ab', 'selection-related-edge'],
+        ['edge_bc', 'selection-related-edge'],
+        ['edge_cd', 'selection-dimmed-edge'],
+      ]),
+    )
+
+    const tracedSelection = buildCanvasSelectionHighlights(nodes, edges, ['node_b'], [], ['node_b'])
+
+    expect(tracedSelection.nodeClassNamesById).toEqual(
+      new Map([
+        ['node_a', 'selection-related'],
+        ['node_b', 'selection-primary'],
+        ['node_c', 'selection-related'],
+        ['node_d', 'selection-related'],
+      ]),
+    )
+    expect(tracedSelection.edgeClassNamesById).toEqual(
+      new Map([
+        ['edge_ab', 'selection-related-edge'],
+        ['edge_bc', 'selection-related-edge'],
+        ['edge_cd', 'selection-related-edge'],
+      ]),
+    )
+
+    const edgeSelection = buildCanvasSelectionHighlights(nodes, edges, [], ['edge_bc'])
+
+    expect(edgeSelection.nodeClassNamesById).toEqual(
+      new Map([
+        ['node_a', 'selection-dimmed'],
+        ['node_b', 'selection-related'],
+        ['node_c', 'selection-related'],
+        ['node_d', 'selection-dimmed'],
+      ]),
+    )
+    expect(edgeSelection.edgeClassNamesById).toEqual(
+      new Map([
+        ['edge_ab', 'selection-dimmed-edge'],
+        ['edge_bc', 'selection-primary-edge'],
+        ['edge_cd', 'selection-dimmed-edge'],
+      ]),
+    )
+  })
+
   it('does not resync React Flow edges when derived edge fields are unchanged', () => {
     const previous = [
       {

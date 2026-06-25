@@ -5590,6 +5590,71 @@ option {
   border-top-color: #be123c;
 }
 
+.workspace-canvas .react-flow__node.selection-dimmed {
+  opacity: 0.36;
+  transition: opacity 180ms ease;
+}
+
+.workspace-canvas .react-flow__node.selection-related {
+  z-index: 5;
+  opacity: 1;
+}
+
+.workspace-canvas .react-flow__node.selection-primary {
+  z-index: 6;
+}
+
+.workspace-canvas .react-flow__node.selection-related:not(.selected) .canvas-node {
+  border-color: rgba(20, 184, 166, 0.52);
+  outline: 2px solid rgba(20, 184, 166, 0.24);
+  outline-offset: 3px;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.76),
+    0 18px 48px rgba(13, 148, 136, 0.14);
+}
+
+.workspace-canvas .react-flow__node.selection-primary .canvas-node {
+  border-color: rgba(13, 148, 136, 0.9);
+  outline: 3px solid rgba(13, 148, 136, 0.2);
+  outline-offset: 3px;
+}
+
+.workspace-canvas .react-flow__edge.selection-dimmed-edge {
+  opacity: 0.22;
+}
+
+.workspace-canvas .react-flow__edge.selection-related-edge {
+  opacity: 1;
+  z-index: 4;
+}
+
+.workspace-canvas .react-flow__edge.selection-primary-edge {
+  opacity: 1;
+  z-index: 5;
+}
+
+.workspace-canvas .react-flow__edge.selection-related-edge .react-flow__edge-path {
+  stroke: #14b8a6;
+  stroke-width: 3;
+  filter: drop-shadow(0 0 5px rgba(20, 184, 166, 0.3));
+}
+
+.workspace-canvas .react-flow__edge.selection-primary-edge .react-flow__edge-path {
+  stroke: #0f766e;
+  stroke-width: 4;
+  filter: drop-shadow(0 0 7px rgba(15, 118, 110, 0.42));
+}
+
+.workspace-canvas .react-flow__edge.selection-related-edge .react-flow__edge-textbg,
+.workspace-canvas .react-flow__edge.selection-primary-edge .react-flow__edge-textbg {
+  fill: rgba(240, 253, 250, 0.96);
+}
+
+.workspace-canvas .react-flow__edge.selection-related-edge .react-flow__edge-text,
+.workspace-canvas .react-flow__edge.selection-primary-edge .react-flow__edge-text {
+  fill: #0f766e;
+}
+
 .app-shell[data-theme='light'] .node-title svg {
   color: #0f766e;
 }

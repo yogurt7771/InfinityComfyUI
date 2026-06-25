@@ -344,6 +344,92 @@ export const sameFlowEdgesForSync = (left: Edge[], right: Edge[]) => {
   })
 }
 
+type SelectionHighlightNodeLike = Pick<Node, 'id'>
+type SelectionHighlightEdgeLike = Pick<Edge, 'id' | 'source' | 'target'>
+
+const mergeClassNames = (...classNames: Array<string | undefined | false>) =>
+  classNames.filter(Boolean).join(' ') || undefined
+
+export function buildCanvasSelectionHighlights(
+  nodes: SelectionHighlightNodeLike[],
+  edges: SelectionHighlightEdgeLike[],
+  selectedNodeIds: string[],
+  selectedEdgeIds: string[],
+  traceNodeIds: string[] = [],
+) {
+  const nodeIds = new Set(nodes.map((node) => node.id))
+  const selectedNodes = new Set(selectedNodeIds.filter((nodeId) => nodeIds.has(nodeId)))
+  const selectedEdges = new Set(selectedEdgeIds)
+  const traceStarts = traceNodeIds.filter((nodeId) => nodeIds.has(nodeId))
+  const relatedNodes = new Set<string>()
+  const relatedEdges = new Set<string>()
+  const hasSelection = selectedNodes.size > 0 || selectedEdges.size > 0 || traceStarts.length > 0
+
+  if (traceStarts.length > 0) {
+    const adjacency = new Map<string, string[]>()
+    for (const nodeId of nodeIds) adjacency.set(nodeId, [])
+    for (const edge of edges) {
+      if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) continue
+      adjacency.get(edge.source)?.push(edge.target)
+      adjacency.get(edge.target)?.push(edge.source)
+    }
+
+    const queue = [...traceStarts]
+    for (const nodeId of traceStarts) relatedNodes.add(nodeId)
+    while (queue.length > 0) {
+      const nodeId = queue.shift()
+      if (!nodeId) continue
+      for (const nextNodeId of adjacency.get(nodeId) ?? []) {
+        if (relatedNodes.has(nextNodeId)) continue
+        relatedNodes.add(nextNodeId)
+        queue.push(nextNodeId)
+      }
+    }
+
+    for (const edge of edges) {
+      if (relatedNodes.has(edge.source) && relatedNodes.has(edge.target)) relatedEdges.add(edge.id)
+    }
+  } else {
+    for (const edge of edges) {
+      if (selectedNodes.has(edge.source) || selectedNodes.has(edge.target)) {
+        relatedEdges.add(edge.id)
+        relatedNodes.add(edge.source)
+        relatedNodes.add(edge.target)
+      }
+    }
+  }
+
+  for (const edge of edges) {
+    if (!selectedEdges.has(edge.id)) continue
+    relatedNodes.add(edge.source)
+    relatedNodes.add(edge.target)
+  }
+
+  const nodeClassNamesById = new Map<string, string>()
+  for (const node of nodes) {
+    if (selectedNodes.has(node.id)) {
+      nodeClassNamesById.set(node.id, 'selection-primary')
+    } else if (relatedNodes.has(node.id)) {
+      nodeClassNamesById.set(node.id, 'selection-related')
+    } else if (hasSelection) {
+      nodeClassNamesById.set(node.id, 'selection-dimmed')
+    }
+  }
+
+  const edgeClassNamesById = new Map<string, string>()
+  for (const edge of edges) {
+    if (selectedEdges.has(edge.id)) {
+      edgeClassNamesById.set(edge.id, 'selection-primary-edge')
+    } else if (relatedEdges.has(edge.id)) {
+      edgeClassNamesById.set(edge.id, 'selection-related-edge')
+    } else if (hasSelection) {
+      edgeClassNamesById.set(edge.id, 'selection-dimmed-edge')
+    }
+  }
+
+  return { nodeClassNamesById, edgeClassNamesById }
+}
+
 type MinimapNodeLike = Pick<Node, 'id' | 'position' | 'style'> & {
   width?: number | null
   height?: number | null
@@ -1616,6 +1702,7 @@ function CanvasSurface() {
   const [inputPickMode, setInputPickMode] = useState<FunctionInputPickMode>()
   const [comparePair, setComparePair] = useState<CompareImagePair | null>(null)
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([])
+  const [traceHighlightNodeIds, setTraceHighlightNodeIds] = useState<string[]>([])
   const [addMenuQuery, setAddMenuQuery] = useState('')
   const addMenuRef = useRef<HTMLDivElement | null>(null)
   const quickToolbarRef = useRef<HTMLDivElement | null>(null)
@@ -1678,6 +1765,12 @@ function CanvasSurface() {
     () => new Set(inputPickableRefs.map((ref) => ref.resourceId)),
     [inputPickableRefs],
   )
+  const visibleNodes = useMemo(() => visibleCanvasNodes(project.canvas.nodes), [project.canvas.nodes])
+  const visibleEdges = useMemo(() => visibleFlowEdges(buildCanvasFlowEdges(project), visibleNodes), [project, visibleNodes])
+  const selectionHighlights = useMemo(
+    () => buildCanvasSelectionHighlights(visibleNodes, visibleEdges, activeSelectedNodeIds, selectedEdgeIds, traceHighlightNodeIds),
+    [activeSelectedNodeIds, selectedEdgeIds, traceHighlightNodeIds, visibleEdges, visibleNodes],
+  )
 
   const openFunctionRunForResource = useCallback(
     (resourceId: string) => {
@@ -1734,17 +1827,19 @@ function CanvasSurface() {
 
   const flowNodes = useMemo<Node[]>(
     () =>
-      visibleCanvasNodes(project.canvas.nodes).map((node) => ({
+      visibleNodes.map((node) => ({
         id: node.id,
         type: node.type,
         position: node.position,
         selected: activeSelectedNodeIds.includes(node.id),
-        className:
+        className: mergeClassNames(
+          selectionHighlights.nodeClassNamesById.get(node.id),
           inputPickMode && node.type === 'resource' && typeof node.data.resourceId === 'string'
             ? inputPickableResourceIds.has(node.data.resourceId)
               ? 'asset-pickable'
               : 'asset-pick-incompatible'
             : undefined,
+        ),
         style: flowNodeStyle(node, flowNodeLayoutContext),
         data: {
           ...node.data,
@@ -1785,7 +1880,6 @@ function CanvasSurface() {
       openFunctionRunForResource,
       inputPickMode,
       inputPickableResourceIds,
-      project.canvas.nodes,
       project.functions,
       project.resources,
       project.tasks,
@@ -1806,16 +1900,18 @@ function CanvasSurface() {
       updateNodeSize,
       updateNumberResourceValue,
       updateTextResourceValue,
+      selectionHighlights.nodeClassNamesById,
+      visibleNodes,
     ],
   )
 
   const flowEdges = useMemo<Edge[]>(() => {
-    const visibleNodes = visibleCanvasNodes(project.canvas.nodes)
-    return visibleFlowEdges(buildCanvasFlowEdges(project), visibleNodes).map((edge) => ({
+    return visibleEdges.map((edge) => ({
       ...edge,
+      className: mergeClassNames(edge.className, selectionHighlights.edgeClassNamesById.get(edge.id)),
       selected: selectedEdgeIds.includes(edge.id),
     }))
-  }, [project, selectedEdgeIds])
+  }, [selectedEdgeIds, selectionHighlights.edgeClassNamesById, visibleEdges])
 
   const selectedComparePair = useMemo<CompareImagePair | undefined>(() => {
     if (activeSelectedNodeIds.length !== 2) return undefined
@@ -1893,6 +1989,7 @@ function CanvasSurface() {
         event.preventDefault()
         undoLastProjectChange()
         setSelectedEdgeIds([])
+        setTraceHighlightNodeIds([])
         return
       }
 
@@ -1900,6 +1997,7 @@ function CanvasSurface() {
         event.preventDefault()
         redoProjectChange()
         setSelectedEdgeIds([])
+        setTraceHighlightNodeIds([])
         return
       }
 
@@ -1911,6 +2009,7 @@ function CanvasSurface() {
         } else if (selectedEdgeIds.length > 0) {
           deleteEdges(selectedEdgeIds)
           setSelectedEdgeIds([])
+          setTraceHighlightNodeIds([])
         } else {
           deleteSelectedNode()
         }
@@ -1928,6 +2027,7 @@ function CanvasSurface() {
         setFunctionRunDialog(undefined)
         selectNode(undefined)
         setSelectedEdgeIds([])
+        setTraceHighlightNodeIds([])
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'c') {
         const nodeIds = activeSelectedNodeIds.length > 0 ? activeSelectedNodeIds : selectedDomNodeIds()
@@ -2065,6 +2165,13 @@ function CanvasSurface() {
     setFunctionNodeMenu((current) => {
       if (!current) return current
       return activeSelectedNodeIds.length === 1 && activeSelectedNodeIds[0] === current.nodeId ? current : undefined
+    })
+  }, [activeSelectedNodeIds])
+
+  useEffect(() => {
+    setTraceHighlightNodeIds((current) => {
+      if (current.length === 0) return current
+      return current.some((nodeId) => activeSelectedNodeIds.includes(nodeId)) ? current : []
     })
   }, [activeSelectedNodeIds])
 
@@ -2690,6 +2797,7 @@ function CanvasSurface() {
           selectionBoxActive.current = true
           selectionBoxNodeIds.current = []
           setSelectedEdgeIds([])
+          setTraceHighlightNodeIds([])
           setQuickToolbar(undefined)
           setFunctionNodeMenu(undefined)
           setGroupNodeMenu(undefined)
@@ -2712,6 +2820,7 @@ function CanvasSurface() {
         onEdgeClick={(event, edge) => {
           event.stopPropagation()
           setSelectedEdgeIds([edge.id])
+          setTraceHighlightNodeIds([])
           setQuickToolbar(undefined)
           setFunctionNodeMenu(undefined)
           setGroupNodeMenu(undefined)
@@ -2787,6 +2896,19 @@ function CanvasSurface() {
           }
           selectNode(node.id, selectionModeFromEvent(event))
         }}
+        onNodeDoubleClick={(event, node) => {
+          if (inputPickMode) return
+          event.preventDefault()
+          event.stopPropagation()
+          setSelectedEdgeIds([])
+          setQuickToolbar(undefined)
+          setFunctionNodeMenu(undefined)
+          setGroupNodeMenu(undefined)
+          if (!activeSelectedNodeIds.includes(node.id)) {
+            selectNode(node.id)
+          }
+          setTraceHighlightNodeIds([node.id])
+        }}
         onNodeContextMenu={handleNodeContextMenu}
         onNodeDragStop={(_, node, draggedNodes) => {
           suppressNextNodeClick.current = true
@@ -2803,6 +2925,7 @@ function CanvasSurface() {
           if (inputPickMode) return
           selectNode(undefined)
           setSelectedEdgeIds([])
+          setTraceHighlightNodeIds([])
           setAddMenu(null)
           setQuickToolbar(undefined)
           setFunctionNodeMenu(undefined)

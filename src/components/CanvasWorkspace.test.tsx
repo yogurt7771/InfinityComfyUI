@@ -1,9 +1,9 @@
 import { useState } from 'react'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CanvasWorkspace, FunctionRunDialog } from './CanvasWorkspace'
 import { projectStore } from '../store/projectStore'
-import type { GenerationFunction, PrimitiveInputValue, Resource, ResourceRef } from '../domain/types'
+import type { GenerationFunction, PrimitiveInputValue, ProjectState, Resource, ResourceRef } from '../domain/types'
 
 describe('CanvasWorkspace', () => {
   const originalProject = projectStore.getState().project
@@ -234,5 +234,112 @@ describe('CanvasWorkspace', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete input slot value' }))
 
     expect(within(dialog).queryByLabelText('Manual input Value')).not.toBeInTheDocument()
+  })
+
+  it('highlights direct graph relations first and expands the full chain after double-clicking the selected node', async () => {
+    const chainedProject: ProjectState = {
+      ...originalProject,
+      project: { ...originalProject.project, id: 'project_selection_highlight' },
+      canvas: {
+        nodes: [
+          { id: 'node_a', type: 'resource', position: { x: 0, y: 0 }, data: { resourceId: 'res_a', title: 'A' } },
+          { id: 'node_b', type: 'resource', position: { x: 320, y: 0 }, data: { resourceId: 'res_b', title: 'B' } },
+          { id: 'node_c', type: 'resource', position: { x: 640, y: 0 }, data: { resourceId: 'res_c', title: 'C' } },
+          { id: 'node_d', type: 'resource', position: { x: 960, y: 0 }, data: { resourceId: 'res_d', title: 'D' } },
+        ],
+        edges: [],
+        viewport: { x: 0, y: 0, zoom: 1 },
+      },
+      resources: {
+        res_a: { id: 'res_a', type: 'text', name: 'A', value: 'a', source: { kind: 'manual_input' } },
+        res_b: { id: 'res_b', type: 'text', name: 'B', value: 'b', source: { kind: 'function_output', taskId: 'task_ab', outputKey: 'text' } },
+        res_c: { id: 'res_c', type: 'text', name: 'C', value: 'c', source: { kind: 'function_output', taskId: 'task_bc', outputKey: 'text' } },
+        res_d: { id: 'res_d', type: 'text', name: 'D', value: 'd', source: { kind: 'function_output', taskId: 'task_cd', outputKey: 'text' } },
+      },
+      tasks: {
+        task_ab: {
+          id: 'task_ab',
+          functionNodeId: 'fn_hidden_ab',
+          functionId: 'fn_text',
+          runIndex: 1,
+          runTotal: 1,
+          status: 'succeeded',
+          inputRefs: { text: { resourceId: 'res_a', type: 'text' } },
+          inputSnapshot: {},
+          inputValuesSnapshot: {},
+          paramsSnapshot: {},
+          workflowTemplateSnapshot: {},
+          compiledWorkflowSnapshot: {},
+          seedPatchLog: [],
+          outputRefs: { text: [{ resourceId: 'res_b', type: 'text' }] },
+          createdAt: '2026-06-25T00:00:00.000Z',
+          updatedAt: '2026-06-25T00:00:00.000Z',
+        },
+        task_bc: {
+          id: 'task_bc',
+          functionNodeId: 'fn_hidden_bc',
+          functionId: 'fn_text',
+          runIndex: 1,
+          runTotal: 1,
+          status: 'succeeded',
+          inputRefs: { text: { resourceId: 'res_b', type: 'text' } },
+          inputSnapshot: {},
+          inputValuesSnapshot: {},
+          paramsSnapshot: {},
+          workflowTemplateSnapshot: {},
+          compiledWorkflowSnapshot: {},
+          seedPatchLog: [],
+          outputRefs: { text: [{ resourceId: 'res_c', type: 'text' }] },
+          createdAt: '2026-06-25T00:00:00.000Z',
+          updatedAt: '2026-06-25T00:00:00.000Z',
+        },
+        task_cd: {
+          id: 'task_cd',
+          functionNodeId: 'fn_hidden_cd',
+          functionId: 'fn_text',
+          runIndex: 1,
+          runTotal: 1,
+          status: 'succeeded',
+          inputRefs: { text: { resourceId: 'res_c', type: 'text' } },
+          inputSnapshot: {},
+          inputValuesSnapshot: {},
+          paramsSnapshot: {},
+          workflowTemplateSnapshot: {},
+          compiledWorkflowSnapshot: {},
+          seedPatchLog: [],
+          outputRefs: { text: [{ resourceId: 'res_d', type: 'text' }] },
+          createdAt: '2026-06-25T00:00:00.000Z',
+          updatedAt: '2026-06-25T00:00:00.000Z',
+        },
+      },
+    }
+    projectStore.setState({
+      project: chainedProject,
+      selectedNodeId: undefined,
+      selectedNodeIds: [],
+    } as Partial<ReturnType<typeof projectStore.getState>>)
+
+    const { container } = render(<CanvasWorkspace />)
+
+    const nodeB = await waitFor(() => {
+      const element = container.querySelector<HTMLElement>('.react-flow__node[data-id="node_b"]')
+      expect(element).not.toBeNull()
+      return element!
+    })
+    const nodeA = container.querySelector<HTMLElement>('.react-flow__node[data-id="node_a"]')!
+    const nodeC = container.querySelector<HTMLElement>('.react-flow__node[data-id="node_c"]')!
+    const nodeD = container.querySelector<HTMLElement>('.react-flow__node[data-id="node_d"]')!
+
+    fireEvent.click(nodeB)
+
+    await waitFor(() => expect(nodeB).toHaveClass('selection-primary'))
+    expect(nodeA).toHaveClass('selection-related')
+    expect(nodeC).toHaveClass('selection-related')
+    expect(nodeD).toHaveClass('selection-dimmed')
+
+    fireEvent.doubleClick(nodeB)
+
+    await waitFor(() => expect(nodeD).toHaveClass('selection-related'))
+    expect(nodeB).toHaveClass('selection-primary')
   })
 })
