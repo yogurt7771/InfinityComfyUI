@@ -2042,8 +2042,31 @@ describe('project store actions', () => {
     expect(functionNodeId).toBe('node_fn_1')
     expect(slice.getState().project.canvas.nodes).toMatchObject([
       { id: 'node_res_1', type: 'resource', position: { x: 640, y: 320 } },
-      { id: 'node_fn_1', type: 'function', position: { x: 820, y: 360 } },
+      { id: 'node_fn_1', type: 'function', position: { x: 1100, y: 360 } },
     ])
+  })
+
+  it('marks newly created nodes and offsets colliding creation positions', () => {
+    const ids = ['res_1', 'res_2', 'fn_1', 'node_fn_1']
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now: () => '2026-06-25T12:00:00.000Z',
+      randomInt: () => 1,
+    })
+
+    slice.getState().addTextResourceAtPosition('Prompt 1', 'first', { x: 100, y: 120 })
+    slice.getState().addTextResourceAtPosition('Prompt 2', 'second', { x: 100, y: 120 })
+    addTestWorkflowFunction(slice)
+    slice.getState().addFunctionNodeAtPosition('fn_1', { x: 100, y: 120 })
+
+    const nodes = slice.getState().project.canvas.nodes
+    expect(nodes.map((node) => node.position)).toEqual([
+      { x: 100, y: 120 },
+      { x: 380, y: 120 },
+      { x: 660, y: 120 },
+    ])
+    expect(nodes.every((node) => node.data.highlight === 'new-node')).toBe(true)
+    expect(nodes.every((node) => typeof node.data.highlightedAt === 'string')).toBe(true)
   })
 
   it('creates placeholder and dropped media asset nodes and replaces media values', () => {
@@ -2576,8 +2599,8 @@ describe('project store actions', () => {
     expect(groupNodeId).toBe('node_group_1')
     expect(slice.getState().project.canvas.nodes).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: 'node_res_3', position: { x: 600, y: 300 } }),
-        expect.objectContaining({ id: 'node_res_4', position: { x: 820, y: 300 } }),
+        expect.objectContaining({ id: 'node_res_3', position: { x: 1160, y: 300 } }),
+        expect.objectContaining({ id: 'node_res_4', position: { x: 1660, y: 300 } }),
         expect.objectContaining({
           id: 'node_group_1',
           type: 'group',

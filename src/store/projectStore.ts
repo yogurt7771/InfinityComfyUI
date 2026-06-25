@@ -925,6 +925,10 @@ const DEFAULT_RESOURCE_Y = 220
 const DEFAULT_FUNCTION_X = 420
 const DEFAULT_FUNCTION_Y = 260
 const RESULT_NODE_GAP_X = 48
+const NODE_PLACEMENT_GAP = 40
+const NODE_PLACEMENT_STEP_X = 280
+const NODE_PLACEMENT_STEP_Y = 220
+const NEW_NODE_HIGHLIGHT = 'new-node'
 const FUNCTION_NODE_ESTIMATED_WIDTH = 520
 const FUNCTION_NODE_ESTIMATED_HEIGHT = 220
 const OPENAI_FUNCTION_NODE_ESTIMATED_WIDTH = 430
@@ -985,6 +989,57 @@ const canvasNodeEstimatedSize = (node: CanvasNode, functions: Record<string, Gen
   if (node.type === 'group') return { width: 260, height: 180 }
   return { width: 230, height: 180 }
 }
+
+const nodeRect = (position: { x: number; y: number }, size: { width: number; height: number }) => ({
+  left: position.x,
+  top: position.y,
+  right: position.x + size.width,
+  bottom: position.y + size.height,
+})
+
+const rectsOverlap = (
+  left: ReturnType<typeof nodeRect>,
+  right: ReturnType<typeof nodeRect>,
+  gap = NODE_PLACEMENT_GAP,
+) =>
+  left.left < right.right + gap &&
+  left.right + gap > right.left &&
+  left.top < right.bottom + gap &&
+  left.bottom + gap > right.top
+
+const nonOverlappingNodePosition = (
+  existingNodes: CanvasNode[],
+  functions: Record<string, GenerationFunction>,
+  requested: { x: number; y: number },
+  size: { width: number; height: number },
+) => {
+  const existingRects = existingNodes.map((node) => nodeRect(node.position, canvasNodeEstimatedSize(node, functions)))
+
+  for (let row = 0; row < 24; row += 1) {
+    for (let column = 0; column < 24; column += 1) {
+      const candidate = {
+        x: requested.x + column * NODE_PLACEMENT_STEP_X,
+        y: requested.y + row * NODE_PLACEMENT_STEP_Y,
+      }
+      const candidateRect = nodeRect(candidate, size)
+      if (!existingRects.some((rect) => rectsOverlap(candidateRect, rect))) return candidate
+    }
+  }
+
+  return {
+    x: requested.x + existingNodes.length * NODE_PLACEMENT_STEP_X,
+    y: requested.y,
+  }
+}
+
+const markNewCanvasNode = (node: CanvasNode, now: string): CanvasNode => ({
+  ...node,
+  data: {
+    ...node.data,
+    highlight: NEW_NODE_HIGHLIGHT,
+    highlightedAt: now,
+  },
+})
 
 const groupBoundsForNodes = (nodes: CanvasNode[], functions: Record<string, GenerationFunction>) => {
   const padding = 32
@@ -4781,6 +4836,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       const resourceId = runtime.idFactory()
       const nodeId = `node_${resourceId}`
       const now = runtime.now()
+      const nodePosition = nonOverlappingNodePosition(
+        get().project.canvas.nodes,
+        get().project.functions,
+        position,
+        { width: 230, height: 180 },
+      )
       const resource: Resource = {
         id: resourceId,
         type: 'text',
@@ -4792,7 +4853,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       const node: CanvasNode = {
         id: nodeId,
         type: 'resource',
-        position,
+        position: nodePosition,
         data: { resourceId, resourceType: 'text' },
       }
 
@@ -4801,7 +4862,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           ...ensureProjectHistory(state.project),
           project: { ...state.project.project, updatedAt: now },
           resources: { ...state.project.resources, [resourceId]: resource },
-          canvas: { ...state.project.canvas, nodes: [...state.project.canvas.nodes, node] },
+          canvas: { ...state.project.canvas, nodes: [...state.project.canvas.nodes, markNewCanvasNode(node, now)] },
         }
         return {
           project: projectWithRecordedHistory(state.project, nextProject, now, {
@@ -4831,6 +4892,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         const resourceId = runtime.idFactory()
         const nodeId = `node_${resourceId}`
         const now = runtime.now()
+        const nodePosition = nonOverlappingNodePosition(
+          get().project.canvas.nodes,
+          get().project.functions,
+          position,
+          { width: 230, height: 180 },
+        )
         const resource: Resource = {
           id: resourceId,
           type,
@@ -4842,7 +4909,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         const node: CanvasNode = {
           id: nodeId,
           type: 'resource',
-          position,
+          position: nodePosition,
           data: { resourceId, resourceType: type },
         }
 
@@ -4851,7 +4918,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             ...ensureProjectHistory(state.project),
             project: { ...state.project.project, updatedAt: now },
             resources: { ...state.project.resources, [resourceId]: resource },
-            canvas: { ...state.project.canvas, nodes: [...state.project.canvas.nodes, node] },
+            canvas: { ...state.project.canvas, nodes: [...state.project.canvas.nodes, markNewCanvasNode(node, now)] },
           }
           return {
             project: projectWithRecordedHistory(state.project, nextProject, now, {
@@ -4875,6 +4942,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         const resourceId = runtime.idFactory()
         const nodeId = `node_${resourceId}`
         const now = runtime.now()
+        const nodePosition = nonOverlappingNodePosition(
+          get().project.canvas.nodes,
+          get().project.functions,
+          position,
+          { width: 230, height: 180 },
+        )
         const resource: Resource = {
           id: resourceId,
           type,
@@ -4886,7 +4959,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         const node: CanvasNode = {
           id: nodeId,
           type: 'resource',
-          position,
+          position: nodePosition,
           data: { resourceId, resourceType: type },
         }
 
@@ -4895,7 +4968,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             ...ensureProjectHistory(state.project),
             project: { ...state.project.project, updatedAt: now },
             resources: { ...state.project.resources, [resourceId]: resource },
-            canvas: { ...state.project.canvas, nodes: [...state.project.canvas.nodes, node] },
+            canvas: { ...state.project.canvas, nodes: [...state.project.canvas.nodes, markNewCanvasNode(node, now)] },
           }
           return {
             project: projectWithRecordedHistory(state.project, nextProject, now, {
@@ -4923,6 +4996,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       const assetId = runtime.idFactory()
       const nodeId = `node_${resourceId}`
       const now = runtime.now()
+      const nodePosition = nonOverlappingNodePosition(
+        get().project.canvas.nodes,
+        get().project.functions,
+        position,
+        { width: 230, height: 180 },
+      )
       const resource: Resource = {
         id: resourceId,
         type,
@@ -4934,7 +5013,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       const node: CanvasNode = {
         id: nodeId,
         type: 'resource',
-        position,
+        position: nodePosition,
         data: { resourceId, resourceType: type },
       }
 
@@ -4954,7 +5033,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
           },
           resources: { ...state.project.resources, [resourceId]: resource },
-          canvas: { ...state.project.canvas, nodes: [...state.project.canvas.nodes, node] },
+          canvas: { ...state.project.canvas, nodes: [...state.project.canvas.nodes, markNewCanvasNode(node, now)] },
         }
         return {
           ...selectedState([nodeId]),
@@ -5343,12 +5422,18 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
       const id = runtime.idFactory()
       const now = runtime.now()
+      const nodePosition = nonOverlappingNodePosition(
+        get().project.canvas.nodes,
+        get().project.functions,
+        position,
+        functionNodeEstimatedSize(functionDef),
+      )
       const inputValues =
         options?.autoBindRequiredInputs === false ? {} : defaultInputValues(functionDef.inputs, get().project.resources)
       const node: CanvasNode = {
         id,
         type: 'function',
-        position,
+        position: nodePosition,
         data: {
           functionId,
           title: functionDef.name,
@@ -5367,7 +5452,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         project: {
           ...state.project,
           project: { ...state.project.project, updatedAt: now },
-          canvas: { ...state.project.canvas, nodes: [...state.project.canvas.nodes, node] },
+          canvas: { ...state.project.canvas, nodes: [...state.project.canvas.nodes, markNewCanvasNode(node, now)] },
         },
       }))
       return id
@@ -5440,6 +5525,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         functionDef.outputs.forEach((output, outputIndex) => {
           const resourceId = runtime.idFactory()
           const ref: ResourceRef = { resourceId, type: output.type }
+          const nodePosition = nonOverlappingNodePosition(
+            [...state.project.canvas.nodes, ...nodes],
+            state.project.functions,
+            commandOutputPosition(position, index, outputIndex),
+            { width: 230, height: 180 },
+          )
           outputRefs[output.key] = [ref]
           resources[resourceId] = {
             id: resourceId,
@@ -5459,19 +5550,24 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
               createdAt: now,
             },
           }
-          nodes.push({
-            id: resourceNodeId(resourceId),
-            type: 'resource',
-            position: commandOutputPosition(position, index, outputIndex),
-            data: {
-              resourceId,
-              resourceType: output.type,
-              functionId,
-              taskId,
-              outputKey: output.key,
-              status: hasPendingDependencies ? 'pending' : 'queued',
-            },
-          })
+          nodes.push(
+            markNewCanvasNode(
+              {
+                id: resourceNodeId(resourceId),
+                type: 'resource',
+                position: nodePosition,
+                data: {
+                  resourceId,
+                  resourceType: output.type,
+                  functionId,
+                  taskId,
+                  outputKey: output.key,
+                  status: hasPendingDependencies ? 'pending' : 'queued',
+                },
+              },
+              now,
+            ),
+          )
         })
 
         tasks[taskId] = {
@@ -5844,20 +5940,30 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
               const resourceId = runtime.idFactory()
               ref = { resourceId, type: outputItem.type }
               refs.push(ref)
-              extraNodes.push({
-                id: resourceNodeId(resourceId),
-                type: 'resource',
-                position: commandOutputPosition(position, runIndex - 1, outputIndex + valueIndex),
-                data: {
-                  resourceId,
-                  resourceType: outputItem.type,
-                  functionId,
-                  taskId,
-                  outputKey: outputItem.key,
-                  status: 'succeeded',
+              extraNodes.push(
+                markNewCanvasNode(
+                  {
+                    id: resourceNodeId(resourceId),
+                    type: 'resource',
+                    position: nonOverlappingNodePosition(
+                      [...get().project.canvas.nodes, ...extraNodes],
+                      get().project.functions,
+                      commandOutputPosition(position, runIndex - 1, outputIndex + valueIndex),
+                      { width: 230, height: 180 },
+                    ),
+                    data: {
+                      resourceId,
+                      resourceType: outputItem.type,
+                      functionId,
+                      taskId,
+                      outputKey: outputItem.key,
+                      status: 'succeeded',
+                      completedAt,
+                    },
+                  },
                   completedAt,
-                },
-              })
+                ),
+              )
             } else {
               ref = { ...ref, type: outputItem.type }
               refs[valueIndex] = ref
@@ -5934,23 +6040,33 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             outputItem.values.forEach((value, valueIndex) => {
               let ref = refs[valueIndex]
               if (!ref) {
-                const resourceId = runtime.idFactory()
-                ref = { resourceId, type: outputItem.type }
-                refs.push(ref)
-                extraNodes.push({
-                  id: resourceNodeId(resourceId),
-                  type: 'resource',
-                  position: commandOutputPosition(position, queuedRun.runIndex - 1, outputIndex + valueIndex),
-                  data: {
-                    resourceId,
-                    resourceType: outputItem.type,
-                    functionId,
-                    taskId: queuedRun.taskId,
-                    outputKey: outputItem.key,
-                    status: 'succeeded',
+              const resourceId = runtime.idFactory()
+              ref = { resourceId, type: outputItem.type }
+              refs.push(ref)
+                extraNodes.push(
+                  markNewCanvasNode(
+                    {
+                      id: resourceNodeId(resourceId),
+                      type: 'resource',
+                      position: nonOverlappingNodePosition(
+                        [...get().project.canvas.nodes, ...extraNodes],
+                        get().project.functions,
+                        commandOutputPosition(position, queuedRun.runIndex - 1, outputIndex + valueIndex),
+                        { width: 230, height: 180 },
+                      ),
+                      data: {
+                        resourceId,
+                        resourceType: outputItem.type,
+                        functionId,
+                        taskId: queuedRun.taskId,
+                        outputKey: outputItem.key,
+                        status: 'succeeded',
+                        completedAt,
+                      },
+                    },
                     completedAt,
-                  },
-                })
+                  ),
+                )
               }
 
               const created = outputResourceFromLocalValue(ref.resourceId, outputItem, value, queuedRun.taskId, completedAt)
@@ -6062,20 +6178,30 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
                 const resourceId = runtime.idFactory()
                 ref = { resourceId, type: output.type }
                 refs.push(ref)
-                extraNodes.push({
-                  id: resourceNodeId(resourceId),
-                  type: 'resource',
-                  position: commandOutputPosition(position, queuedRun.runIndex - 1, outputIndex + valueIndex),
-                  data: {
-                    resourceId,
-                    resourceType: output.type,
-                    functionId,
-                    taskId: queuedRun.taskId,
-                    outputKey: output.key,
-                    status: 'succeeded',
+                extraNodes.push(
+                  markNewCanvasNode(
+                    {
+                      id: resourceNodeId(resourceId),
+                      type: 'resource',
+                      position: nonOverlappingNodePosition(
+                        [...get().project.canvas.nodes, ...extraNodes],
+                        get().project.functions,
+                        commandOutputPosition(position, queuedRun.runIndex - 1, outputIndex + valueIndex),
+                        { width: 230, height: 180 },
+                      ),
+                      data: {
+                        resourceId,
+                        resourceType: output.type,
+                        functionId,
+                        taskId: queuedRun.taskId,
+                        outputKey: output.key,
+                        status: 'succeeded',
+                        completedAt,
+                      },
+                    },
                     completedAt,
-                  },
-                })
+                  ),
+                )
               }
 
               const assetId = runtime.idFactory()
@@ -6122,20 +6248,30 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
                 const resourceId = runtime.idFactory()
                 ref = { resourceId, type: 'text' }
                 refs.push(ref)
-                extraNodes.push({
-                  id: resourceNodeId(resourceId),
-                  type: 'resource',
-                  position: commandOutputPosition(position, queuedRun.runIndex - 1, outputIndex + valueIndex),
-                  data: {
-                    resourceId,
-                    resourceType: 'text',
-                    functionId,
-                    taskId: queuedRun.taskId,
-                    outputKey: output.key,
-                    status: 'succeeded',
+                extraNodes.push(
+                  markNewCanvasNode(
+                    {
+                      id: resourceNodeId(resourceId),
+                      type: 'resource',
+                      position: nonOverlappingNodePosition(
+                        [...get().project.canvas.nodes, ...extraNodes],
+                        get().project.functions,
+                        commandOutputPosition(position, queuedRun.runIndex - 1, outputIndex + valueIndex),
+                        { width: 230, height: 180 },
+                      ),
+                      data: {
+                        resourceId,
+                        resourceType: 'text',
+                        functionId,
+                        taskId: queuedRun.taskId,
+                        outputKey: output.key,
+                        status: 'succeeded',
+                        completedAt,
+                      },
+                    },
                     completedAt,
-                  },
-                })
+                  ),
+                )
               }
 
               nextResources[ref.resourceId] = {
@@ -8078,20 +8214,46 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
       const groupId = runtime.idFactory()
       const groupNodeId = `node_${groupId}`
-      const bounds = groupBoundsForNodes(clonedNodes, state.project.functions)
-      const childNodeIds = clonedNodes.map((node) => node.id)
-      const groupNode: CanvasNode = {
-        id: groupNodeId,
-        type: 'group',
-        position: bounds.position,
-        data: {
-          title: template.name,
-          childNodeIds,
-          collapsed: false,
-          color: '#14b8a6',
-          size: bounds.size,
-        },
+      const initialBounds = groupBoundsForNodes(clonedNodes, state.project.functions)
+      const placedGroupPosition = nonOverlappingNodePosition(
+        state.project.canvas.nodes,
+        state.project.functions,
+        initialBounds.position,
+        initialBounds.size,
+      )
+      const placementDelta = {
+        x: placedGroupPosition.x - initialBounds.position.x,
+        y: placedGroupPosition.y - initialBounds.position.y,
       }
+      const placedClonedNodes = clonedNodes.map((node) =>
+        markNewCanvasNode(
+          {
+            ...node,
+            position: {
+              x: node.position.x + placementDelta.x,
+              y: node.position.y + placementDelta.y,
+            },
+          },
+          now,
+        ),
+      )
+      const bounds = groupBoundsForNodes(placedClonedNodes, state.project.functions)
+      const childNodeIds = clonedNodes.map((node) => node.id)
+      const groupNode: CanvasNode = markNewCanvasNode(
+        {
+          id: groupNodeId,
+          type: 'group',
+          position: bounds.position,
+          data: {
+            title: template.name,
+            childNodeIds,
+            collapsed: false,
+            color: '#14b8a6',
+            size: bounds.size,
+          },
+        },
+        now,
+      )
 
       set((current) => {
         const nextProject = {
@@ -8101,7 +8263,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           resources: { ...current.project.resources, ...clonedResources },
           canvas: {
             ...current.project.canvas,
-            nodes: [...current.project.canvas.nodes, ...clonedNodes, groupNode],
+            nodes: [...current.project.canvas.nodes, ...placedClonedNodes, groupNode],
             edges: [...current.project.canvas.edges, ...clonedEdges],
           },
         }

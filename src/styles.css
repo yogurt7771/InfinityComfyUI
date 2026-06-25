@@ -2476,6 +2476,33 @@ textarea[aria-invalid="true"] {
     0 20px 54px rgba(15, 23, 42, 0.14);
 }
 
+.canvas-node.new-node-highlight::after {
+  content: "";
+  position: absolute;
+  inset: -7px;
+  z-index: 2;
+  border: 3px dotted rgba(20, 184, 166, 0.9);
+  border-radius: 12px;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.86),
+    0 0 28px rgba(20, 184, 166, 0.26);
+  pointer-events: none;
+  animation: new-node-dotted-pulse 960ms ease-in-out 5;
+}
+
+@keyframes new-node-dotted-pulse {
+  0%,
+  100% {
+    opacity: 0.28;
+    transform: scale(0.992);
+  }
+
+  48% {
+    opacity: 1;
+    transform: scale(1.012);
+  }
+}
+
 .resource-node {
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr);

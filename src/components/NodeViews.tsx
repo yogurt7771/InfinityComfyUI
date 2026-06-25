@@ -87,6 +87,8 @@ type WorkbenchNodeData = {
   resources?: Array<{ resourceId: string; type: string }>
   childNodeIds?: string[]
   sourceFunctionNodeId?: string
+  highlight?: string
+  highlightedAt?: string
   error?: {
     code?: string
     message: string
@@ -131,6 +133,7 @@ const hiddenLineageAnchorStyle: CSSProperties = { opacity: 0, pointerEvents: 'no
 const activeResultStatuses = new Set(['pending', 'queued', 'running', 'fetching_outputs'])
 const visibleAssetStatuses = new Set(['pending', 'queued', 'running', 'fetching_outputs', 'failed'])
 const liveAssetDurationStatuses = activeResultStatuses
+const NEW_NODE_HIGHLIGHT_TTL_MS = 15_000
 
 const commitActiveTextControl = () => {
   const activeElement = document.activeElement
@@ -144,6 +147,13 @@ const isResourceRef = (value: PrimitiveInputValue | ResourceRef | undefined): va
 
 const mediaValue = (resource: Resource) =>
   typeof resource.value === 'object' && resource.value !== null && 'url' in resource.value ? resource.value : undefined
+
+const newNodeHighlightClass = (nodeData: WorkbenchNodeData) => {
+  if (nodeData.highlight !== 'new-node') return undefined
+  const highlightedAt = Date.parse(String(nodeData.highlightedAt ?? ''))
+  if (!Number.isFinite(highlightedAt)) return undefined
+  return Date.now() - highlightedAt <= NEW_NODE_HIGHLIGHT_TTL_MS ? 'new-node-highlight' : undefined
+}
 
 const resourcePreviewName = (resource: Resource) => {
   const media = mediaValue(resource)
@@ -1912,6 +1922,7 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
       className={[
         'canvas-node',
         'resource-node',
+        newNodeHighlightClass(nodeData),
         showAssetStatus ? 'resource-node-active' : undefined,
         showAssetStatus ? `resource-node-${assetStatus}` : undefined,
       ]
@@ -2106,6 +2117,7 @@ export const FunctionNodeView = memo(({ id, data, selected }: NodeProps) => {
       className={[
         'canvas-node',
         'function-node',
+        newNodeHighlightClass(nodeData),
         isOpenAiNode ? 'openai-node' : '',
         isGeminiNode ? 'gemini-node' : '',
         isOpenAiImageNode || isGeminiImageNode ? 'image-generation-node' : '',
@@ -2273,7 +2285,17 @@ export const ResultGroupNodeView = memo(({ id, data, selected }: NodeProps) => {
   ) : null
 
   return (
-    <div className={`canvas-node result-node result-node-${status} ${isActive ? 'result-node-active' : ''}`}>
+    <div
+      className={[
+        'canvas-node',
+        'result-node',
+        `result-node-${status}`,
+        isActive ? 'result-node-active' : undefined,
+        newNodeHighlightClass(nodeData),
+      ]
+        .filter(Boolean)
+        .join(' ')}
+    >
       <SelectedResizeControl id={id} minHeight={150} minWidth={260} nodeData={nodeData} selected={Boolean(selected)} />
       <Handle
         className="result-input-handle"
@@ -2371,7 +2393,7 @@ export const GroupNodeView = memo(({ id, data, selected }: NodeProps) => {
   const title = typeof nodeData.title === 'string' ? nodeData.title : 'Group'
 
   return (
-    <div className="canvas-node group-node">
+    <div className={['canvas-node', 'group-node', newNodeHighlightClass(nodeData)].filter(Boolean).join(' ')}>
       <SelectedResizeControl id={id} minHeight={90} minWidth={180} nodeData={nodeData} selected={Boolean(selected)} />
       <div className="node-title">
         <Layers size={16} />
@@ -2387,7 +2409,7 @@ export const EmptyNodeView = memo(({ id, data, selected }: NodeProps) => {
   const nodeData = data as WorkbenchNodeData
 
   return (
-    <div className="canvas-node empty-node">
+    <div className={['canvas-node', 'empty-node', newNodeHighlightClass(nodeData)].filter(Boolean).join(' ')}>
       <SelectedResizeControl id={id} minHeight={90} minWidth={160} nodeData={nodeData} selected={Boolean(selected)} />
       <div className="node-title">
         <Box size={16} />
