@@ -1151,6 +1151,21 @@ test('supports ctrl-click node multi-select like shift-click', async ({ page }) 
   expect(pageErrors).toEqual([])
 })
 
+test('deletes a selected image asset from its node delete button', async ({ page }) => {
+  const pageErrors = collectPageErrors(page)
+  await page.goto('/')
+
+  await addImageAssetByDrop(page)
+  const imageNode = page.locator('.react-flow__node-resource').first()
+  await imageNode.locator('.node-title').click()
+  await expect(imageNode).toHaveClass(/selected/)
+
+  await imageNode.getByRole('button', { name: 'Delete node' }).click()
+
+  await expect(page.locator('.react-flow__node-resource')).toHaveCount(0)
+  expect(pageErrors).toEqual([])
+})
+
 test('ctrl-drag box selection keeps the canvas rendered and selects enclosed nodes', async ({ page }) => {
   const pageErrors = collectPageErrors(page)
   await page.goto('/')

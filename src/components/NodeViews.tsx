@@ -1683,9 +1683,11 @@ function EditableNodeTitle({
       {isSelected ? (
         <button
           aria-label="Delete node"
-          className="node-delete"
+          className="node-delete nodrag nopan"
           type="button"
+          onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => {
+            event.preventDefault()
             event.stopPropagation()
             onDeleteNode(nodeId)
           }}
