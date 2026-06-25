@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { createGenerationFunctionFromWorkflow, injectWorkflowInputs, parseWorkflowNodes, workflowInputCandidates } from './workflow'
+import {
+  createGenerationFunctionFromWorkflow,
+  injectWorkflowInputs,
+  parseWorkflowNodes,
+  workflowInputBindingExists,
+  workflowInputCandidates,
+} from './workflow'
 import type { FunctionInputDef, Resource } from './types'
 
 describe('workflow helpers', () => {
@@ -154,6 +160,44 @@ describe('workflow helpers', () => {
 
     expect(compiled['75:66']!.inputs!.batch_size).toBe(2)
     expect(compiled['75:66']!.inputs!.text).toBe('unrelated legacy field')
+  })
+
+  it('uses the same title fallback for slot validation and runtime injection when workflow node ids change', () => {
+    const workflow = {
+      '20': {
+        class_type: 'LoadImage',
+        _meta: { title: 'Load Image' },
+        inputs: { image: 'old.png' },
+      },
+    }
+    const input: FunctionInputDef = {
+      key: 'image',
+      label: 'Image',
+      type: 'image',
+      required: true,
+      bind: { nodeId: '10', nodeTitle: 'Load Image', path: 'inputs.image' },
+      upload: { strategy: 'manual_path' },
+    }
+    const resources: Record<string, Resource> = {
+      res_image: {
+        id: 'res_image',
+        type: 'image',
+        name: 'Reference',
+        value: {
+          assetId: 'asset_image',
+          url: 'input/new.png',
+          mimeType: 'image/png',
+          sizeBytes: 100,
+        },
+        source: { kind: 'user_upload' },
+      },
+    }
+
+    expect(workflowInputBindingExists(workflow, input)).toBe(true)
+
+    const compiled = injectWorkflowInputs(workflow, [input], { image: { resourceId: 'res_image', type: 'image' } }, resources)
+
+    expect(compiled['20']!.inputs!.image).toBe('input/new.png')
   })
 
   it('injects boolean primitive values into configured workflow paths', () => {

@@ -617,8 +617,25 @@ function ModalShell({
   modalClassName?: string
 }) {
   return (
-    <div className="modal-backdrop">
-      <div className={`manager-modal${modalClassName ? ` ${modalClassName}` : ''}`} role="dialog" aria-modal="true" aria-label={label}>
+    <div
+      className="modal-backdrop"
+      onContextMenu={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+      }}
+      onMouseDown={(event) => event.stopPropagation()}
+    >
+      <div
+        className={`manager-modal${modalClassName ? ` ${modalClassName}` : ''}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label={label}
+        onContextMenu={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+        }}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
         <div className="manager-header">
           <h3>{label}</h3>
           <button

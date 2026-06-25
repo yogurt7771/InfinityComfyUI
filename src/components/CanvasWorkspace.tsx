@@ -72,6 +72,7 @@ import {
 import {
   createGenerationFunctionFromWorkflow,
   isMediaResourceType,
+  workflowInputBindingExists,
   workflowInputCandidates,
   workflowPrimitiveInputValue,
 } from '../domain/workflow'
@@ -975,6 +976,33 @@ const inputValueForNewSlot = (input: FunctionInputDef): PrimitiveInputValue | un
   return undefined
 }
 
+const workflowInputIdentity = (input: FunctionInputDef) =>
+  [input.bind.nodeId ?? '', input.bind.nodeTitle ?? '', input.bind.path].join(workflowSlotValueSeparator)
+
+const workflowInputTitleIdentity = (input: FunctionInputDef) =>
+  [input.bind.nodeTitle ?? '', input.bind.path].join(workflowSlotValueSeparator)
+
+const mergeEditedWorkflowInputs = (currentInputs: FunctionInputDef[], generatedInputs: FunctionInputDef[]) => {
+  const usedKeys = new Set(currentInputs.map((input) => input.key))
+  const usedBindings = new Set(currentInputs.flatMap((input) => [
+    workflowInputIdentity(input),
+    workflowInputTitleIdentity(input),
+  ]))
+  const nextInputs = [...currentInputs]
+
+  for (const input of generatedInputs) {
+    const titleIdentity = workflowInputTitleIdentity(input)
+    if (usedBindings.has(workflowInputIdentity(input)) || usedBindings.has(titleIdentity)) continue
+    if (usedKeys.has(input.key)) continue
+    nextInputs.push(input)
+    usedKeys.add(input.key)
+    usedBindings.add(workflowInputIdentity(input))
+    usedBindings.add(titleIdentity)
+  }
+
+  return nextInputs
+}
+
 const textPromptFromProviderMessages = (
   messages: Array<{ role: string; content: Array<{ type: string; content: string }> }>,
 ) => {
@@ -988,6 +1016,11 @@ const providerImageContentParts = (functionDef: GenerationFunction) =>
     .filter((input) => input.type === 'image')
     .map((input) => ({ type: 'image_url' as const, content: input.key, detail: 'auto' as const }))
 
+const blockModalContextMenu = (event: ReactMouseEvent) => {
+  event.preventDefault()
+  event.stopPropagation()
+}
+
 export function FunctionRunDialog({
   functionDef,
   values,
@@ -997,6 +1030,7 @@ export function FunctionRunDialog({
   onPickInput,
   onRun,
   onFunctionDefChange,
+  onEditComfyWorkflow,
   onRunCountChange,
   onValuesChange,
 }: {
@@ -1008,6 +1042,7 @@ export function FunctionRunDialog({
   onPickInput: (input: { key: string; label: string; type: ResourceType }) => void
   onRun: (values: Record<string, PrimitiveInputValue | ResourceRef>, runCount: number) => void
   onFunctionDefChange?: (functionDef: GenerationFunction) => void
+  onEditComfyWorkflow?: () => void
   onRunCountChange: (runCount: number) => void
   onValuesChange: (values: Record<string, PrimitiveInputValue | ResourceRef>) => void
 }) {
@@ -1150,6 +1185,7 @@ export function FunctionRunDialog({
   return (
     <div
       className="local-action-backdrop nodrag nopan"
+      onContextMenu={blockModalContextMenu}
       onMouseDown={(event) => {
         event.stopPropagation()
         if (event.target === event.currentTarget) onClose()
@@ -1160,6 +1196,7 @@ export function FunctionRunDialog({
         aria-modal="true"
         className="local-action-dialog function-run-dialog"
         role="dialog"
+        onContextMenu={blockModalContextMenu}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header>
@@ -1167,9 +1204,22 @@ export function FunctionRunDialog({
             <h2>{functionDef.name}</h2>
             <span>{functionDef.category ?? 'Function'}</span>
           </div>
-          <button type="button" aria-label="Close function runner" onClick={onClose}>
-            <X size={16} />
-          </button>
+          <div className="function-run-header-actions">
+            {onEditComfyWorkflow ? (
+              <button
+                type="button"
+                className="function-run-edit-workflow"
+                aria-label="Edit workflow in ComfyUI"
+                onClick={onEditComfyWorkflow}
+              >
+                <Pencil size={15} />
+                <span>Edit workflow</span>
+              </button>
+            ) : null}
+            <button type="button" aria-label="Close function runner" onClick={onClose}>
+              <X size={16} />
+            </button>
+          </div>
         </header>
         <div className="function-run-gallery" aria-label="Selected function inputs">
           {selectedResources.length ? (
@@ -1414,8 +1464,14 @@ export function FunctionRunDialog({
             const matchingResources = Object.values(resourcesById).filter((resource) => resource.type === input.type)
             const primitiveValue = isResourceRefValue(value) ? '' : value
             const inputLabel = input.label || input.key
+            const workflowSlotExists =
+              !canEditComfySlots || workflowInputBindingExists(functionDef.workflow.rawJson, input)
             return (
-              <div key={input.key} className="function-run-field">
+              <div
+                key={input.key}
+                className={`function-run-field${workflowSlotExists ? '' : ' function-run-field-invalid'}`}
+                aria-invalid={workflowSlotExists ? undefined : true}
+              >
                 <div className="function-run-field-heading">
                   <span>
                     {inputLabel}
@@ -1433,6 +1489,7 @@ export function FunctionRunDialog({
                     </button>
                   ) : null}
                 </div>
+                {!workflowSlotExists ? <span className="field-error">Workflow slot no longer exists</span> : null}
                 <div className="function-run-slot-row">
                   <select
                     aria-label={`Asset input ${inputLabel}`}
@@ -1490,12 +1547,12 @@ export function FunctionRunDialog({
                   <label className="function-run-boolean-input">
                     <input
                       aria-label={`Manual input ${inputLabel}`}
-                      checked={Boolean(primitiveValue)}
+                      checked={primitiveValue === true}
                       disabled={Boolean(resourceValue)}
                       type="checkbox"
                       onChange={(event) => setPrimitiveValue(input.key, event.target.checked)}
                     />
-                    <span>{Boolean(primitiveValue) ? 'true' : 'false'}</span>
+                    <span>{primitiveValue === true ? 'true' : 'false'}</span>
                   </label>
                 ) : null}
               </div>
@@ -1560,6 +1617,7 @@ function TemporaryComfyWorkflowDialog({
   return (
     <div
       className="local-action-backdrop nodrag nopan"
+      onContextMenu={blockModalContextMenu}
       onMouseDown={(event) => {
         event.stopPropagation()
         if (event.target === event.currentTarget) onClose()
@@ -1570,6 +1628,7 @@ function TemporaryComfyWorkflowDialog({
         aria-modal="true"
         className="local-action-dialog temporary-comfy-runner"
         role="dialog"
+        onContextMenu={blockModalContextMenu}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header>
@@ -2578,7 +2637,11 @@ function CanvasSurface() {
   const saveTemporaryComfyWorkflow = (value: EmbeddedComfySave) => {
     if (!temporaryComfyWorkflow) return
     const createdAt = value.editor.savedAt || new Date().toISOString()
-    const temporaryFunction = createGenerationFunctionFromWorkflow(
+    const currentTemporaryFunction =
+      functionRunDialog?.temporaryFunction?.workflow.format === 'comfyui_api_json'
+        ? functionRunDialog.temporaryFunction
+        : undefined
+    const generatedFunction = createGenerationFunctionFromWorkflow(
       `temp_comfy_${createdAt.replace(/\W/g, '')}`,
       'ComfyUI Workflow',
       value.rawJson,
@@ -2588,19 +2651,38 @@ function CanvasSurface() {
         editor: value.editor,
       },
     )
-    const inputValues = buildFunctionRunInputDraft(
+    const temporaryFunction = currentTemporaryFunction
+      ? {
+          ...generatedFunction,
+          id: currentTemporaryFunction.id,
+          name: currentTemporaryFunction.name,
+          category: currentTemporaryFunction.category,
+          description: currentTemporaryFunction.description,
+          inputs: mergeEditedWorkflowInputs(currentTemporaryFunction.inputs, generatedFunction.inputs),
+          runtimeDefaults: currentTemporaryFunction.runtimeDefaults,
+          createdAt: currentTemporaryFunction.createdAt,
+        }
+      : generatedFunction
+    const nextInputValues = buildFunctionRunInputDraft(
       temporaryFunction,
       project.resources,
       temporaryComfyWorkflow.candidateRefs,
     )
+    const preservedInputValues = functionRunDialog?.temporaryFunction
+      ? { ...nextInputValues, ...functionRunDialog.inputValues }
+      : nextInputValues
     openFunctionRunDialog({
       functionId: temporaryFunction.id,
       temporaryFunction,
-      inputValues,
-      runCount: temporaryFunction.runtimeDefaults?.runCount ?? 1,
-      position: temporaryComfyWorkflow.position,
+      inputValues: preservedInputValues,
+      runCount: functionRunDialog?.runCount ?? temporaryFunction.runtimeDefaults?.runCount ?? 1,
+      position: functionRunDialog?.position ?? temporaryComfyWorkflow.position,
     })
-    setTemporaryComfyWorkflow(undefined)
+    setTemporaryComfyWorkflow({
+      ...temporaryComfyWorkflow,
+      endpointId: value.editor.endpointId,
+      editorOpen: false,
+    })
   }
 
   const createAssetFromMenu = (type: ResourceType) => {
@@ -3136,7 +3218,7 @@ function CanvasSurface() {
           onCancel={() => setInputPickMode(undefined)}
         />
       ) : null}
-      {temporaryComfyWorkflow && !temporaryComfyWorkflow.editorOpen ? (
+      {temporaryComfyWorkflow && !temporaryComfyWorkflow.editorOpen && !functionRunDialog ? (
         <TemporaryComfyWorkflowDialog
           endpoints={project.comfy.endpoints}
           endpointId={temporaryComfyWorkflow.endpointId}
@@ -3150,11 +3232,13 @@ function CanvasSurface() {
       {temporaryComfyWorkflow?.editorOpen ? (
         <ComfyWorkflowEditorDialog
           endpoint={project.comfy.endpoints.find((endpoint) => endpoint.id === temporaryComfyWorkflow.endpointId)}
+          initialUiJson={functionRunDialog?.temporaryFunction?.workflow.uiJson}
+          initialApiJson={functionRunDialog?.temporaryFunction?.workflow.rawJson}
           onSave={saveTemporaryComfyWorkflow}
           onClose={() => setTemporaryComfyWorkflow((current) => (current ? { ...current, editorOpen: false } : current))}
         />
       ) : null}
-      {functionRunDialog && activeFunctionRunFunction && !inputPickMode ? (
+      {functionRunDialog && activeFunctionRunFunction && !inputPickMode && !temporaryComfyWorkflow?.editorOpen ? (
         <FunctionRunDialog
           functionDef={activeFunctionRunFunction}
           values={functionRunDialog.inputValues}
@@ -3163,6 +3247,9 @@ function CanvasSurface() {
           onClose={() => {
             setInputPickMode(undefined)
             setFunctionRunDialog(undefined)
+            if (functionRunDialog.temporaryFunction?.workflow.format === 'comfyui_api_json') {
+              setTemporaryComfyWorkflow(undefined)
+            }
           }}
           onPickInput={(input) => {
             setInputPickMode({
@@ -3183,6 +3270,22 @@ function CanvasSurface() {
             functionRunDialog.temporaryFunction
               ? (temporaryFunction) =>
                   setFunctionRunDialog((current) => (current ? { ...current, temporaryFunction } : current))
+              : undefined
+          }
+          onEditComfyWorkflow={
+            functionRunDialog.temporaryFunction?.workflow.format === 'comfyui_api_json'
+              ? () => {
+                  const endpointId =
+                    functionRunDialog.temporaryFunction?.workflow.editor?.endpointId ??
+                    temporaryComfyWorkflow?.endpointId ??
+                    project.comfy.endpoints.find((endpoint) => endpoint.enabled !== false)?.id
+                  setTemporaryComfyWorkflow((current) => ({
+                    position: current?.position ?? functionRunDialog.position,
+                    endpointId,
+                    editorOpen: true,
+                    candidateRefs: current?.candidateRefs ?? [],
+                  }))
+                }
               : undefined
           }
           onRunCountChange={(runCount) =>

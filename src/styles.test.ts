@@ -10,6 +10,12 @@ const cssBlock = (selector: string) => {
   return match?.groups?.body ?? ''
 }
 
+const cssNumericValue = (selector: string, property: string) => {
+  const block = cssBlock(selector)
+  const match = new RegExp(`${property}\\s*:\\s*(\\d+)`).exec(block)
+  return match ? Number(match[1]) : undefined
+}
+
 describe('preview media CSS', () => {
   it('forces connected and reference media previews to render contained inside their frame', () => {
     const block = cssBlock('.media-preview-contain')
@@ -89,5 +95,11 @@ describe('canvas resource UI CSS', () => {
     expect(buttonBlock).toContain('min-height: 30px')
     expect(buttonBlock).toContain('border-color: transparent')
     expect(buttonBlock).toContain('box-shadow: none')
+  })
+
+  it('keeps full resource previews above local action dialogs', () => {
+    expect(cssNumericValue('.full-preview-backdrop', 'z-index')).toBeGreaterThan(
+      cssNumericValue('.local-action-backdrop', 'z-index') ?? 0,
+    )
   })
 })

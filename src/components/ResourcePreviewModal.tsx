@@ -174,6 +174,10 @@ export function FullResourcePreviewModal({
   const dialog = (
     <div
       className="full-preview-backdrop nodrag nopan"
+      onContextMenu={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+      }}
       onMouseDown={(event) => {
         event.stopPropagation()
         if (event.target === event.currentTarget) onClose()
@@ -184,6 +188,10 @@ export function FullResourcePreviewModal({
         aria-modal="true"
         className="full-preview-modal"
         role="dialog"
+        onContextMenu={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+        }}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="full-preview-header">

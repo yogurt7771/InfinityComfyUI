@@ -52,7 +52,10 @@ describe('CanvasWorkspace', () => {
     source: { kind: 'user_upload' },
   }
 
-  const renderFunctionRunDialog = (initialFunction: GenerationFunction) => {
+  const renderFunctionRunDialog = (
+    initialFunction: GenerationFunction,
+    options: { onEditComfyWorkflow?: () => void } = {},
+  ) => {
     const onRun = vi.fn()
     const Wrapper = () => {
       const [functionDef, setFunctionDef] = useState(initialFunction)
@@ -71,6 +74,7 @@ describe('CanvasWorkspace', () => {
           onFunctionDefChange={setFunctionDef}
           onRunCountChange={vi.fn()}
           onValuesChange={setValues}
+          onEditComfyWorkflow={options.onEditComfyWorkflow}
         />
       )
     }
@@ -234,6 +238,84 @@ describe('CanvasWorkspace', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete input slot value' }))
 
     expect(within(dialog).queryByLabelText('Manual input Value')).not.toBeInTheDocument()
+  })
+
+  it('keeps saved temporary ComfyUI workflows editable from the runner dialog', () => {
+    const onEditComfyWorkflow = vi.fn()
+    renderFunctionRunDialog(
+      {
+        id: 'temp_comfy',
+        name: 'ComfyUI Workflow',
+        category: 'Render',
+        workflow: {
+          format: 'comfyui_api_json',
+          rawJson: {
+            '10': { class_type: 'LoadImage', _meta: { title: 'Load Image' }, inputs: { image: 'reference.png' } },
+          },
+          uiJson: { nodes: [], links: [] },
+        },
+        inputs: [
+          {
+            key: 'image',
+            label: 'Image',
+            type: 'image',
+            required: true,
+            bind: { nodeId: '10', nodeTitle: 'Load Image', path: 'inputs.image' },
+            upload: { strategy: 'comfy_upload' },
+          },
+        ],
+        outputs: [],
+        createdAt: '2026-06-25T00:00:00.000Z',
+        updatedAt: '2026-06-25T00:00:00.000Z',
+      },
+      { onEditComfyWorkflow },
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit workflow in ComfyUI' }))
+
+    expect(onEditComfyWorkflow).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps missing ComfyUI workflow slots visible with an invalid warning after workflow edits', () => {
+    renderFunctionRunDialog({
+      id: 'temp_comfy',
+      name: 'ComfyUI Workflow',
+      category: 'Render',
+      workflow: {
+        format: 'comfyui_api_json',
+        rawJson: {
+          '20': { class_type: 'Boolean', _meta: { title: 'Enable Detailer' }, inputs: { value: true } },
+        },
+      },
+      inputs: [
+        {
+          key: 'image',
+          label: 'Image',
+          type: 'image',
+          required: true,
+          bind: { nodeId: '10', nodeTitle: 'Load Image', path: 'inputs.image' },
+          upload: { strategy: 'comfy_upload' },
+        },
+      ],
+      outputs: [],
+      createdAt: '2026-06-25T00:00:00.000Z',
+      updatedAt: '2026-06-25T00:00:00.000Z',
+    })
+
+    const field = screen.getByText('Image').closest('.function-run-field') as HTMLElement
+
+    expect(field).toHaveClass('function-run-field-invalid')
+    expect(within(field).getByText('Workflow slot no longer exists')).toBeInTheDocument()
+  })
+
+  it('blocks canvas context menus while a local action dialog is open', () => {
+    const menu = openAddMenu()
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'ComfyUI Workflow' }))
+
+    const backdrop = document.querySelector('.local-action-backdrop') as HTMLElement
+    fireEvent.contextMenu(backdrop, { clientX: 220, clientY: 180 })
+
+    expect(screen.queryByRole('menu', { name: 'Add node' })).not.toBeInTheDocument()
   })
 
   it('highlights direct graph relations first and expands the full chain after double-clicking the selected node', async () => {

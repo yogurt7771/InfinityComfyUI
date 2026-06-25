@@ -1905,6 +1905,33 @@ textarea[aria-invalid="true"] {
   padding: 0;
 }
 
+.function-run-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.local-action-dialog header .function-run-edit-workflow {
+  width: auto;
+  min-width: 0;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 11px;
+  color: var(--teal-strong);
+  border-color: rgba(13, 148, 136, 0.28);
+  background: rgba(240, 253, 250, 0.86);
+}
+
+.local-action-dialog header .function-run-edit-workflow span {
+  color: currentColor;
+  font-size: 12px;
+  font-weight: 900;
+}
+
 .local-action-fields {
   display: grid;
   gap: 10px;
@@ -2058,6 +2085,14 @@ textarea[aria-invalid="true"] {
   border: 1px solid var(--line);
   border-radius: 10px;
   background: #ffffff;
+}
+
+.function-run-field-invalid {
+  border-color: rgba(225, 29, 72, 0.72);
+  background:
+    linear-gradient(180deg, rgba(255, 241, 242, 0.94), rgba(255, 255, 255, 0.92)),
+    #ffffff;
+  box-shadow: 0 0 0 3px rgba(225, 29, 72, 0.1);
 }
 
 .function-run-field-heading {
@@ -3927,7 +3962,7 @@ textarea[aria-invalid="true"] {
 .full-preview-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  z-index: 120;
   display: grid;
   place-items: center;
   padding: 24px;
