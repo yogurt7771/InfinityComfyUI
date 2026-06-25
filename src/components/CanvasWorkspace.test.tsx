@@ -357,7 +357,7 @@ describe('CanvasWorkspace', () => {
     expect(zIndexById.get('node_old')).toBeGreaterThan(zIndexById.get('node_new') ?? 0)
   })
 
-  it('highlights direct graph relations first and expands the full chain after double-clicking the selected node', async () => {
+  it('highlights direct graph relations first, expands the full chain, and clears it from an empty canvas click', async () => {
     const chainedProject: ProjectState = {
       ...originalProject,
       project: { ...originalProject.project, id: 'project_selection_highlight' },
@@ -462,5 +462,77 @@ describe('CanvasWorkspace', () => {
 
     await waitFor(() => expect(nodeD).toHaveClass('selection-related'))
     expect(nodeB).toHaveClass('selection-primary')
+
+    const pane = container.querySelector<HTMLElement>('.react-flow__pane')
+    expect(pane).not.toBeNull()
+    fireEvent.click(pane!)
+
+    await waitFor(() => expect(nodeB).not.toHaveClass('selection-primary'))
+    expect(nodeA).not.toHaveClass('selection-related')
+    expect(nodeC).not.toHaveClass('selection-related')
+    expect(nodeD).not.toHaveClass('selection-related')
+    expect(projectStore.getState().selectedNodeId).toBeUndefined()
+    expect(projectStore.getState().selectedNodeIds).toEqual([])
+  })
+
+  it('clears expanded graph highlights as soon as an empty canvas press starts', async () => {
+    const chainedProject: ProjectState = {
+      ...originalProject,
+      project: { ...originalProject.project, id: 'project_selection_mousedown_clear' },
+      canvas: {
+        nodes: [
+          { id: 'node_a', type: 'resource', position: { x: 0, y: 0 }, data: { resourceId: 'res_a', title: 'A' } },
+          { id: 'node_b', type: 'resource', position: { x: 320, y: 0 }, data: { resourceId: 'res_b', title: 'B' } },
+        ],
+        edges: [],
+        viewport: { x: 0, y: 0, zoom: 1 },
+      },
+      resources: {
+        res_a: { id: 'res_a', type: 'text', name: 'A', value: 'a', source: { kind: 'manual_input' } },
+        res_b: { id: 'res_b', type: 'text', name: 'B', value: 'b', source: { kind: 'function_output', taskId: 'task_ab', outputKey: 'text' } },
+      },
+      tasks: {
+        task_ab: {
+          id: 'task_ab',
+          functionNodeId: 'fn_hidden_ab',
+          functionId: 'fn_text',
+          runIndex: 1,
+          runTotal: 1,
+          status: 'succeeded',
+          inputRefs: { text: { resourceId: 'res_a', type: 'text' } },
+          inputSnapshot: {},
+          inputValuesSnapshot: {},
+          paramsSnapshot: {},
+          workflowTemplateSnapshot: {},
+          compiledWorkflowSnapshot: {},
+          seedPatchLog: [],
+          outputRefs: { text: [{ resourceId: 'res_b', type: 'text' }] },
+          createdAt: '2026-06-25T00:00:00.000Z',
+          updatedAt: '2026-06-25T00:00:00.000Z',
+        },
+      },
+    }
+    projectStore.setState({
+      project: chainedProject,
+      selectedNodeId: undefined,
+      selectedNodeIds: [],
+    } as Partial<ReturnType<typeof projectStore.getState>>)
+
+    const { container } = render(<CanvasWorkspace />)
+    const nodeB = await waitFor(() => {
+      const element = container.querySelector<HTMLElement>('.react-flow__node[data-id="node_b"]')
+      expect(element).not.toBeNull()
+      return element!
+    })
+
+    fireEvent.click(nodeB)
+    fireEvent.doubleClick(nodeB)
+    await waitFor(() => expect(nodeB).toHaveClass('selection-primary'))
+
+    fireEvent.mouseDown(screen.getByLabelText('Canvas'))
+
+    await waitFor(() => expect(nodeB).not.toHaveClass('selection-primary'))
+    expect(projectStore.getState().selectedNodeId).toBeUndefined()
+    expect(projectStore.getState().selectedNodeIds).toEqual([])
   })
 })

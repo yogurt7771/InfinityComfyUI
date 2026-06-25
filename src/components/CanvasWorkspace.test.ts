@@ -168,10 +168,23 @@ describe('CanvasWorkspace helpers', () => {
         className: 'input-edge',
         selected: false,
       },
+      {
+        id: 'edge_2',
+        source: 'node_image',
+        sourceHandle: 'resource:res_image',
+        target: 'node_fn',
+        targetHandle: 'input:image',
+        animated: false,
+        label: 'image',
+        type: 'default',
+        className: 'input-edge',
+        selected: false,
+      },
     ]
     const next = previous.map((edge) => ({ ...edge }))
 
     expect(sameFlowEdgesForSync(previous, next)).toBe(true)
+    expect(sameFlowEdgesForSync([...previous].reverse(), next)).toBe(true)
     expect(sameFlowEdgesForSync(previous, [{ ...next[0], selected: true }])).toBe(false)
   })
 

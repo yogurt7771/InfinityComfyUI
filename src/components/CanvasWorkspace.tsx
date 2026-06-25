@@ -381,8 +381,9 @@ export const sameFlowEdgesForSync = (left: Edge[], right: Edge[]) => {
   if (left === right) return true
   if (left.length !== right.length) return false
 
-  return left.every((edge, index) => {
-    const next = right[index]
+  const rightById = new Map(right.map((edge) => [edge.id, edge]))
+  return left.every((edge) => {
+    const next = rightById.get(edge.id)
     return (
       next &&
       edge.id === next.id &&
@@ -1877,6 +1878,16 @@ function CanvasSurface() {
     setInputPickMode(reset.inputPickMode)
   }, [])
 
+  const clearCanvasSelection = useCallback(() => {
+    selectNode(undefined)
+    setSelectedEdgeIds([])
+    setTraceHighlightNodeIds([])
+    setAddMenu(null)
+    setQuickToolbar(undefined)
+    setFunctionNodeMenu(undefined)
+    setGroupNodeMenu(undefined)
+  }, [selectNode])
+
   const openFunctionRunDialog = useCallback(
     (dialog: FunctionRunDialogState) => {
       closeFunctionRunFloatingMenus()
@@ -2227,12 +2238,14 @@ function CanvasSurface() {
 
   const handleSelectionChange = ({ nodes: changedNodes, edges: changedEdges }: { nodes: Node[]; edges: Edge[] }) => {
     const changedEdgeIds = changedEdges.map((edge) => edge.id)
+    setSelectedEdgeIds((current) =>
+      current.length === changedEdgeIds.length && current.every((edgeId, index) => edgeId === changedEdgeIds[index])
+        ? current
+        : changedEdgeIds,
+    )
     if (changedEdgeIds.length > 0) {
-      setSelectedEdgeIds((current) =>
-        current.length === changedEdgeIds.length && current.every((edgeId, index) => edgeId === changedEdgeIds[index])
-          ? current
-          : changedEdgeIds,
-      )
+      selectNode(undefined)
+      setTraceHighlightNodeIds([])
     }
     if (!selectionBoxActive.current) return
     selectionBoxNodeIds.current = changedNodes.map((node) => node.id)
@@ -2925,6 +2938,18 @@ function CanvasSurface() {
       className={`workspace-canvas${inputPickMode ? ' asset-pick-mode' : ''}`}
       aria-label="Canvas"
       onClickCapture={handleHandleClick}
+      onMouseDownCapture={(event) => {
+        if (inputPickMode) return
+        const target = event.target instanceof HTMLElement ? event.target : null
+        if (
+          target?.closest(
+            '.react-flow__node, .react-flow__edge, button, input, select, textarea, .react-flow__controls, .comfy-minimap, .add-node-menu, .resource-quick-actions, .function-node-actions',
+          )
+        ) {
+          return
+        }
+        clearCanvasSelection()
+      }}
       onDoubleClick={(event) => {
         const target = event.target as HTMLElement
         if (target.closest('.react-flow__node, button, input, textarea, .react-flow__controls, .comfy-minimap, .add-node-menu')) {
@@ -3088,13 +3113,7 @@ function CanvasSurface() {
         }}
         onPaneClick={() => {
           if (inputPickMode) return
-          selectNode(undefined)
-          setSelectedEdgeIds([])
-          setTraceHighlightNodeIds([])
-          setAddMenu(null)
-          setQuickToolbar(undefined)
-          setFunctionNodeMenu(undefined)
-          setGroupNodeMenu(undefined)
+          clearCanvasSelection()
         }}
         zoomOnDoubleClick={false}
         deleteKeyCode={null}
