@@ -610,15 +610,18 @@ function ModalShell({
   children,
   onClose,
   modalClassName,
+  hidden = false,
 }: {
   label: string
   children: ReactNode
   onClose: () => void
   modalClassName?: string
+  hidden?: boolean
 }) {
   return (
     <div
-      className="modal-backdrop"
+      className={`modal-backdrop${hidden ? ' modal-backdrop-hidden' : ''}`}
+      aria-hidden={hidden || undefined}
       onContextMenu={(event) => {
         event.preventDefault()
         event.stopPropagation()
@@ -627,9 +630,9 @@ function ModalShell({
     >
       <div
         className={`manager-modal${modalClassName ? ` ${modalClassName}` : ''}`}
-        role="dialog"
-        aria-modal="true"
-        aria-label={label}
+        role={hidden ? undefined : 'dialog'}
+        aria-modal={hidden ? undefined : 'true'}
+        aria-label={hidden ? undefined : label}
         onContextMenu={(event) => {
           event.preventDefault()
           event.stopPropagation()
@@ -1166,12 +1169,14 @@ async function waitForComfyFrameApp(frame: HTMLIFrameElement) {
 }
 
 export function ComfyWorkflowEditorDialog({
+  open = true,
   endpoint,
   initialUiJson,
   initialApiJson,
   onSave,
   onClose,
 }: {
+  open?: boolean
   endpoint?: ComfyEndpointConfig
   initialUiJson?: ComfyUiWorkflow
   initialApiJson?: ComfyWorkflow
@@ -1179,19 +1184,31 @@ export function ComfyWorkflowEditorDialog({
   onClose: () => void
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null)
+  const wasOpenRef = useRef(false)
+  const initializingRef = useRef<Promise<void> | undefined>(undefined)
   const [status, setStatus] = useState(endpoint ? 'Loading ComfyUI editor' : 'No ComfyUI endpoint configured')
   const [error, setError] = useState<string>()
   const [saving, setSaving] = useState(false)
+  const [frameReady, setFrameReady] = useState(false)
   const proxyUrl = endpoint
     ? comfyProxyUrl(endpoint.baseUrl, {
         bearerToken: endpoint.auth?.type === 'token' ? endpoint.auth.token : undefined,
       })
     : undefined
 
-  const initializeFrame = async () => {
-    if (!frameRef.current || !endpoint) return
-    try {
-      const app = await waitForComfyFrameApp(frameRef.current)
+  useEffect(() => {
+    setFrameReady(false)
+    setStatus(endpoint ? 'Loading ComfyUI editor' : 'No ComfyUI endpoint configured')
+    setError(undefined)
+  }, [endpoint?.id, proxyUrl])
+
+  const initializeFrame = useCallback(async () => {
+    if (initializingRef.current) return initializingRef.current
+    const frame = frameRef.current
+    if (!frame || !endpoint) return
+    const run = (async () => {
+      setStatus('Loading ComfyUI editor')
+      const app = await waitForComfyFrameApp(frame)
       if (initialUiJson && app.handleFile) {
         await openWorkflowJsonFileInComfyEditor(app, initialUiJson, 'Infinity Workflow.json')
         setStatus('Opened editable workflow through ComfyUI File Open')
@@ -1207,11 +1224,42 @@ export function ComfyWorkflowEditorDialog({
       } else {
         setStatus(initialUiJson ? 'ComfyUI editor ready' : 'ComfyUI editor ready. No editable UI workflow is stored yet.')
       }
+      setFrameReady(true)
       setError(undefined)
+    })()
+    initializingRef.current = run
+    try {
+      await run
     } catch (err) {
+      const frameWindow = frameRef.current?.contentWindow
+      const framePath = (() => {
+        try {
+          return frameWindow?.location.pathname ?? ''
+        } catch {
+          return ''
+        }
+      })()
+      if (framePath.includes('/login')) {
+        setStatus('ComfyUI login page opened. Log in to continue.')
+        setError(undefined)
+        return
+      }
+      setFrameReady(false)
       setError(err instanceof Error ? err.message : 'Failed to initialize ComfyUI editor')
+    } finally {
+      if (initializingRef.current === run) initializingRef.current = undefined
     }
-  }
+  }, [endpoint, initialApiJson, initialUiJson])
+
+  useEffect(() => {
+    if (!open) {
+      wasOpenRef.current = false
+      return
+    }
+    if (wasOpenRef.current) return
+    wasOpenRef.current = true
+    void initializeFrame()
+  }, [initializeFrame, open])
 
   const saveFromComfy = async () => {
     if (!frameRef.current || !endpoint) return
@@ -1240,8 +1288,10 @@ export function ComfyWorkflowEditorDialog({
     }
   }
 
+  const showLoadingFallback = Boolean(open && proxyUrl && !frameReady && !error && !status.includes('login page'))
+
   return (
-    <ModalShell label="ComfyUI Workflow Editor" modalClassName="comfy-editor-modal" onClose={onClose}>
+    <ModalShell label="ComfyUI Workflow Editor" modalClassName="comfy-editor-modal" hidden={!open} onClose={onClose}>
       <div className="comfy-editor-shell">
         <div className="comfy-editor-toolbar">
           <div>
@@ -1250,21 +1300,29 @@ export function ComfyWorkflowEditorDialog({
           </div>
           <div className="comfy-editor-actions">
             <span className={error ? 'field-error' : 'comfy-editor-status'}>{error ?? status}</span>
-            <button type="button" onClick={saveFromComfy} disabled={!endpoint || saving}>
+            <button type="button" onClick={saveFromComfy} disabled={!endpoint || saving || !frameReady}>
               {saving ? 'Saving...' : 'Save from ComfyUI'}
             </button>
           </div>
         </div>
         {proxyUrl ? (
-          <iframe
-            ref={frameRef}
-            title={`ComfyUI editor ${endpoint?.name ?? ''}`.trim()}
-            className="comfy-editor-frame"
-            src={proxyUrl}
-            onLoad={() => {
-              void initializeFrame()
-            }}
-          />
+          <div className="comfy-editor-frame-wrap">
+            <iframe
+              ref={frameRef}
+              title={`ComfyUI editor ${endpoint?.name ?? ''}`.trim()}
+              className="comfy-editor-frame"
+              src={proxyUrl}
+              onLoad={() => {
+                if (open) void initializeFrame()
+              }}
+            />
+            {showLoadingFallback ? (
+              <div className="comfy-editor-loading" role="status" aria-label="ComfyUI editor loading">
+                <strong>Loading ComfyUI editor</strong>
+                <span>Initializing ComfyUI, extensions, and custom nodes.</span>
+              </div>
+            ) : null}
+          </div>
         ) : (
           <div className="comfy-editor-empty">No ComfyUI endpoint is available.</div>
         )}
@@ -1677,15 +1735,14 @@ function NewFunctionDialog({
         </div>
       </div>
     </ModalShell>
-    {comfyEditorOpen ? (
-      <ComfyWorkflowEditorDialog
-        endpoint={selectedComfyEndpoint}
-        initialUiJson={workflowUiJson}
-        initialApiJson={workflowRawJson}
-        onSave={saveEmbeddedWorkflow}
-        onClose={() => setComfyEditorOpen(false)}
-      />
-    ) : null}
+    <ComfyWorkflowEditorDialog
+      open={comfyEditorOpen}
+      endpoint={selectedComfyEndpoint}
+      initialUiJson={workflowUiJson}
+      initialApiJson={workflowRawJson}
+      onSave={saveEmbeddedWorkflow}
+      onClose={() => setComfyEditorOpen(false)}
+    />
     </Fragment>
   )
 }
@@ -2575,8 +2632,9 @@ export function FunctionManager({
           onBindComfyEndpoint={bindNewWorkflowFunctionToEndpoint}
         />
       ) : null}
-      {comfyEditorOpen && selectedFunction && !selectedIsRequest && !selectedIsProvider ? (
+      {selectedFunction && !selectedIsRequest && !selectedIsProvider ? (
         <ComfyWorkflowEditorDialog
+          open={comfyEditorOpen}
           endpoint={selectedEditorComfyEndpoint}
           initialUiJson={selectedFunction.workflow.uiJson}
           initialApiJson={selectedFunction.workflow.rawJson}

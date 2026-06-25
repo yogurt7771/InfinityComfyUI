@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { LeftPanel, RightPanel, SettingsPage, highlightedJson } from './WorkbenchPanels'
+import { ComfyWorkflowEditorDialog, LeftPanel, RightPanel, SettingsPage, highlightedJson } from './WorkbenchPanels'
 import { projectStore } from '../store/projectStore'
 import type { ProjectState } from '../domain/types'
 import { createOpenAIImageFunction } from '../domain/openaiImage'
@@ -581,7 +581,9 @@ describe('LeftPanel', () => {
     })
 
     fireEvent.load(frame)
-    fireEvent.click(within(editor).getByRole('button', { name: 'Save from ComfyUI' }))
+    const saveFromComfyButton = within(editor).getByRole('button', { name: 'Save from ComfyUI' })
+    await waitFor(() => expect(saveFromComfyButton).toBeEnabled())
+    fireEvent.click(saveFromComfyButton)
 
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ComfyUI Workflow Editor' })).not.toBeInTheDocument())
     expect(within(createDialog).getByLabelText('Captured ComfyUI workflow')).toHaveTextContent('2 API nodes saved')
@@ -1490,5 +1492,29 @@ describe('LeftPanel', () => {
     expect(within(managerDialog).getByLabelText('Gemini API key')).toHaveValue('gemini-test')
     expect(within(managerDialog).getByLabelText('Gemini model')).toHaveValue('gemini-custom')
     expect((within(managerDialog).getByLabelText('Gemini messages JSON') as HTMLTextAreaElement).value).toContain('"role"')
+  })
+})
+
+describe('ComfyWorkflowEditorDialog', () => {
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  it('shows an in-frame loading fallback while the embedded ComfyUI editor is blank', () => {
+    render(
+      <ComfyWorkflowEditorDialog
+        endpoint={panelProject().comfy.endpoints[0]}
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    )
+
+    const editor = screen.getByRole('dialog', { name: 'ComfyUI Workflow Editor' })
+
+    expect(within(editor).getByRole('status', { name: 'ComfyUI editor loading' })).toHaveTextContent(
+      'Loading ComfyUI editor',
+    )
+    expect(within(editor).getByTitle('ComfyUI editor Local ComfyUI')).toBeInTheDocument()
   })
 })

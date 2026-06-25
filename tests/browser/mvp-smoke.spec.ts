@@ -630,7 +630,7 @@ test('reopens a failed built-in output asset as an editable runner', async ({ pa
   await failedNode.getByRole('button', { name: 'Edit and run OpenAI LLM' }).click()
   const retryDialog = page.getByRole('dialog', { name: 'Run OpenAI LLM' })
   await expect(retryDialog.getByLabel('OpenAI base URL')).toHaveValue('https://retry.local/v1')
-  await retryDialog.getByRole('button', { name: 'Run function from popup' }).click()
+  await retryDialog.getByRole('button', { name: 'Run and replace current output' }).click()
 
   const successNode = canvas.locator('.react-flow__node-resource').filter({ hasText: 'Retry success 2' }).first()
   await expect(successNode).toBeVisible()

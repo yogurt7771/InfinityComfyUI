@@ -1154,6 +1154,12 @@ div.server-list-item {
   padding: 12px;
 }
 
+.modal-backdrop-hidden {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .comfy-editor-toolbar {
   min-height: 54px;
   padding: 10px 12px;
@@ -1190,13 +1196,46 @@ div.server-list-item {
   white-space: nowrap;
 }
 
+.comfy-editor-frame-wrap {
+  position: relative;
+  min-height: 520px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: #f8fbfc;
+}
+
 .comfy-editor-frame {
   width: 100%;
   height: min(760px, calc(100dvh - 160px));
   min-height: 520px;
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
+  border: 0;
   background: #f8fbfc;
+}
+
+.comfy-editor-loading {
+  position: absolute;
+  inset: auto 50% 28px auto;
+  display: grid;
+  min-width: min(360px, calc(100% - 48px));
+  max-width: calc(100% - 48px);
+  padding: 14px 16px;
+  border: 1px solid rgba(7, 128, 118, 0.22);
+  border-radius: 8px;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 18px 48px rgba(16, 35, 45, 0.16);
+  transform: translateX(50%);
+  pointer-events: none;
+}
+
+.comfy-editor-loading strong {
+  font-size: 14px;
+}
+
+.comfy-editor-loading span {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .comfy-editor-empty {

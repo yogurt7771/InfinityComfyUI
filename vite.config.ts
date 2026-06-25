@@ -2,6 +2,8 @@ import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import { readFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import net, { type Socket } from 'node:net'
+import tls from 'node:tls'
 import type { Plugin, ViteDevServer } from 'vite'
 import {
   COMFY_PROXY_PREFIX,
@@ -59,6 +61,88 @@ const proxyRequestHeaders = async (request: IncomingMessage, bearerToken: string
   return headers
 }
 
+const shouldAttachProxyBearer = (request: IncomingMessage, targetUrl: URL) => {
+  const accept = String(request.headers.accept ?? '').toLowerCase()
+  if (accept.includes('text/html')) return false
+  const pathname = targetUrl.pathname.toLowerCase()
+  const staticFileExtension = /\.[a-z0-9]{1,8}$/.test(pathname)
+  return !staticFileExtension || pathname.endsWith('.json')
+}
+
+const proxyCookiePath = (proxyBase: string) => (proxyBase.endsWith('/') ? proxyBase : `${proxyBase}/`)
+
+const rewriteComfyProxySetCookie = (value: string, proxyBase: string) => {
+  const parts = value.split(';')
+  let hasPath = false
+  const rewritten: string[] = []
+  for (const part of parts) {
+    const trimmed = part.trim()
+    const key = trimmed.split('=', 1)[0]?.toLowerCase()
+    if (key === 'domain') continue
+    if (key === 'path') {
+      if (!hasPath) rewritten.push(` Path=${proxyCookiePath(proxyBase)}`)
+      hasPath = true
+      continue
+    }
+    rewritten.push(part)
+  }
+  if (!hasPath) rewritten.push(` Path=${proxyCookiePath(proxyBase)}`)
+  return rewritten.join(';')
+}
+
+const comfyProxyRequestParts = (rawUrl: string | undefined) => {
+  const requestUrl = new URL(rawUrl ?? '/', 'http://infinity.local')
+  if (!requestUrl.pathname.startsWith(COMFY_PROXY_PREFIX)) return undefined
+
+  const pathAfterPrefix = requestUrl.pathname.slice(COMFY_PROXY_PREFIX.length)
+  const slashIndex = pathAfterPrefix.indexOf('/')
+  const encodedBaseUrl = slashIndex === -1 ? pathAfterPrefix : pathAfterPrefix.slice(0, slashIndex)
+  const targetPath = slashIndex === -1 ? '/' : pathAfterPrefix.slice(slashIndex) || '/'
+  const targetBase = normalizedComfyBaseUrl(decodeURIComponent(encodedBaseUrl))
+  return {
+    requestUrl,
+    encodedBaseUrl,
+    targetBase,
+    targetPath,
+    proxyBase: `${COMFY_PROXY_PREFIX}${encodedBaseUrl}/`,
+  }
+}
+
+const websocketOriginFor = (targetUrl: URL) =>
+  `${targetUrl.protocol === 'wss:' ? 'https:' : 'http:'}//${targetUrl.host}`
+
+const blockedWebSocketProxyHeaders = new Set([
+  'connection',
+  'content-length',
+  'host',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'sec-websocket-accept',
+  'upgrade',
+])
+
+const websocketProxyHeaders = (request: IncomingMessage, targetUrl: URL, bearerToken: string | undefined) => {
+  const headers: string[] = []
+  const seen = new Set<string>()
+  for (let index = 0; index < request.rawHeaders.length; index += 2) {
+    const key = request.rawHeaders[index]
+    const value = request.rawHeaders[index + 1]
+    const lower = key.toLowerCase()
+    if (blockedWebSocketProxyHeaders.has(lower)) continue
+    if (lower === 'origin') {
+      headers.push(`${key}: ${websocketOriginFor(targetUrl)}`)
+    } else {
+      headers.push(`${key}: ${value}`)
+    }
+    seen.add(lower)
+  }
+
+  headers.unshift(`Host: ${targetUrl.host}`, 'Connection: Upgrade', 'Upgrade: websocket')
+  if (!seen.has('origin')) headers.push(`Origin: ${websocketOriginFor(targetUrl)}`)
+  if (bearerToken && !seen.has('authorization')) headers.push(`Authorization: Bearer ${bearerToken}`)
+  return headers
+}
+
 const comfyProxyBridge = (proxyBase: string, targetBase: string, bearerToken?: string) => `<script>
 (() => {
   const proxyBase = ${JSON.stringify(proxyBase)};
@@ -79,11 +163,12 @@ const comfyProxyBridge = (proxyBase: string, targetBase: string, bearerToken?: s
       return value;
     }
   };
-  const appendComfyToken = (targetUrl) => {
-    const token = proxyAuthParams.get(proxyTokenParam);
-    if (token && !targetUrl.searchParams.has('token')) targetUrl.searchParams.set('token', token);
-    targetUrl.searchParams.delete(proxyTokenParam);
-    return targetUrl;
+  const proxiedPath = (pathname, search = '', hash = '') =>
+    withProxyAuth(proxyBase + String(pathname || '/').replace(/^\\/+/, '') + search + hash);
+  const proxiedWebSocketUrl = (pathname, search = '', hash = '') => {
+    const routed = new URL(proxiedPath(pathname, search, hash), location.href);
+    routed.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return routed.toString();
   };
   const route = (value) => {
     const raw = String(value);
@@ -92,11 +177,42 @@ const comfyProxyBridge = (proxyBase: string, targetBase: string, bearerToken?: s
     if (raw.startsWith('/')) return withProxyAuth(proxyBase + raw.slice(1));
     try {
       const parsed = new URL(raw, location.href);
+      const target = new URL(targetBase);
+      if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.origin === target.origin) {
+        return proxiedPath(parsed.pathname, parsed.search, parsed.hash);
+      }
       if (parsed.origin === location.origin && parsed.pathname.startsWith(proxyBase)) {
         return withProxyAuth(parsed.pathname + parsed.search + parsed.hash);
       }
       if (parsed.origin === location.origin && !parsed.pathname.startsWith(proxyBase)) {
-        return withProxyAuth(proxyBase + parsed.pathname.replace(/^\\//, '') + parsed.search + parsed.hash);
+        return proxiedPath(parsed.pathname, parsed.search, parsed.hash);
+      }
+    } catch {}
+    return raw;
+  };
+  const routeWebSocket = (value) => {
+    const raw = String(value);
+    try {
+      const parsed = new URL(raw, location.href);
+      const target = new URL(targetBase);
+      if (parsed.host === location.host && parsed.pathname.startsWith(proxyBase)) {
+        const routed = new URL(withProxyAuth(parsed.pathname + parsed.search + parsed.hash), location.href);
+        routed.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        return routed.toString();
+      }
+      if (parsed.origin === location.origin && parsed.pathname.startsWith(proxyBase)) {
+        const routed = new URL(withProxyAuth(parsed.pathname + parsed.search + parsed.hash), location.href);
+        routed.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        return routed.toString();
+      }
+      if ((parsed.protocol === 'ws:' || parsed.protocol === 'wss:') && parsed.host === target.host) {
+        return proxiedWebSocketUrl(parsed.pathname, parsed.search, parsed.hash);
+      }
+      if ((parsed.protocol === 'ws:' || parsed.protocol === 'wss:') && parsed.host === location.host) {
+        return proxiedWebSocketUrl(parsed.pathname, parsed.search, parsed.hash);
+      }
+      if (parsed.origin === location.origin && !parsed.pathname.startsWith(proxyBase)) {
+        return proxiedWebSocketUrl(parsed.pathname, parsed.search, parsed.hash);
       }
     } catch {}
     return raw;
@@ -121,29 +237,53 @@ const comfyProxyBridge = (proxyBase: string, targetBase: string, bearerToken?: s
   };
   const NativeWebSocket = window.WebSocket;
   window.WebSocket = function WebSocket(url, protocols) {
-    let next = String(url);
-    try {
-      const parsed = new URL(route(next), location.href);
-      const targetBaseUrl = new URL(targetBase);
-      if ((parsed.protocol === 'ws:' || parsed.protocol === 'wss:') && parsed.host === targetBaseUrl.host) {
-        next = appendComfyToken(parsed).toString();
-      } else if (parsed.origin === location.origin && parsed.pathname.startsWith(proxyBase)) {
-        const target = new URL(targetBase);
-        target.protocol = target.protocol === 'https:' ? 'wss:' : 'ws:';
-        target.pathname = '/' + parsed.pathname.slice(proxyBase.length).replace(/^\\/+/, '');
-        target.search = parsed.search;
-        next = appendComfyToken(target).toString();
-      } else if ((parsed.protocol === 'ws:' || parsed.protocol === 'wss:') && parsed.host === location.host) {
-        const target = new URL(targetBase);
-        target.protocol = target.protocol === 'https:' ? 'wss:' : 'ws:';
-        target.pathname = parsed.pathname;
-        target.search = parsed.search;
-        next = appendComfyToken(target).toString();
-      }
-    } catch {}
+    const next = routeWebSocket(url);
     return protocols === undefined ? new NativeWebSocket(next) : new NativeWebSocket(next, protocols);
   };
   window.WebSocket.prototype = NativeWebSocket.prototype;
+  if (window.EventSource) {
+    const NativeEventSource = window.EventSource;
+    window.EventSource = function EventSource(url, init) {
+      return new NativeEventSource(route(url), init);
+    };
+    window.EventSource.prototype = NativeEventSource.prototype;
+  }
+  if (navigator.sendBeacon) {
+    const nativeSendBeacon = navigator.sendBeacon.bind(navigator);
+    navigator.sendBeacon = (url, data) => nativeSendBeacon(route(url), data);
+  }
+  if (window.Worker) {
+    const NativeWorker = window.Worker;
+    window.Worker = function Worker(url, options) {
+      return new NativeWorker(route(url), options);
+    };
+    window.Worker.prototype = NativeWorker.prototype;
+  }
+  if (window.SharedWorker) {
+    const NativeSharedWorker = window.SharedWorker;
+    window.SharedWorker = function SharedWorker(url, options) {
+      return new NativeSharedWorker(route(url), options);
+    };
+    window.SharedWorker.prototype = NativeSharedWorker.prototype;
+  }
+  document.addEventListener('submit', (event) => {
+    const form = event.target;
+    if (!(form instanceof HTMLFormElement)) return;
+    const action = form.getAttribute('action');
+    if (!action) return;
+    const routed = route(action);
+    if (routed !== action) form.action = new URL(routed, location.href).toString();
+  }, true);
+  document.addEventListener('click', (event) => {
+    const anchor = event.target?.closest?.('a[href]');
+    if (!anchor || anchor.target || anchor.download || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const href = anchor.getAttribute('href');
+    if (!href) return;
+    const routed = route(href);
+    if (routed === href) return;
+    event.preventDefault();
+    location.href = routed;
+  }, true);
 })();
 </script>`
 
@@ -152,21 +292,58 @@ const injectComfyProxyBridge = (html: string, proxyBase: string, targetBase: str
   return html.includes('</head>') ? html.replace('</head>', `${bridge}</head>`) : `${bridge}${html}`
 }
 
-const rewriteComfyProxyLocation = (value: string, proxyBase: string, targetBase: string) => {
+const rewriteComfyProxyLocation = (value: string, proxyBase: string, targetBase: string, bearerToken: string | undefined) => {
   try {
     const targetOrigin = new URL(targetBase).origin
     const parsed = new URL(value, `${targetBase}/`)
     if (parsed.origin !== targetOrigin) return value
+    if (bearerToken && !parsed.searchParams.has(COMFY_PROXY_TOKEN_PARAM)) {
+      parsed.searchParams.set(COMFY_PROXY_TOKEN_PARAM, bearerToken)
+    }
     return `${proxyBase}${parsed.pathname.replace(/^\/+/, '')}${parsed.search}${parsed.hash}`
   } catch {
     return value
   }
 }
 
-const rewriteComfyProxyResponseHeader = (key: string, value: string, proxyBase: string, targetBase: string) => {
-  if (key.toLowerCase() === 'location') return rewriteComfyProxyLocation(value, proxyBase, targetBase)
-  if (key.toLowerCase() === 'set-cookie') return value.replace(/;\s*Path=\/(?=;|$)/i, `; Path=${proxyBase}`)
+const rewriteComfyProxyResponseHeader = (
+  key: string,
+  value: string,
+  proxyBase: string,
+  targetBase: string,
+  bearerToken: string | undefined,
+) => {
+  if (key.toLowerCase() === 'location') return rewriteComfyProxyLocation(value, proxyBase, targetBase, bearerToken)
+  if (key.toLowerCase() === 'set-cookie') return rewriteComfyProxySetCookie(value, proxyBase)
   return value
+}
+
+const setComfyProxyResponseHeaders = (
+  response: ServerResponse,
+  headers: Headers,
+  proxyBase: string,
+  targetBase: string,
+  bearerToken: string | undefined,
+) => {
+  const cookieHeaders = headers as Headers & { getSetCookie?: () => string[] }
+  const setCookies =
+    typeof cookieHeaders.getSetCookie === 'function'
+      ? cookieHeaders.getSetCookie()
+      : headers.get('set-cookie')
+        ? [headers.get('set-cookie') as string]
+        : []
+
+  headers.forEach((value, key) => {
+    const lower = key.toLowerCase()
+    if (lower === 'set-cookie' || blockedProxyHeaders.has(lower)) return
+    response.setHeader(key, rewriteComfyProxyResponseHeader(key, value, proxyBase, targetBase, bearerToken))
+  })
+  if (setCookies.length > 0) {
+    response.setHeader(
+      'set-cookie',
+      setCookies.filter(Boolean).map((value) => rewriteComfyProxySetCookie(value, proxyBase)),
+    )
+  }
 }
 
 async function handleComfyProxy(request: IncomingMessage, response: ServerResponse, next: () => void) {
@@ -176,32 +353,27 @@ async function handleComfyProxy(request: IncomingMessage, response: ServerRespon
   }
 
   try {
-    const requestUrl = new URL(request.url, 'http://infinity.local')
-    const pathAfterPrefix = requestUrl.pathname.slice(COMFY_PROXY_PREFIX.length)
-    const slashIndex = pathAfterPrefix.indexOf('/')
-    const encodedBaseUrl = slashIndex === -1 ? pathAfterPrefix : pathAfterPrefix.slice(0, slashIndex)
-    const targetPath = slashIndex === -1 ? '/' : pathAfterPrefix.slice(slashIndex) || '/'
-    const targetBase = normalizedComfyBaseUrl(decodeURIComponent(encodedBaseUrl))
+    const parts = comfyProxyRequestParts(request.url)
+    if (!parts) {
+      next()
+      return
+    }
+    const { requestUrl, targetPath, targetBase, proxyBase } = parts
     const targetUrl = new URL(targetPath, `${targetBase}/`)
     targetUrl.search = requestUrl.search
     targetUrl.searchParams.delete(COMFY_PROXY_TOKEN_PARAM)
-    const proxyBase = `${COMFY_PROXY_PREFIX}${encodedBaseUrl}/`
     const bearerToken = requestUrl.searchParams.get(COMFY_PROXY_TOKEN_PARAM)?.trim() || (await configuredProxyBearerToken())
     const hasBody = request.method !== 'GET' && request.method !== 'HEAD'
     const bodyBuffer = hasBody ? await readRequestBody(request) : undefined
     const proxied = await fetch(targetUrl, {
       method: request.method,
-      headers: await proxyRequestHeaders(request, bearerToken),
+      headers: await proxyRequestHeaders(request, shouldAttachProxyBearer(request, targetUrl) ? bearerToken : undefined),
       body: bodyBuffer ? new Blob([new Uint8Array(bodyBuffer)]) : undefined,
       redirect: 'manual',
     })
     const contentType = proxied.headers.get('content-type') ?? ''
     response.statusCode = proxied.status
-    proxied.headers.forEach((value, key) => {
-      if (!blockedProxyHeaders.has(key.toLowerCase())) {
-        response.setHeader(key, rewriteComfyProxyResponseHeader(key, value, proxyBase, targetBase))
-      }
-    })
+    setComfyProxyResponseHeaders(response, proxied.headers, proxyBase, targetBase, bearerToken)
     response.setHeader('Access-Control-Allow-Origin', '*')
 
     if (contentType.includes('text/html')) {
@@ -223,6 +395,53 @@ const comfyProxyPlugin = (): Plugin => ({
   configureServer(server: ViteDevServer) {
     server.middlewares.use((request: IncomingMessage, response: ServerResponse, next: () => void) => {
       void handleComfyProxy(request, response, next)
+    })
+    server.httpServer?.on('upgrade', (request: IncomingMessage, socket: Socket, head: Buffer) => {
+      if (!request.url?.startsWith(COMFY_PROXY_PREFIX)) return
+      void (async () => {
+        const fail = () => {
+          if (!socket.destroyed) {
+            socket.write('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n')
+            socket.destroy()
+          }
+        }
+
+        try {
+          const parts = comfyProxyRequestParts(request.url)
+          if (!parts) {
+            socket.destroy()
+            return
+          }
+          const { requestUrl, targetPath, targetBase } = parts
+          const targetUrl = new URL(targetPath, `${targetBase}/`)
+          targetUrl.protocol = targetUrl.protocol === 'https:' ? 'wss:' : 'ws:'
+          targetUrl.search = requestUrl.search
+          targetUrl.searchParams.delete(COMFY_PROXY_TOKEN_PARAM)
+          const bearerToken = requestUrl.searchParams.get(COMFY_PROXY_TOKEN_PARAM)?.trim() || (await configuredProxyBearerToken())
+          const port = Number(targetUrl.port || (targetUrl.protocol === 'wss:' ? 443 : 80))
+          const connectOptions = { host: targetUrl.hostname, port, servername: targetUrl.hostname }
+          const upstream =
+            targetUrl.protocol === 'wss:' ? tls.connect(connectOptions, onConnect) : net.connect(connectOptions, onConnect)
+
+          function onConnect() {
+            upstream.write(
+              `GET ${targetUrl.pathname}${targetUrl.search} HTTP/1.1\r\n${websocketProxyHeaders(
+                request,
+                targetUrl,
+                bearerToken,
+              ).join('\r\n')}\r\n\r\n`,
+            )
+            if (head.length > 0) upstream.write(head)
+            upstream.pipe(socket)
+            socket.pipe(upstream)
+          }
+
+          upstream.on('error', fail)
+          socket.on('error', () => upstream.destroy())
+        } catch {
+          fail()
+        }
+      })()
     })
   },
 })
