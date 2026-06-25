@@ -61,7 +61,7 @@
 - [x] Run targeted tests for workflow, store, and canvas components.
 - [x] Run full `npm test`.
 - [x] Run `npm run build`.
-- [ ] Restart docker service on port 7930. Blocked: escalation rejected by Codex usage limit.
+- [x] Restart docker service on port 7930.
 - [x] Run browser smoke tests where available.
-- [ ] Review `git status --short`.
-- [ ] Commit, create minor-version tag, and push branch plus tag.
+- [x] Review `git status --short`.
+- [x] Commit, create minor-version tag, and push branch plus tag.
