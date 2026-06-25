@@ -20,6 +20,7 @@ import {
   type FinalConnectionState,
   type Edge,
   type Node,
+  type NodeChange,
   type NodeTypes,
   useEdgesState,
   useNodesState,
@@ -1877,6 +1878,7 @@ function CanvasSurface() {
   const selectionBoxActive = useRef(false)
   const selectionBoxNodeIds = useRef<string[]>([])
   const selectionRecencyCounter = useRef(0)
+  const ignoreSelectionSyncUntil = useRef(0)
   const recordNodeSelectionRecency = useCallback((nodeIds: string[]) => {
     const ids = nodeIds.filter(Boolean)
     if (ids.length === 0) return
@@ -1923,6 +1925,7 @@ function CanvasSurface() {
   }, [])
 
   const clearCanvasSelection = useCallback(() => {
+    ignoreSelectionSyncUntil.current = Date.now() + 200
     selectNode(undefined)
     setSelectedEdgeIds([])
     setTraceHighlightNodeIds([])
@@ -2120,6 +2123,7 @@ function CanvasSurface() {
   const [edges, setEdges, onEdgesChange] = useEdgesState(flowEdges)
 
   useEffect(() => {
+    if (selectionBoxActive.current) return
     setNodes(flowNodes)
   }, [flowNodes, setNodes])
 
@@ -2280,9 +2284,31 @@ function CanvasSurface() {
 
   const selectionModeFromEvent = (event: MouseEvent | ReactMouseEvent) => {
     if (event.altKey) return 'remove' as const
-    if (event.shiftKey) return 'add' as const
+    if (event.shiftKey || event.ctrlKey || event.metaKey) return 'add' as const
     return 'replace' as const
   }
+
+  const selectionIdsForNodeClick = useCallback(
+    (nodeId: string, mode: ReturnType<typeof selectionModeFromEvent>) => {
+      if (mode === 'add') return [...new Set([...activeSelectedNodeIds, nodeId])]
+      if (mode === 'remove') return activeSelectedNodeIds.filter((selectedId) => selectedId !== nodeId)
+      return [nodeId]
+    },
+    [activeSelectedNodeIds],
+  )
+
+  const syncFlowNodeSelection = useCallback(
+    (nodeIds: string[]) => {
+      const selectedIds = new Set(nodeIds)
+      setNodes((current) =>
+        current.map((node) => {
+          const selected = selectedIds.has(node.id)
+          return node.selected === selected ? node : { ...node, selected }
+        }),
+      )
+    },
+    [setNodes],
+  )
 
   const handleSelectionChange = ({ nodes: changedNodes, edges: changedEdges }: { nodes: Node[]; edges: Edge[] }) => {
     const changedEdgeIds = changedEdges.map((edge) => edge.id)
@@ -2291,9 +2317,51 @@ function CanvasSurface() {
       selectNode(undefined)
       setTraceHighlightNodeIds([])
     }
-    if (!selectionBoxActive.current) return
+    if (!selectionBoxActive.current) {
+      if (Date.now() < ignoreSelectionSyncUntil.current) return
+      const changedNodeIds = changedNodes.map((node) => node.id)
+      if (changedNodeIds.length > 0) {
+        const mode = modifierKeys.current.alt
+          ? 'remove'
+          : modifierKeys.current.ctrl || modifierKeys.current.shift
+            ? 'add'
+            : 'replace'
+        const nextSelectedNodeIds =
+          mode === 'add'
+            ? [...new Set([...activeSelectedNodeIds, ...changedNodeIds])]
+            : mode === 'remove'
+              ? activeSelectedNodeIds.filter((selectedId) => !changedNodeIds.includes(selectedId))
+              : changedNodeIds
+        const selectionUnchanged =
+          activeSelectedNodeIds.length === nextSelectedNodeIds.length &&
+          activeSelectedNodeIds.every((selectedId, index) => selectedId === nextSelectedNodeIds[index])
+        if (selectionUnchanged) return
+
+        setSelectedEdgeIds((current) => (current.length > 0 ? [] : current))
+        setTraceHighlightNodeIds((current) => (current.length > 0 ? [] : current))
+        selectNodes(changedNodeIds, mode)
+        recordNodeSelectionRecency(changedNodeIds)
+      }
+      return
+    }
     selectionBoxNodeIds.current = changedNodes.map((node) => node.id)
   }
+
+  const handleNodesChange = useCallback(
+    (changes: NodeChange[]) => {
+      const shouldPreservePreviousSelection =
+        !selectionBoxActive.current &&
+        (modifierKeys.current.ctrl || modifierKeys.current.shift) &&
+        changes.some((change) => change.type === 'select' && change.selected)
+
+      onNodesChange(
+        shouldPreservePreviousSelection
+          ? changes.filter((change) => !(change.type === 'select' && !change.selected))
+          : changes,
+      )
+    },
+    [onNodesChange],
+  )
 
   const sourceResourceRefs = useCallback((sourceNodeId: string | undefined, sourceHandleId?: string | null): ResourceRef[] => {
     if (!sourceNodeId) return []
@@ -3022,13 +3090,13 @@ function CanvasSurface() {
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
-        onNodesChange={onNodesChange}
+        onNodesChange={handleNodesChange}
         onEdgesChange={onEdgesChange}
         onSelectionStart={() => {
           selectionBoxActive.current = true
           selectionBoxNodeIds.current = []
-          setSelectedEdgeIds([])
-          setTraceHighlightNodeIds([])
+          setSelectedEdgeIds((current) => (current.length > 0 ? [] : current))
+          setTraceHighlightNodeIds((current) => (current.length > 0 ? [] : current))
           setQuickToolbar(undefined)
           setFunctionNodeMenu(undefined)
           setGroupNodeMenu(undefined)
@@ -3127,8 +3195,11 @@ function CanvasSurface() {
             recordNodeSelectionRecency([node.id])
             return
           }
+          const selectionMode = selectionModeFromEvent(event)
+          const nextSelectedNodeIds = selectionIdsForNodeClick(node.id, selectionMode)
           recordNodeSelectionRecency([node.id])
-          selectNode(node.id, selectionModeFromEvent(event))
+          selectNode(node.id, selectionMode)
+          syncFlowNodeSelection(nextSelectedNodeIds)
         }}
         onNodeDoubleClick={(event, node) => {
           if (inputPickMode) return
@@ -3163,7 +3234,7 @@ function CanvasSurface() {
         zoomOnDoubleClick={false}
         deleteKeyCode={null}
         selectionKeyCode="Control"
-        multiSelectionKeyCode="Shift"
+        multiSelectionKeyCode={['Shift', 'Control', 'Meta']}
         selectionMode={SelectionMode.Partial}
         snapToGrid
         snapGrid={[24, 24]}

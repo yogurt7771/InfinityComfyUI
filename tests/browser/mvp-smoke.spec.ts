@@ -92,6 +92,23 @@ async function addTextAssetFromCanvas(
   await page.getByLabel('Prompt text').fill(text)
 }
 
+async function addTextAssetFromCanvasAt(
+  page: Page,
+  position: { x: number; y: number },
+  text: string,
+) {
+  const canvas = page.locator('.workspace-canvas')
+  await canvas.dblclick({ position })
+  await page.getByRole('menuitem', { name: 'Text Asset' }).click()
+  await page.getByLabel('Prompt text').last().fill(text)
+}
+
+async function addSelectableResourceNodes(page: Page) {
+  await addTextAssetFromCanvasAt(page, { x: 220, y: 300 }, 'first selectable prompt')
+  await addTextAssetFromCanvasAt(page, { x: 560, y: 360 }, 'second selectable prompt')
+  await expect(page.locator('.react-flow__node-resource')).toHaveCount(2)
+}
+
 async function addImageAssetByDrop(page: Page) {
   const canvas = page.locator('.workspace-canvas')
   const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFElEQVR42mNk+M+ABzAxMiABkDIAUj4CB1G9J4kAAAAASUVORK5CYII='
@@ -163,6 +180,12 @@ async function createWorkflowGraph(page: Page) {
   await addTextAssetFromCanvas(page)
   await addTestWorkflowNode(page)
   await connectFirstResourceToFirstFunction(page)
+}
+
+function collectPageErrors(page: Page) {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  return pageErrors
 }
 
 test.skip('runs a canvas workflow in a browser', async ({ page }) => {
@@ -1102,6 +1125,74 @@ test.skip('supports selected-node editing shortcuts', async ({ page, browserName
 
   await canvas.click({ button: 'right', position: { x: 620, y: 720 } })
   await expect(page.getByRole('menu', { name: 'Add node' })).toBeVisible()
+})
+
+test('supports ctrl-click node multi-select like shift-click', async ({ page }) => {
+  const pageErrors = collectPageErrors(page)
+  await page.goto('/')
+
+  const canvas = page.locator('.workspace-canvas')
+  await addSelectableResourceNodes(page)
+
+  const resourceNode = page.locator('.react-flow__node-resource').first()
+  const secondResourceNode = page.locator('.react-flow__node-resource').last()
+  await resourceNode.locator('.node-title').click()
+  await expect(resourceNode).toHaveClass(/selected/)
+  await expect(page.locator('.react-flow__node.selected')).toHaveCount(1)
+
+  await page.keyboard.down('Control')
+  await secondResourceNode.locator('.node-title').click()
+  await page.keyboard.up('Control')
+
+  await expect(resourceNode).toHaveClass(/selected/)
+  await expect(secondResourceNode).toHaveClass(/selected/)
+  await expect(page.locator('.react-flow__node.selected')).toHaveCount(2)
+  await expect(canvas).toBeVisible()
+  expect(pageErrors).toEqual([])
+})
+
+test('ctrl-drag box selection keeps the canvas rendered and selects enclosed nodes', async ({ page }) => {
+  const pageErrors = collectPageErrors(page)
+  await page.goto('/')
+
+  const canvas = page.locator('.workspace-canvas')
+  await addSelectableResourceNodes(page)
+
+  const resourceNode = page.locator('.react-flow__node-resource').first()
+  const secondResourceNode = page.locator('.react-flow__node-resource').last()
+  const resourceBox = await resourceNode.boundingBox()
+  const secondResourceBox = await secondResourceNode.boundingBox()
+  const canvasBox = await canvas.boundingBox()
+  if (!resourceBox || !secondResourceBox || !canvasBox) throw new Error('nodes not found')
+
+  await canvas.click({ position: { x: canvasBox.width - 40, y: 40 } })
+  await expect(page.locator('.react-flow__node.selected')).toHaveCount(0)
+
+  const selectionStartX = Math.max(canvasBox.x + 16, Math.min(resourceBox.x, secondResourceBox.x) - 32)
+  const selectionStartY = Math.max(canvasBox.y + 16, Math.min(resourceBox.y, secondResourceBox.y) - 32)
+  const selectionEndX = Math.min(
+    canvasBox.x + canvasBox.width - 16,
+    Math.max(resourceBox.x + resourceBox.width, secondResourceBox.x + secondResourceBox.width) + 32,
+  )
+  const selectionEndY = Math.min(
+    canvasBox.y + canvasBox.height - 16,
+    Math.max(resourceBox.y + resourceBox.height, secondResourceBox.y + secondResourceBox.height) + 32,
+  )
+
+  await page.keyboard.down('Control')
+  await page.mouse.move(selectionStartX, selectionStartY)
+  await page.mouse.down()
+  await page.mouse.move(selectionEndX, selectionEndY, { steps: 12 })
+  await page.mouse.up()
+  await page.keyboard.up('Control')
+
+  expect(pageErrors).toEqual([])
+  await expect(canvas).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Infinity ComfyUI' })).toBeVisible()
+  await expect(resourceNode).toHaveClass(/selected/)
+  await expect(secondResourceNode).toHaveClass(/selected/)
+  await expect(page.locator('.react-flow__node.selected')).toHaveCount(2)
+  await expect(page.locator('.react-flow__nodesselection-rect')).toBeHidden()
 })
 
 test.skip('supports ctrl box selection, shift add, alt remove, batch drag, and batch delete', async ({ page }) => {
