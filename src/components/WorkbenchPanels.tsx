@@ -3398,6 +3398,7 @@ export function RightPanel() {
   const selectNode = useProjectStore((state) => state.selectNode)
   const fetchComfyHistory = useProjectStore((state) => state.fetchComfyHistory)
   const [expandedTaskId, setExpandedTaskId] = useState<string | undefined>()
+  const [tasksOpen, setTasksOpen] = useState(false)
   const [historyDialog, setHistoryDialog] = useState<{
     title: string
     status: 'loading' | 'loaded' | 'failed'
@@ -3411,8 +3412,13 @@ export function RightPanel() {
   const selectedRunHistory = getNodeRunHistory(project, selectedNodeId)
   const projectTasks = Object.values(project.tasks).reverse()
   const queueCounts = useMemo(() => endpointQueueCounts(project.tasks), [project.tasks])
+  useEffect(() => {
+    if (selectedNodeId) setTasksOpen(false)
+  }, [selectedNodeId])
+
   const focusCanvasNode = (nodeId: string) => {
     selectNode(nodeId)
+    setTasksOpen(false)
     window.dispatchEvent(new CustomEvent('infinity-focus-node', { detail: { nodeId } }))
   }
   const openHistory = (runLabel: string, endpointId: string | undefined, promptId: string | undefined) => {
@@ -3436,7 +3442,14 @@ export function RightPanel() {
   }
 
   return (
-    <aside className="side-panel right-panel">
+    <aside
+      aria-label="Inspector panel"
+      className={`side-panel right-panel ${tasksOpen ? 'right-panel-popover-open' : ''}`}
+      onMouseLeave={() => setTasksOpen(false)}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') setTasksOpen(false)
+      }}
+    >
       {historyDialog ? (
         <ModalShell label="ComfyUI history" onClose={() => setHistoryDialog(undefined)}>
           <div className="history-modal-body">
@@ -3520,24 +3533,46 @@ export function RightPanel() {
         </section>
       ) : null}
       {!selectedNode ? (
-        <section>
-          <div className="panel-title">
-            <Zap size={16} />
-            <h2>Project Tasks</h2>
-          </div>
-          <div className="job-list">
-            {projectTasks.map((task) => (
-              <ProjectTaskCard
-                key={task.id}
-                project={project}
-                task={task}
-                expanded={expandedTaskId === task.id}
-                onToggle={() => setExpandedTaskId((current) => (current === task.id ? undefined : task.id))}
-                onFocusNode={focusCanvasNode}
-              />
-            ))}
-            {projectTasks.length === 0 ? <div className="inspector-empty">No tasks</div> : null}
-          </div>
+        <section className="task-dock" aria-label="Project task dock">
+          <button
+            type="button"
+            className="assets-dock-button task-dock-button"
+            aria-label="Project Tasks"
+            aria-expanded={tasksOpen}
+            aria-controls="project-tasks-popover"
+            onClick={() => setTasksOpen((value) => !value)}
+          >
+            <Zap size={20} />
+            <span className="task-dock-badge" aria-hidden="true">
+              {projectTasks.length}
+            </span>
+          </button>
+          {tasksOpen ? (
+            <section
+              id="project-tasks-popover"
+              className="task-popover"
+              aria-label="Project Tasks popover"
+            >
+              <div className="panel-title asset-popover-title">
+                <Zap size={16} />
+                <h2>Project Tasks</h2>
+                <span>{projectTasks.length}</span>
+              </div>
+              <div className="job-list task-popover-list" aria-label="Project task list">
+                {projectTasks.map((task) => (
+                  <ProjectTaskCard
+                    key={task.id}
+                    project={project}
+                    task={task}
+                    expanded={expandedTaskId === task.id}
+                    onToggle={() => setExpandedTaskId((current) => (current === task.id ? undefined : task.id))}
+                    onFocusNode={focusCanvasNode}
+                  />
+                ))}
+                {projectTasks.length === 0 ? <div className="inspector-empty">No tasks</div> : null}
+              </div>
+            </section>
+          ) : null}
         </section>
       ) : null}
     </aside>

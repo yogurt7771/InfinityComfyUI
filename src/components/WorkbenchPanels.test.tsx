@@ -1322,7 +1322,7 @@ describe('LeftPanel', () => {
     )
   })
 
-  it('shows project tasks as expandable cards with summary and run details', () => {
+  it('shows project tasks from a task dock popover with expandable cards and run details', () => {
     const state = panelProject()
     state.tasks.task_running = {
       ...state.tasks.task_running,
@@ -1357,7 +1357,16 @@ describe('LeftPanel', () => {
 
     render(<RightPanel />)
 
-    const taskCard = screen.getByRole('button', { name: /Flux Render/ })
+    const taskToggle = screen.getByRole('button', { name: 'Project Tasks' })
+    expect(taskToggle).toBeVisible()
+    expect(taskToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByLabelText('Project task list')).not.toBeInTheDocument()
+
+    fireEvent.click(taskToggle)
+
+    expect(taskToggle).toHaveAttribute('aria-expanded', 'true')
+    const taskList = screen.getByLabelText('Project task list')
+    const taskCard = within(taskList).getByRole('button', { name: /Flux Render/ })
     expect(within(taskCard).getByText('Flux Render')).toBeVisible()
     expect(within(taskCard).getByText('Local ComfyUI')).toBeVisible()
     expect(within(taskCard).getByText('image')).toBeVisible()
@@ -1374,6 +1383,9 @@ describe('LeftPanel', () => {
     expect(screen.getByText('low quality')).toBeVisible()
     expect(screen.getByRole('heading', { name: 'Final Workflow' })).toBeVisible()
     expect(screen.getByText(/CLIPTextEncode/)).toBeVisible()
+
+    fireEvent.keyDown(screen.getByRole('complementary', { name: 'Inspector panel' }), { key: 'Escape' })
+    expect(screen.queryByLabelText('Project task list')).not.toBeInTheDocument()
   })
 
   it('keeps legacy task cards renderable when output refs are missing', () => {
@@ -1382,19 +1394,22 @@ describe('LeftPanel', () => {
     projectStore.setState({ project: state, selectedNodeId: undefined })
 
     render(<RightPanel />)
+    fireEvent.click(screen.getByRole('button', { name: 'Project Tasks' }))
 
-    const taskCard = screen.getByRole('button', { name: /Flux Render/ })
+    const taskCard = within(screen.getByLabelText('Project task list')).getByRole('button', { name: /Flux Render/ })
     expect(within(taskCard).getByText('Flux Render')).toBeVisible()
     expect(within(taskCard).getByText('image')).toBeVisible()
   })
 
-  it('shows project tasks only when no node is selected', () => {
+  it('shows project task dock only when no node is selected', () => {
     const state = panelProject()
     projectStore.setState({ project: state, selectedNodeId: undefined })
 
     const { rerender } = render(<RightPanel />)
 
-    expect(screen.getByRole('heading', { name: 'Project Tasks' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Project Tasks' })).toBeVisible()
+    expect(screen.queryByText('task_running')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Project Tasks' }))
     expect(screen.getByText('task_running')).toBeVisible()
 
     const selectedState = {
@@ -1409,7 +1424,7 @@ describe('LeftPanel', () => {
 
     expect(screen.getByRole('heading', { name: 'Run Queue' })).toBeVisible()
     expect(screen.getByText('No runs for selected node')).toBeVisible()
-    expect(screen.queryByRole('heading', { name: 'Project Tasks' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Project Tasks' })).not.toBeInTheDocument()
     expect(screen.queryByText('task_running')).not.toBeInTheDocument()
   })
 

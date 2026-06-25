@@ -225,6 +225,7 @@ select:focus-visible {
 }
 
 .right-panel {
+  position: relative;
   border-left: 1px solid var(--line);
 }
 
@@ -915,6 +916,64 @@ div.server-list-item {
 
 .history-popover {
   top: 68px;
+}
+
+.task-dock {
+  position: relative;
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+}
+
+.task-dock-button {
+  justify-self: start;
+}
+
+.task-dock-badge {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(94, 234, 212, 0.48);
+  border-radius: 999px;
+  color: #064e3b;
+  background: #99f6e4;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.14);
+}
+
+.right-panel-popover-open .task-dock-button {
+  border-color: rgba(94, 234, 212, 0.62);
+  color: var(--teal);
+  background:
+    linear-gradient(180deg, rgba(94, 234, 212, 0.18), rgba(15, 23, 42, 0.06)),
+    var(--panel-soft);
+}
+
+.task-popover {
+  width: 100%;
+  min-width: 0;
+  padding: 14px 12px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(53, 220, 200, 0.06), transparent 160px),
+    var(--panel);
+  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.2);
+}
+
+.task-popover-list {
+  max-height: min(540px, calc(100vh - 420px));
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
 }
 
 .history-dock-actions {
