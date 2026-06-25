@@ -214,6 +214,61 @@ const temporaryRunnerId = (functionId: string) =>
 export const visibleCanvasNodes = (nodes: CanvasNode[]) =>
   nodes.filter((node) => node.type === 'resource' || node.type === 'group')
 
+const GROUP_NODE_Z_INDEX_BASE = 0
+const ASSET_NODE_Z_INDEX_BASE = 10000
+
+const parsedTimestamp = (value: unknown) => {
+  if (typeof value !== 'string') return 0
+  const time = Date.parse(value)
+  return Number.isFinite(time) ? time : 0
+}
+
+const canvasNodeCreatedAtMs = (node: CanvasNode, resourcesById: Record<string, Resource>) => {
+  if (node.type === 'resource' && typeof node.data.resourceId === 'string') {
+    const resource = resourcesById[node.data.resourceId]
+    return (
+      parsedTimestamp(resource?.metadata?.createdAt) ||
+      parsedTimestamp(node.data.createdAt) ||
+      parsedTimestamp(node.data.highlightedAt)
+    )
+  }
+
+  return parsedTimestamp(node.data.createdAt) || parsedTimestamp(node.data.highlightedAt)
+}
+
+export const buildCanvasNodeZIndexMap = (
+  nodes: CanvasNode[],
+  resourcesById: Record<string, Resource>,
+  selectedNodeRecencyById: Record<string, number> = {},
+) => {
+  const zIndexById = new Map<string, number>()
+  const layers = [
+    { base: GROUP_NODE_Z_INDEX_BASE, nodes: nodes.filter((node) => node.type === 'group') },
+    { base: ASSET_NODE_Z_INDEX_BASE, nodes: nodes.filter((node) => node.type !== 'group') },
+  ]
+
+  for (const layer of layers) {
+    layer.nodes
+      .map((node) => ({
+        node,
+        originalIndex: nodes.findIndex((item) => item.id === node.id),
+        selectedRecency: selectedNodeRecencyById[node.id] ?? 0,
+        createdAt: canvasNodeCreatedAtMs(node, resourcesById),
+      }))
+      .sort(
+        (left, right) =>
+          left.selectedRecency - right.selectedRecency ||
+          left.createdAt - right.createdAt ||
+          left.originalIndex - right.originalIndex,
+      )
+      .forEach((item, index) => {
+        zIndexById.set(item.node.id, layer.base + index)
+      })
+  }
+
+  return zIndexById
+}
+
 const visibleFlowEdges = (edges: Edge[], visibleNodes: CanvasNode[]) => {
   const visibleNodeIds = new Set(visibleNodes.map((node) => node.id))
   return edges.filter((edge) => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target))
@@ -1762,6 +1817,7 @@ function CanvasSurface() {
   const [comparePair, setComparePair] = useState<CompareImagePair | null>(null)
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([])
   const [traceHighlightNodeIds, setTraceHighlightNodeIds] = useState<string[]>([])
+  const [selectedNodeRecencyById, setSelectedNodeRecencyById] = useState<Record<string, number>>({})
   const [addMenuQuery, setAddMenuQuery] = useState('')
   const addMenuRef = useRef<HTMLDivElement | null>(null)
   const quickToolbarRef = useRef<HTMLDivElement | null>(null)
@@ -1775,6 +1831,19 @@ function CanvasSurface() {
   const modifierKeys = useRef({ alt: false, ctrl: false, shift: false })
   const selectionBoxActive = useRef(false)
   const selectionBoxNodeIds = useRef<string[]>([])
+  const selectionRecencyCounter = useRef(0)
+  const recordNodeSelectionRecency = useCallback((nodeIds: string[]) => {
+    const ids = nodeIds.filter(Boolean)
+    if (ids.length === 0) return
+    setSelectedNodeRecencyById((current) => {
+      const next = { ...current }
+      for (const nodeId of ids) {
+        selectionRecencyCounter.current += 1
+        next[nodeId] = selectionRecencyCounter.current
+      }
+      return next
+    })
+  }, [])
   const activeSelectedNodeIds = useMemo(
     () => (selectedNodeIds.length ? selectedNodeIds : selectedNodeId ? [selectedNodeId] : []),
     [selectedNodeId, selectedNodeIds],
@@ -1829,6 +1898,10 @@ function CanvasSurface() {
   const selectionHighlights = useMemo(
     () => buildCanvasSelectionHighlights(visibleNodes, visibleEdges, activeSelectedNodeIds, selectedEdgeIds, traceHighlightNodeIds),
     [activeSelectedNodeIds, selectedEdgeIds, traceHighlightNodeIds, visibleEdges, visibleNodes],
+  )
+  const zIndexByNodeId = useMemo(
+    () => buildCanvasNodeZIndexMap(visibleNodes, project.resources, selectedNodeRecencyById),
+    [project.resources, selectedNodeRecencyById, visibleNodes],
   )
 
   const openFunctionRunForResource = useCallback(
@@ -1891,6 +1964,7 @@ function CanvasSurface() {
         type: node.type,
         position: node.position,
         selected: activeSelectedNodeIds.includes(node.id),
+        zIndex: zIndexByNodeId.get(node.id),
         className: mergeClassNames(
           selectionHighlights.nodeClassNamesById.get(node.id),
           inputPickMode && node.type === 'resource' && typeof node.data.resourceId === 'string'
@@ -1935,6 +2009,7 @@ function CanvasSurface() {
       deleteNode,
       focusCanvasNode,
       flowNodeLayoutContext,
+      zIndexByNodeId,
       nodeReferenceMap,
       openFunctionRunForResource,
       inputPickMode,
@@ -2401,6 +2476,7 @@ function CanvasSurface() {
 
     const canvasNode = project.canvas.nodes.find((item) => item.id === node.id)
     if (canvasNode?.type === 'group') {
+      recordNodeSelectionRecency([node.id])
       selectNode(node.id)
       setSelectedEdgeIds([])
       setQuickToolbar(undefined)
@@ -2415,6 +2491,7 @@ function CanvasSurface() {
 
     const selectedIds = activeSelectedNodeIds.includes(node.id) ? activeSelectedNodeIds : [node.id]
     if (selectedIds.length > 1) {
+      recordNodeSelectionRecency(selectedIds)
       if (!activeSelectedNodeIds.includes(node.id)) selectNodes(selectedIds)
       setSelectedEdgeIds([])
       setQuickToolbar(undefined)
@@ -2427,6 +2504,7 @@ function CanvasSurface() {
     }
 
     if (canvasNode?.type === 'function') {
+      recordNodeSelectionRecency([node.id])
       selectNode(node.id)
       setSelectedEdgeIds([])
       setQuickToolbar(undefined)
@@ -2441,6 +2519,7 @@ function CanvasSurface() {
     }
 
     if (selectedQuickSourceNodeId !== node.id) {
+      recordNodeSelectionRecency([node.id])
       selectNode(node.id)
       setQuickToolbar(undefined)
       return
@@ -2894,6 +2973,7 @@ function CanvasSurface() {
               .filter((nodeId): nodeId is string => Boolean(nodeId))
 
             selectNodes(selectedIds.length > 0 ? selectedIds : selectionBoxNodeIds.current)
+            recordNodeSelectionRecency(selectedIds.length > 0 ? selectedIds : selectionBoxNodeIds.current)
             selectionBoxNodeIds.current = []
           })
         }}
@@ -2974,8 +3054,10 @@ function CanvasSurface() {
             return
           }
           if (!event.shiftKey && !event.altKey && activeSelectedNodeIds.length > 1 && activeSelectedNodeIds.includes(node.id)) {
+            recordNodeSelectionRecency([node.id])
             return
           }
+          recordNodeSelectionRecency([node.id])
           selectNode(node.id, selectionModeFromEvent(event))
         }}
         onNodeDoubleClick={(event, node) => {
@@ -2986,6 +3068,7 @@ function CanvasSurface() {
           setQuickToolbar(undefined)
           setFunctionNodeMenu(undefined)
           setGroupNodeMenu(undefined)
+          recordNodeSelectionRecency([node.id])
           if (!activeSelectedNodeIds.includes(node.id)) {
             selectNode(node.id)
           }

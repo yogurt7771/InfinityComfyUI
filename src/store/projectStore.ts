@@ -7973,6 +7973,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           collapsed: false,
           color: '#14b8a6',
           size: bounds.size,
+          createdAt: now,
         },
       }
 
@@ -8250,6 +8251,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             collapsed: false,
             color: '#14b8a6',
             size: bounds.size,
+            createdAt: now,
           },
         },
         now,

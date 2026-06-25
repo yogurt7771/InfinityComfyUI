@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { CanvasWorkspace, FunctionRunDialog } from './CanvasWorkspace'
+import { buildCanvasNodeZIndexMap, CanvasWorkspace, FunctionRunDialog } from './CanvasWorkspace'
 import { projectStore } from '../store/projectStore'
-import type { GenerationFunction, PrimitiveInputValue, ProjectState, Resource, ResourceRef } from '../domain/types'
+import type { CanvasNode, GenerationFunction, PrimitiveInputValue, ProjectState, Resource, ResourceRef } from '../domain/types'
 
 describe('CanvasWorkspace', () => {
   const originalProject = projectStore.getState().project
@@ -316,6 +316,45 @@ describe('CanvasWorkspace', () => {
     fireEvent.contextMenu(backdrop, { clientX: 220, clientY: 180 })
 
     expect(screen.queryByRole('menu', { name: 'Add node' })).not.toBeInTheDocument()
+  })
+
+  it('keeps group nodes below assets and orders assets by selection recency before creation time', () => {
+    const nodes: CanvasNode[] = [
+      { id: 'node_old', type: 'resource', position: { x: 0, y: 0 }, data: { resourceId: 'res_old' } },
+      { id: 'node_new', type: 'resource', position: { x: 20, y: 20 }, data: { resourceId: 'res_new' } },
+      {
+        id: 'node_group',
+        type: 'group',
+        position: { x: -20, y: -20 },
+        data: { childNodeIds: ['node_old', 'node_new'], createdAt: '2026-06-25T00:00:03.000Z' },
+      },
+    ]
+    const resources: Record<string, Resource> = {
+      res_old: {
+        id: 'res_old',
+        type: 'image',
+        value: 'old',
+        source: { kind: 'manual_input' },
+        metadata: { createdAt: '2026-06-25T00:00:01.000Z' },
+      },
+      res_new: {
+        id: 'res_new',
+        type: 'image',
+        value: 'new',
+        source: { kind: 'manual_input' },
+        metadata: { createdAt: '2026-06-25T00:00:02.000Z' },
+      },
+    }
+
+    const createdOrderZIndexById = buildCanvasNodeZIndexMap(nodes, resources)
+
+    expect(createdOrderZIndexById.get('node_new')).toBeGreaterThan(createdOrderZIndexById.get('node_old') ?? 0)
+
+    const zIndexById = buildCanvasNodeZIndexMap(nodes, resources, { node_old: 1 })
+
+    expect(zIndexById.get('node_group')).toBeLessThan(zIndexById.get('node_new') ?? 0)
+    expect(zIndexById.get('node_new')).toBeGreaterThan(zIndexById.get('node_group') ?? 0)
+    expect(zIndexById.get('node_old')).toBeGreaterThan(zIndexById.get('node_new') ?? 0)
   })
 
   it('highlights direct graph relations first and expands the full chain after double-clicking the selected node', async () => {
