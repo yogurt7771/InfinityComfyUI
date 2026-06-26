@@ -33,7 +33,7 @@
   min-height: 0;
   overflow: hidden;
   display: grid;
-  grid-template-rows: 66px minmax(0, 1fr);
+  grid-template-rows: 72px minmax(0, 1fr);
   color: var(--ink);
   background:
     linear-gradient(135deg, rgba(53, 220, 200, 0.1), transparent 34%),
@@ -43,10 +43,10 @@
 
 .topbar {
   display: grid;
-  grid-template-columns: minmax(240px, 1fr) auto auto;
+  grid-template-columns: minmax(320px, 1fr) auto;
   align-items: center;
-  gap: 16px;
-  padding: 0 20px;
+  gap: 18px;
+  padding: 0 22px 0 20px;
   border-bottom: 1px solid var(--line);
   background:
     linear-gradient(90deg, rgba(53, 220, 200, 0.08), rgba(246, 196, 83, 0.05)),
@@ -58,16 +58,16 @@
 .brand {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
 }
 
 .brand > svg {
-  width: 38px;
-  height: 38px;
+  width: 40px;
+  height: 40px;
   padding: 8px;
   border: 1px solid rgba(94, 234, 212, 0.36);
-  border-radius: 8px;
+  border-radius: 11px;
   color: var(--teal);
   background: rgba(45, 212, 191, 0.12);
   box-shadow: 0 0 24px rgba(53, 220, 200, 0.16);
@@ -83,24 +83,22 @@
 
 .brand-copy {
   display: grid;
-  gap: 4px;
+  gap: 5px;
   min-width: 0;
 }
 
 .project-switcher {
   display: block;
   width: fit-content;
-  min-width: 150px;
-  max-width: min(280px, 34vw);
-  height: 26px;
+  min-width: 180px;
+  max-width: min(310px, 34vw);
+  height: 28px;
   padding: 2px 28px 2px 9px;
-  border: 1px solid var(--line);
+  border: 0;
   border-radius: 8px;
   color: var(--muted);
-  background:
-    linear-gradient(180deg, rgba(94, 234, 212, 0.08), rgba(15, 23, 42, 0.02)),
-    var(--panel);
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+  background: transparent;
+  box-shadow: none;
   font: inherit;
   font-size: 12px;
   font-weight: 700;
@@ -113,34 +111,62 @@
 .project-switcher-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
+  width: fit-content;
+  max-width: min(370px, 42vw);
   min-width: 0;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background:
+    linear-gradient(180deg, rgba(94, 234, 212, 0.08), rgba(15, 23, 42, 0.02)),
+    rgba(17, 25, 35, 0.72);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
 }
 
 .project-info-button {
-  width: 26px;
-  min-width: 26px;
-  min-height: 26px;
+  width: 28px;
+  min-width: 28px;
+  min-height: 28px;
   padding: 0;
-  border-color: var(--line);
+  border-color: transparent;
   color: var(--ink-soft);
-  background: rgba(17, 25, 35, 0.72);
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.1);
+  background: transparent;
+  box-shadow: none;
 }
 
 .project-switcher:focus-visible {
   outline: none;
-  border-color: var(--line-strong);
-  box-shadow: var(--shadow-focus);
+  box-shadow: inset 0 0 0 1px var(--line-strong), var(--shadow-focus);
 }
 
 .topbar-metrics {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
 }
 
-.topbar-metrics span,
+.topbar-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background:
+    linear-gradient(180deg, rgba(94, 234, 212, 0.08), rgba(15, 23, 42, 0.02)),
+    rgba(17, 25, 35, 0.74);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+}
+
+.topbar-status-group {
+  gap: 3px;
+}
+
+.topbar-stat-pill,
 .topbar-action-button,
 .topbar-settings-button,
 .theme-toggle-button,
@@ -148,26 +174,27 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 30px;
+  min-height: 32px;
   padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  border: 1px solid transparent;
+  border-radius: 10px;
   color: var(--ink-soft);
-  background: rgba(17, 25, 35, 0.86);
+  background: rgba(17, 25, 35, 0.48);
   font-size: 13px;
-  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.22);
+  box-shadow: none;
+  white-space: nowrap;
 }
 
 .topbar-settings-button {
-  min-height: 30px;
+  min-height: 32px;
 }
 
 .topbar-action-button {
-  min-height: 30px;
+  min-height: 32px;
 }
 
 .theme-toggle-button {
-  min-height: 30px;
+  min-height: 32px;
 }
 
 button {
@@ -262,6 +289,25 @@ select:focus-visible {
   border-left: 1px solid var(--line);
 }
 
+@media (max-width: 1180px) {
+  .topbar {
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 10px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+
+  .app-shell {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .topbar-metrics {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}
+
 .left-panel-shell .left-panel,
 .right-panel-shell .right-panel {
   border: 0;
@@ -271,36 +317,48 @@ select:focus-visible {
   position: relative;
   height: 100%;
   min-width: 0;
-  padding: 12px 9px;
+  padding: 12px 8px;
 }
 
 .assets-dock-stack {
   display: grid;
-  gap: 10px;
+  gap: 6px;
+  width: fit-content;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background:
+    linear-gradient(180deg, rgba(94, 234, 212, 0.08), rgba(15, 23, 42, 0.02)),
+    rgba(17, 25, 35, 0.58);
+  box-shadow: 0 18px 38px rgba(0, 0, 0, 0.16);
 }
 
 .assets-dock-button {
   position: relative;
-  width: 46px;
-  min-width: 46px;
-  min-height: 46px;
+  width: 44px;
+  min-width: 44px;
+  min-height: 44px;
   padding: 0;
-  border-color: rgba(94, 234, 212, 0.34);
-  border-radius: 10px;
+  border-color: transparent;
+  border-radius: 11px;
   color: var(--teal);
-  background:
-    linear-gradient(180deg, rgba(94, 234, 212, 0.12), rgba(15, 23, 42, 0.04)),
-    var(--panel);
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.12);
+  background: transparent;
+  box-shadow: none;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease;
 }
 
 .assets-dock-button:hover,
 .assets-dock-button.is-active {
-  border-color: rgba(94, 234, 212, 0.62);
+  border-color: rgba(94, 234, 212, 0.42);
   color: var(--teal);
   background:
-    linear-gradient(180deg, rgba(94, 234, 212, 0.18), rgba(15, 23, 42, 0.06)),
-    var(--panel-soft);
+    linear-gradient(180deg, rgba(94, 234, 212, 0.18), rgba(15, 23, 42, 0.04)),
+    rgba(17, 25, 35, 0.72);
+  box-shadow: inset 0 0 0 1px rgba(94, 234, 212, 0.16);
 }
 
 .asset-popover {
@@ -1106,22 +1164,23 @@ div.server-list-item {
 
 .task-dock-badge {
   position: absolute;
-  right: -5px;
-  bottom: -5px;
-  min-width: 22px;
-  height: 22px;
-  padding: 0 7px;
+  right: 4px;
+  bottom: 4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid rgba(94, 234, 212, 0.48);
+  border: 1px solid rgba(4, 120, 87, 0.28);
   border-radius: 999px;
   color: #064e3b;
-  background: #99f6e4;
-  font-size: 12px;
+  background: rgba(153, 246, 228, 0.96);
+  font-size: 10px;
   font-weight: 900;
   line-height: 1;
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.14);
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.12);
+  pointer-events: none;
 }
 
 .task-dock-button.is-active {
@@ -4776,6 +4835,16 @@ textarea[aria-invalid="true"] {
     padding: 12px;
   }
 
+  .project-switcher-row {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .project-switcher {
+    width: 100%;
+    max-width: 100%;
+  }
+
   .workbench {
     grid-template-columns: 56px minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
@@ -4791,7 +4860,7 @@ textarea[aria-invalid="true"] {
   }
 
   .assets-dock {
-    padding: 9px 6px;
+    padding: 9px 5px;
   }
 
   .assets-dock-button {
@@ -5657,11 +5726,17 @@ option {
   .topbar-metrics {
     width: 100%;
     flex-wrap: wrap;
+    justify-content: flex-start;
   }
 
-  .topbar-metrics span,
+  .topbar-group {
+    flex-wrap: wrap;
+  }
+
+  .topbar-stat-pill,
   .topbar-action-button,
-  .topbar-settings-button {
+  .topbar-settings-button,
+  .theme-toggle-button {
     min-height: 36px;
   }
 
@@ -5740,16 +5815,26 @@ option {
   box-shadow: 0 12px 24px rgba(13, 148, 136, 0.12);
 }
 
-.app-shell[data-theme='light'] .topbar-metrics span,
+.app-shell[data-theme='light'] .project-switcher-row,
+.app-shell[data-theme='light'] .topbar-group,
+.app-shell[data-theme='light'] .assets-dock-stack {
+  border-color: rgba(148, 163, 184, 0.3);
+  background:
+    linear-gradient(180deg, rgba(240, 253, 250, 0.78), rgba(255, 255, 255, 0.72)),
+    rgba(255, 255, 255, 0.76);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.07);
+}
+
+.app-shell[data-theme='light'] .topbar-stat-pill,
 .app-shell[data-theme='light'] .topbar-action-button,
 .app-shell[data-theme='light'] .project-info-button,
 .app-shell[data-theme='light'] .topbar-settings-button,
 .app-shell[data-theme='light'] .theme-toggle-button,
 .app-shell[data-theme='light'] .panel-footer span {
-  border-color: rgba(148, 163, 184, 0.36);
+  border-color: transparent;
   color: #243447;
-  background: rgba(255, 255, 255, 0.86);
-  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.58);
+  box-shadow: none;
 }
 
 .app-shell[data-theme='light'] button {
@@ -5762,6 +5847,23 @@ option {
   border-color: rgba(13, 148, 136, 0.55);
   background: #ffffff;
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.12);
+}
+
+.app-shell[data-theme='light'] .assets-dock-button,
+.app-shell[data-theme='light'] .project-info-button {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.app-shell[data-theme='light'] .assets-dock-button:hover,
+.app-shell[data-theme='light'] .assets-dock-button.is-active,
+.app-shell[data-theme='light'] .project-info-button:hover {
+  border-color: rgba(13, 148, 136, 0.32);
+  background:
+    linear-gradient(180deg, rgba(204, 251, 241, 0.72), rgba(255, 255, 255, 0.52)),
+    rgba(255, 255, 255, 0.72);
+  box-shadow: inset 0 0 0 1px rgba(13, 148, 136, 0.12);
 }
 
 .app-shell[data-theme='light'] .dock-create-button,

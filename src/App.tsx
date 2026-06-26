@@ -109,45 +109,51 @@ export default function App() {
           </div>
         </div>
         <nav className="topbar-metrics" aria-label="Project metrics">
-          <span>
-            <Database size={15} />
-            {Object.keys(project.resources).length} assets
-          </span>
-          <span>
-            <Activity size={15} />
-            {Object.keys(project.tasks).length} tasks
-          </span>
-          <button type="button" className="topbar-action-button" onClick={handleExportProject}>
-            <Download size={15} />
-            Export Project
-          </button>
-          <button type="button" className="topbar-action-button" onClick={handleExportConfig}>
-            <Download size={15} />
-            Export Config
-          </button>
-          <button type="button" className="topbar-action-button" onClick={() => fileInputRef.current?.click()}>
-            <Upload size={15} />
-            Import Project
-          </button>
-          <input
-            ref={fileInputRef}
-            className="hidden-input"
-            type="file"
-            accept=".aicanvas,.aicanvas-config,.json"
-            onChange={(event) => {
-              void handleImport(event.target.files?.[0])
-              event.currentTarget.value = ''
-            }}
-          />
-          <button
-            type="button"
-            className="theme-toggle-button"
-            aria-label={`Switch to ${nextTheme} theme`}
-            onClick={() => setTheme(nextTheme)}
-          >
-            {theme === 'light' ? <Sun size={15} /> : <Moon size={15} />}
-            {theme === 'light' ? 'Light' : 'Dark'}
-          </button>
+          <div className="topbar-group topbar-status-group" aria-label="Project status">
+            <span className="topbar-stat-pill">
+              <Database size={15} />
+              {Object.keys(project.resources).length} assets
+            </span>
+            <span className="topbar-stat-pill">
+              <Activity size={15} />
+              {Object.keys(project.tasks).length} tasks
+            </span>
+          </div>
+          <div className="topbar-group topbar-project-actions" aria-label="Project package actions">
+            <button type="button" className="topbar-action-button" onClick={handleExportProject}>
+              <Download size={15} />
+              Export Project
+            </button>
+            <button type="button" className="topbar-action-button" onClick={handleExportConfig}>
+              <Download size={15} />
+              Export Config
+            </button>
+            <button type="button" className="topbar-action-button" onClick={() => fileInputRef.current?.click()}>
+              <Upload size={15} />
+              Import Project
+            </button>
+            <input
+              ref={fileInputRef}
+              className="hidden-input"
+              type="file"
+              accept=".aicanvas,.aicanvas-config,.json"
+              onChange={(event) => {
+                void handleImport(event.target.files?.[0])
+                event.currentTarget.value = ''
+              }}
+            />
+          </div>
+          <div className="topbar-group topbar-view-actions" aria-label="View controls">
+            <button
+              type="button"
+              className="theme-toggle-button"
+              aria-label={`Switch to ${nextTheme} theme`}
+              onClick={() => setTheme(nextTheme)}
+            >
+              {theme === 'light' ? <Sun size={15} /> : <Moon size={15} />}
+              {theme === 'light' ? 'Light' : 'Dark'}
+            </button>
+          </div>
         </nav>
       </header>
       <main className="workbench">
