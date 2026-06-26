@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ComfyWorkflowEditorDialog, LeftPanel, RightPanel, SettingsPage, highlightedJson } from './WorkbenchPanels'
+import { ComfyWorkflowEditorDialog, LeftPanel, SettingsPage, highlightedJson } from './WorkbenchPanels'
 import { projectStore } from '../store/projectStore'
 import type { ProjectState } from '../domain/types'
 import { createOpenAIImageFunction } from '../domain/openaiImage'
@@ -1040,8 +1040,8 @@ describe('LeftPanel', () => {
     expect(within(dialog).getByLabelText('Workflow editor ComfyUI server Flux Render')).toHaveValue('endpoint_local')
   })
 
-  it('shows ComfyUI server status from a right-panel dock popover', () => {
-    render(<RightPanel />)
+  it('shows ComfyUI server status from a left dock popover', () => {
+    render(<LeftPanel />)
 
     expect(screen.queryByLabelText('ComfyUI server list')).not.toBeInTheDocument()
 
@@ -1179,7 +1179,7 @@ describe('LeftPanel', () => {
     })
   })
 
-  it('shows task error messages in the right panel task list and selected run history', () => {
+  it('shows task error messages from the left dock run queue popover', () => {
     const state = panelProject()
     state.canvas.nodes = [
       { id: 'node_openai', type: 'function', position: { x: 0, y: 0 }, data: { functionId: 'fn_openai_llm' } },
@@ -1216,14 +1216,16 @@ describe('LeftPanel', () => {
     }
     projectStore.setState({ project: state, selectedNodeId: 'node_result_failed' })
 
-    render(<RightPanel />)
+    render(<LeftPanel />)
 
+    expect(screen.queryByLabelText('Run queue list')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Run Queue' }))
     expect(screen.getAllByText('OpenAI request failed: 401 invalid api key')).toHaveLength(1)
-    expect(screen.getByLabelText('Selected node run history')).toBeVisible()
+    expect(screen.getByLabelText('Run queue list')).toBeVisible()
     expect(screen.getAllByText('task_failed')[0]).toBeVisible()
   })
 
-  it('keeps selected run queue visible without showing static inspector details', () => {
+  it('opens selected run queue from the left dock without showing static inspector details', () => {
     const state = panelProject()
     state.resources.res_prompt = {
       id: 'res_prompt',
@@ -1301,14 +1303,16 @@ describe('LeftPanel', () => {
     }
     projectStore.setState({ project: state, selectedNodeId: 'node_result_1' })
 
-    render(<RightPanel />)
+    render(<LeftPanel />)
 
     expect(screen.queryByRole('heading', { name: 'Inspector' })).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Run Details' })).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Inputs' })).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Final Workflow' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Run queue list')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Run Queue' }))
     expect(screen.getByRole('heading', { name: 'Run Queue' })).toBeVisible()
-    const queue = screen.getByLabelText('Selected node run history')
+    const queue = screen.getByLabelText('Run queue list')
     expect(within(queue).getByText('task_audit')).toBeVisible()
     expect(within(queue).getByText('Local ComfyUI')).toBeVisible()
   })
@@ -1346,7 +1350,7 @@ describe('LeftPanel', () => {
     }
     projectStore.setState({ project: state, selectedNodeId: undefined })
 
-    render(<RightPanel />)
+    render(<LeftPanel />)
 
     const taskToggle = screen.getByRole('button', { name: 'Project Tasks' })
     expect(taskToggle).toBeVisible()
@@ -1384,7 +1388,7 @@ describe('LeftPanel', () => {
     delete (state.tasks.task_running as { outputRefs?: unknown }).outputRefs
     projectStore.setState({ project: state, selectedNodeId: undefined })
 
-    render(<RightPanel />)
+    render(<LeftPanel />)
     fireEvent.click(screen.getByRole('button', { name: 'Project Tasks' }))
 
     const taskCard = within(screen.getByLabelText('Project task list')).getByRole('button', { name: /Flux Render/ })
@@ -1392,11 +1396,11 @@ describe('LeftPanel', () => {
     expect(within(taskCard).getByText('image')).toBeVisible()
   })
 
-  it('shows project task dock only when no node is selected', () => {
+  it('keeps project task dock available from the left icon bar when a node is selected', () => {
     const state = panelProject()
     projectStore.setState({ project: state, selectedNodeId: undefined })
 
-    const { rerender } = render(<RightPanel />)
+    render(<LeftPanel />)
 
     expect(screen.getByRole('button', { name: 'Project Tasks' })).toBeVisible()
     expect(screen.queryByText('task_running')).not.toBeInTheDocument()
@@ -1411,12 +1415,84 @@ describe('LeftPanel', () => {
       },
     }
     projectStore.setState({ project: selectedState, selectedNodeId: 'node_text' })
-    rerender(<RightPanel />)
+    cleanup()
+    render(<LeftPanel />)
 
-    expect(screen.getByRole('heading', { name: 'Run Queue' })).toBeVisible()
-    expect(screen.getByText('No runs for selected node')).toBeVisible()
-    expect(screen.queryByRole('button', { name: 'Project Tasks' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Project Tasks' })).toBeVisible()
     expect(screen.queryByText('task_running')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Project Tasks' }))
+    expect(screen.getByText('task_running')).toBeVisible()
+  })
+
+  it('filters the left dock run queue by current selection and sorts newest runs first', () => {
+    const state = panelProject()
+    state.canvas.nodes = [
+      { id: 'node_fn_render', type: 'function', position: { x: 0, y: 0 }, data: { functionId: 'fn_render' } },
+      { id: 'node_fn_second', type: 'function', position: { x: 240, y: 0 }, data: { functionId: 'fn_render' } },
+      { id: 'node_fn_other', type: 'function', position: { x: 480, y: 0 }, data: { functionId: 'fn_render' } },
+    ]
+    state.tasks = {
+      task_old_selected: {
+        ...state.tasks.task_running,
+        id: 'task_old_selected',
+        functionNodeId: 'node_fn_render',
+        runIndex: 1,
+        runTotal: 1,
+        status: 'succeeded',
+        createdAt: '2026-05-09T00:00:00.000Z',
+        updatedAt: '2026-05-09T00:00:00.000Z',
+      },
+      task_middle_unselected: {
+        ...state.tasks.task_running,
+        id: 'task_middle_unselected',
+        functionNodeId: 'node_fn_other',
+        runIndex: 1,
+        runTotal: 1,
+        status: 'running',
+        createdAt: '2026-05-09T00:01:00.000Z',
+        updatedAt: '2026-05-09T00:01:00.000Z',
+      },
+      task_new_selected: {
+        ...state.tasks.task_running,
+        id: 'task_new_selected',
+        functionNodeId: 'node_fn_second',
+        runIndex: 1,
+        runTotal: 1,
+        status: 'queued',
+        createdAt: '2026-05-09T00:02:00.000Z',
+        updatedAt: '2026-05-09T00:02:00.000Z',
+      },
+    }
+    projectStore.setState({
+      project: state,
+      selectedNodeId: undefined,
+      selectedNodeIds: [],
+    } as unknown as Partial<ReturnType<typeof projectStore.getState>>)
+
+    render(<LeftPanel />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run Queue' }))
+    let queueText = screen.getByLabelText('Run queue list').textContent ?? ''
+    expect(queueText).toContain('task_new_selected')
+    expect(queueText).toContain('task_middle_unselected')
+    expect(queueText).toContain('task_old_selected')
+    expect(queueText.indexOf('task_new_selected')).toBeLessThan(queueText.indexOf('task_middle_unselected'))
+    expect(queueText.indexOf('task_middle_unselected')).toBeLessThan(queueText.indexOf('task_old_selected'))
+
+    cleanup()
+    projectStore.setState({
+      project: state,
+      selectedNodeId: 'node_fn_second',
+      selectedNodeIds: ['node_fn_render', 'node_fn_second'],
+    } as unknown as Partial<ReturnType<typeof projectStore.getState>>)
+    render(<LeftPanel />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run Queue' }))
+    queueText = screen.getByLabelText('Run queue list').textContent ?? ''
+    expect(queueText).toContain('task_new_selected')
+    expect(queueText).toContain('task_old_selected')
+    expect(queueText).not.toContain('task_middle_unselected')
+    expect(queueText.indexOf('task_new_selected')).toBeLessThan(queueText.indexOf('task_old_selected'))
   })
 
   it('shows selected node run queue cards with locate and proxied ComfyUI history actions', async () => {
@@ -1442,9 +1518,10 @@ describe('LeftPanel', () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ prompt_1: { outputs: {} } }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
 
-    render(<RightPanel />)
+    render(<LeftPanel />)
 
-    const queue = screen.getByLabelText('Selected node run history')
+    fireEvent.click(screen.getByRole('button', { name: 'Run Queue' }))
+    const queue = screen.getByLabelText('Run queue list')
     expect(within(queue).getByText('Run 1/2')).toBeVisible()
     fireEvent.click(within(queue).getByRole('button', { name: 'Locate Run 1/2 result node' }))
     expect(projectStore.getState().selectedNodeId).toBe('node_result_1')

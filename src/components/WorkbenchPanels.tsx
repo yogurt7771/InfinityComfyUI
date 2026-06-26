@@ -31,7 +31,7 @@ import {
 } from '../domain/requestFunction'
 import { defaultOpenAILlmConfig, isOpenAILlmFunction, mergedOpenAILlmConfig } from '../domain/openaiLlm'
 import { defaultGeminiLlmConfig, isGeminiLlmFunction, mergedGeminiLlmConfig } from '../domain/geminiLlm'
-import { getNodeRunHistory } from '../domain/runHistory'
+import { getProjectRunHistory, getSelectedNodesRunHistory } from '../domain/runHistory'
 import { formatDurationMs, formatHistoryTimestamp, runDurationMs } from '../domain/runTiming'
 import { collectProjectAssetFiles, hydrateProjectAssetFiles, type ProjectAssetFileEntry } from '../domain/projectAssets'
 import type {
@@ -3171,26 +3171,94 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
   )
 }
 
+type LeftDockPanel = 'assets' | 'history' | 'servers' | 'tasks' | 'runQueue'
+
 export function LeftPanel() {
   const project = useProjectStore((state) => state.project)
+  const selectedNodeId = useProjectStore((state) => state.selectedNodeId)
+  const selectedNodeIds = useProjectStore((state) => state.selectedNodeIds)
   const selectNode = useProjectStore((state) => state.selectNode)
   const undoLastProjectChange = useProjectStore((state) => state.undoLastProjectChange)
   const redoProjectChange = useProjectStore((state) => state.redoProjectChange)
-  const [assetsOpen, setAssetsOpen] = useState(false)
-  const [historyOpen, setHistoryOpen] = useState(false)
+  const fetchComfyHistory = useProjectStore((state) => state.fetchComfyHistory)
+  const [openDock, setOpenDock] = useState<LeftDockPanel>()
   const [historyRows, setHistoryRows] = useState<HistoryDockRow[]>([])
+  const [expandedTaskId, setExpandedTaskId] = useState<string | undefined>()
   const [previewResource, setPreviewResource] = useState<Resource | undefined>()
+  const [historyDialog, setHistoryDialog] = useState<{
+    title: string
+    status: 'loading' | 'loaded' | 'failed'
+    content: string
+  }>()
   const previewTimerRef = useRef<number | undefined>(undefined)
   const historyRefreshTimerRef = useRef<number | undefined>(undefined)
+  const assetsOpen = openDock === 'assets'
+  const historyOpen = openDock === 'history'
+  const serversOpen = openDock === 'servers'
+  const tasksOpen = openDock === 'tasks'
+  const runQueueOpen = openDock === 'runQueue'
   const resources = Object.values(project.resources)
   const historyCount = (project.history?.undoStack.length ?? 0) + (project.history?.redoStack.length ?? 0)
+  const queueCounts = useMemo(() => endpointQueueCounts(project.tasks), [project.tasks])
+  const projectTasks = useMemo(
+    () =>
+      Object.values(project.tasks).sort((left, right) => {
+        const created = right.createdAt.localeCompare(left.createdAt)
+        if (created !== 0) return created
+        return right.id.localeCompare(left.id)
+      }),
+    [project.tasks],
+  )
+  const activeSelectedNodeIds = useMemo(
+    () => (selectedNodeIds.length > 0 ? selectedNodeIds : selectedNodeId ? [selectedNodeId] : []),
+    [selectedNodeId, selectedNodeIds],
+  )
+  const runQueueHistory = useMemo(
+    () =>
+      activeSelectedNodeIds.length > 0
+        ? getSelectedNodesRunHistory(project, activeSelectedNodeIds)
+        : getProjectRunHistory(project),
+    [activeSelectedNodeIds, project],
+  )
   const refreshHistoryRows = useCallback(() => setHistoryRows(buildHistoryDockRows(project)), [project])
+  const closeDock = () => setOpenDock(undefined)
+  const toggleDock = (panel: LeftDockPanel) => {
+    setOpenDock((current) => {
+      const nextPanel = current === panel ? undefined : panel
+      if (nextPanel === 'history') setHistoryRows(buildHistoryDockRows(project))
+      return nextPanel
+    })
+  }
   const focusResourceNode = (resource: Resource) => {
     setPreviewResource(undefined)
     const nodeId = resourceOwnerNodeId(project, resource)
     if (!nodeId) return
     selectNode(nodeId)
+    closeDock()
     window.dispatchEvent(new CustomEvent('infinity-focus-node', { detail: { nodeId } }))
+  }
+  const focusCanvasNode = (nodeId: string) => {
+    selectNode(nodeId)
+    window.dispatchEvent(new CustomEvent('infinity-focus-node', { detail: { nodeId } }))
+  }
+  const openHistory = (runLabel: string, endpointId: string | undefined, promptId: string | undefined) => {
+    if (!endpointId || !promptId) return
+    setHistoryDialog({ title: `${runLabel} ComfyUI history`, status: 'loading', content: 'Loading history...' })
+    void fetchComfyHistory(endpointId, promptId)
+      .then((history) => {
+        setHistoryDialog({
+          title: `${runLabel} ComfyUI history`,
+          status: 'loaded',
+          content: JSON.stringify(history, null, 2),
+        })
+      })
+      .catch((err) => {
+        setHistoryDialog({
+          title: `${runLabel} ComfyUI history`,
+          status: 'failed',
+          content: err instanceof Error ? err.message : 'Failed to load ComfyUI history',
+        })
+      })
   }
   useEffect(
     () => () => {
@@ -3223,49 +3291,82 @@ export function LeftPanel() {
 
   return (
     <aside
-      className={`assets-dock ${assetsOpen || historyOpen ? 'is-open' : ''}`}
+      className={`assets-dock ${openDock ? 'is-open' : ''}`}
       aria-label="Assets panel"
-      onMouseLeave={() => {
-        setAssetsOpen(false)
-        setHistoryOpen(false)
-      }}
+      onMouseLeave={closeDock}
       onKeyDown={(event) => {
-        if (event.key === 'Escape') {
-          setAssetsOpen(false)
-          setHistoryOpen(false)
-        }
+        if (event.key === 'Escape') closeDock()
       }}
     >
+      {historyDialog ? (
+        <ModalShell label="ComfyUI history" onClose={() => setHistoryDialog(undefined)}>
+          <div className="history-modal-body">
+            <h3>{historyDialog.title}</h3>
+            <pre className={`json-code run-workflow-json history-modal-json history-modal-${historyDialog.status}`}>
+              {historyDialog.status === 'loaded' ? highlightedJson(historyDialog.content) : historyDialog.content}
+            </pre>
+          </div>
+        </ModalShell>
+      ) : null}
       <div className="assets-dock-stack">
         <button
           type="button"
-          className="assets-dock-button"
+          className={`assets-dock-button${assetsOpen ? ' is-active' : ''}`}
           aria-label="Assets"
           aria-expanded={assetsOpen}
           aria-controls="assets-popover"
-          onClick={() => {
-            setAssetsOpen((value) => !value)
-            setHistoryOpen(false)
-          }}
+          onClick={() => toggleDock('assets')}
         >
           <FileInput size={20} />
         </button>
         <button
           type="button"
-          className="assets-dock-button"
+          className={`assets-dock-button${historyOpen ? ' is-active' : ''}`}
           aria-label="History"
           aria-expanded={historyOpen}
           aria-controls="history-popover"
-          onClick={() => {
-            setHistoryOpen((value) => {
-              const nextOpen = !value
-              if (nextOpen) setHistoryRows(buildHistoryDockRows(project))
-              return nextOpen
-            })
-            setAssetsOpen(false)
-          }}
+          onClick={() => toggleDock('history')}
         >
           <History size={20} />
+        </button>
+        <button
+          type="button"
+          className={`assets-dock-button${serversOpen ? ' is-active' : ''}`}
+          aria-label="ComfyUI Servers"
+          aria-expanded={serversOpen}
+          aria-controls="comfyui-servers-popover"
+          onClick={() => toggleDock('servers')}
+        >
+          <Network size={20} />
+          <span className="task-dock-badge" aria-hidden="true">
+            {project.comfy.endpoints.length}
+          </span>
+        </button>
+        <button
+          type="button"
+          className={`assets-dock-button${tasksOpen ? ' is-active' : ''}`}
+          aria-label="Project Tasks"
+          aria-expanded={tasksOpen}
+          aria-controls="project-tasks-popover"
+          onClick={() => toggleDock('tasks')}
+        >
+          <Zap size={20} />
+          <span className="task-dock-badge" aria-hidden="true">
+            {projectTasks.length}
+          </span>
+        </button>
+        <button
+          type="button"
+          className={`assets-dock-button${runQueueOpen ? ' is-active' : ''}`}
+          aria-label="Run Queue"
+          aria-expanded={runQueueOpen}
+          aria-controls="run-queue-popover"
+          onClick={() => toggleDock('runQueue')}
+        >
+          <Route size={20} />
+          <span className="task-dock-badge" aria-hidden="true">
+            {runQueueHistory.length}
+          </span>
         </button>
       </div>
       {assetsOpen ? (
@@ -3383,119 +3484,65 @@ export function LeftPanel() {
           </div>
         </section>
       ) : null}
-      <FullResourcePreviewModal
-        resource={previewResource}
-        resources={previewResource ? [previewResource] : []}
-        onClose={() => setPreviewResource(undefined)}
-      />
-    </aside>
-  )
-}
-
-export function RightPanel() {
-  const project = useProjectStore((state) => state.project)
-  const selectedNodeId = useProjectStore((state) => state.selectedNodeId)
-  const selectNode = useProjectStore((state) => state.selectNode)
-  const fetchComfyHistory = useProjectStore((state) => state.fetchComfyHistory)
-  const [expandedTaskId, setExpandedTaskId] = useState<string | undefined>()
-  const [openDock, setOpenDock] = useState<'servers' | 'tasks'>()
-  const [historyDialog, setHistoryDialog] = useState<{
-    title: string
-    status: 'loading' | 'loaded' | 'failed'
-    content: string
-  }>()
-  const serversOpen = openDock === 'servers'
-  const tasksOpen = openDock === 'tasks'
-  const selectedNode = project.canvas.nodes.find((node) => node.id === selectedNodeId)
-  const selectedRunHistory = getNodeRunHistory(project, selectedNodeId)
-  const projectTasks = Object.values(project.tasks).reverse()
-  const queueCounts = useMemo(() => endpointQueueCounts(project.tasks), [project.tasks])
-  useEffect(() => {
-    if (selectedNodeId) setOpenDock((current) => (current === 'tasks' ? undefined : current))
-  }, [selectedNodeId])
-
-  const focusCanvasNode = (nodeId: string) => {
-    selectNode(nodeId)
-    setOpenDock(undefined)
-    window.dispatchEvent(new CustomEvent('infinity-focus-node', { detail: { nodeId } }))
-  }
-  const openHistory = (runLabel: string, endpointId: string | undefined, promptId: string | undefined) => {
-    if (!endpointId || !promptId) return
-    setHistoryDialog({ title: `${runLabel} ComfyUI history`, status: 'loading', content: 'Loading history...' })
-    void fetchComfyHistory(endpointId, promptId)
-      .then((history) => {
-        setHistoryDialog({
-          title: `${runLabel} ComfyUI history`,
-          status: 'loaded',
-          content: JSON.stringify(history, null, 2),
-        })
-      })
-      .catch((err) => {
-        setHistoryDialog({
-          title: `${runLabel} ComfyUI history`,
-          status: 'failed',
-          content: err instanceof Error ? err.message : 'Failed to load ComfyUI history',
-        })
-      })
-  }
-
-  return (
-    <aside
-      aria-label="Right tools panel"
-      className={`side-panel right-panel ${openDock ? 'right-panel-popover-open' : ''}`}
-      onMouseLeave={() => setOpenDock(undefined)}
-      onKeyDown={(event) => {
-        if (event.key === 'Escape') setOpenDock(undefined)
-      }}
-    >
-      {historyDialog ? (
-        <ModalShell label="ComfyUI history" onClose={() => setHistoryDialog(undefined)}>
-          <div className="history-modal-body">
-            <h3>{historyDialog.title}</h3>
-            <pre className={`json-code run-workflow-json history-modal-json history-modal-${historyDialog.status}`}>
-              {historyDialog.status === 'loaded' ? highlightedJson(historyDialog.content) : historyDialog.content}
-            </pre>
-          </div>
-        </ModalShell>
-      ) : null}
-      <section className="task-dock" aria-label="ComfyUI server dock">
-        <button
-          type="button"
-          className={`assets-dock-button task-dock-button${serversOpen ? ' is-active' : ''}`}
-          aria-label="ComfyUI Servers"
-          aria-expanded={serversOpen}
-          aria-controls="comfyui-servers-popover"
-          onClick={() => setOpenDock((current) => (current === 'servers' ? undefined : 'servers'))}
+      {serversOpen ? (
+        <section
+          id="comfyui-servers-popover"
+          className="side-panel left-panel asset-popover left-dock-popover servers-popover"
+          aria-label="ComfyUI Servers popover"
         >
-          <Network size={20} />
-          <span className="task-dock-badge" aria-hidden="true">
-            {project.comfy.endpoints.length}
-          </span>
-        </button>
-        {serversOpen ? (
-          <section
-            id="comfyui-servers-popover"
-            className="task-popover"
-            aria-label="ComfyUI Servers popover"
-          >
-            <div className="panel-title asset-popover-title">
-              <Network size={16} />
-              <h2>ComfyUI Servers</h2>
-              <span>{project.comfy.endpoints.length}</span>
-            </div>
-            <EndpointStatusList endpoints={project.comfy.endpoints} queueCounts={queueCounts} />
-          </section>
-        ) : null}
-      </section>
-      {selectedNode ? (
-        <section>
-          <div className="panel-title">
+          <div className="panel-title asset-popover-title">
+            <Network size={16} />
+            <h2>ComfyUI Servers</h2>
+            <span>{project.comfy.endpoints.length}</span>
+          </div>
+          <EndpointStatusList endpoints={project.comfy.endpoints} queueCounts={queueCounts} />
+        </section>
+      ) : null}
+      {tasksOpen ? (
+        <section
+          id="project-tasks-popover"
+          className="side-panel left-panel asset-popover left-dock-popover project-tasks-popover"
+          aria-label="Project Tasks popover"
+        >
+          <div className="panel-title asset-popover-title">
+            <Zap size={16} />
+            <h2>Project Tasks</h2>
+            <span>{projectTasks.length}</span>
+          </div>
+          <div className="job-list task-popover-list" aria-label="Project task list">
+            {projectTasks.map((task) => (
+              <ProjectTaskCard
+                key={task.id}
+                project={project}
+                task={task}
+                expanded={expandedTaskId === task.id}
+                onToggle={() => setExpandedTaskId((current) => (current === task.id ? undefined : task.id))}
+                onFocusNode={focusCanvasNode}
+              />
+            ))}
+            {projectTasks.length === 0 ? <div className="inspector-empty">No tasks</div> : null}
+          </div>
+        </section>
+      ) : null}
+      {runQueueOpen ? (
+        <section
+          id="run-queue-popover"
+          className="side-panel left-panel asset-popover left-dock-popover run-queue-popover"
+          aria-label="Run Queue popover"
+        >
+          <div className="panel-title asset-popover-title">
             <Route size={16} />
             <h2>Run Queue</h2>
+            <span>{runQueueHistory.length}</span>
           </div>
-          {selectedRunHistory.length > 0 ? (
-            <div className="history-list" aria-label="Selected node run history">
-              {selectedRunHistory.map((item) => (
+          <p className="dock-popover-note">
+            {activeSelectedNodeIds.length > 0
+              ? `${activeSelectedNodeIds.length} selected node${activeSelectedNodeIds.length > 1 ? 's' : ''}`
+              : 'All nodes'}
+          </p>
+          {runQueueHistory.length > 0 ? (
+            <div className="history-list run-queue-list" aria-label="Run queue list">
+              {runQueueHistory.map((item) => (
                 <div key={item.taskId} className={`history-row history-row-${item.status}`}>
                   <div>
                     <strong>{item.runLabel}</strong>
@@ -3532,53 +3579,17 @@ export function RightPanel() {
               ))}
             </div>
           ) : (
-            <div className="inspector-empty">No runs for selected node</div>
+            <div className="inspector-empty">
+              {activeSelectedNodeIds.length > 0 ? 'No runs for selected nodes' : 'No runs'}
+            </div>
           )}
         </section>
       ) : null}
-      {!selectedNode ? (
-        <section className="task-dock" aria-label="Project task dock">
-          <button
-            type="button"
-            className={`assets-dock-button task-dock-button${tasksOpen ? ' is-active' : ''}`}
-            aria-label="Project Tasks"
-            aria-expanded={tasksOpen}
-            aria-controls="project-tasks-popover"
-            onClick={() => setOpenDock((current) => (current === 'tasks' ? undefined : 'tasks'))}
-          >
-            <Zap size={20} />
-            <span className="task-dock-badge" aria-hidden="true">
-              {projectTasks.length}
-            </span>
-          </button>
-          {tasksOpen ? (
-            <section
-              id="project-tasks-popover"
-              className="task-popover"
-              aria-label="Project Tasks popover"
-            >
-              <div className="panel-title asset-popover-title">
-                <Zap size={16} />
-                <h2>Project Tasks</h2>
-                <span>{projectTasks.length}</span>
-              </div>
-              <div className="job-list task-popover-list" aria-label="Project task list">
-                {projectTasks.map((task) => (
-                  <ProjectTaskCard
-                    key={task.id}
-                    project={project}
-                    task={task}
-                    expanded={expandedTaskId === task.id}
-                    onToggle={() => setExpandedTaskId((current) => (current === task.id ? undefined : task.id))}
-                    onFocusNode={focusCanvasNode}
-                  />
-                ))}
-                {projectTasks.length === 0 ? <div className="inspector-empty">No tasks</div> : null}
-              </div>
-            </section>
-          ) : null}
-        </section>
-      ) : null}
+      <FullResourcePreviewModal
+        resource={previewResource}
+        resources={previewResource ? [previewResource] : []}
+        onClose={() => setPreviewResource(undefined)}
+      />
     </aside>
   )
 }

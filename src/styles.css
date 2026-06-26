@@ -187,12 +187,12 @@ select:focus-visible {
   height: 100%;
   overflow: hidden;
   display: grid;
-  grid-template-columns: 64px minmax(480px, 1fr) 312px;
+  grid-template-columns: 64px minmax(480px, 1fr);
   background: #050810;
 }
 
 .workbench.right-collapsed {
-  grid-template-columns: 64px minmax(480px, 1fr) 48px;
+  grid-template-columns: 64px minmax(480px, 1fr);
 }
 
 .panel-shell {
@@ -272,7 +272,7 @@ select:focus-visible {
 }
 
 .assets-dock-button:hover,
-.assets-dock.is-open .assets-dock-button {
+.assets-dock-button.is-active {
   border-color: rgba(94, 234, 212, 0.62);
   color: var(--teal);
   background:
@@ -916,6 +916,35 @@ div.server-list-item {
 
 .history-popover {
   top: 68px;
+}
+
+.left-dock-popover {
+  width: min(430px, calc(100vw - 92px));
+}
+
+.servers-popover {
+  top: 124px;
+}
+
+.project-tasks-popover {
+  top: 180px;
+}
+
+.run-queue-popover {
+  top: 236px;
+}
+
+.dock-popover-note {
+  margin: -4px 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.run-queue-list {
+  max-height: min(560px, calc(100vh - 360px));
+  overflow: auto;
+  padding-right: 2px;
 }
 
 .task-dock {
@@ -4578,11 +4607,11 @@ textarea[aria-invalid="true"] {
 
 @media (max-width: 1180px) {
   .workbench {
-    grid-template-columns: 64px minmax(360px, 1fr) 48px;
+    grid-template-columns: 64px minmax(360px, 1fr);
   }
 
   .workbench.right-collapsed {
-    grid-template-columns: 64px minmax(360px, 1fr) 48px;
+    grid-template-columns: 64px minmax(360px, 1fr);
   }
 
   .right-panel {
@@ -4634,6 +4663,18 @@ textarea[aria-invalid="true"] {
 
   .asset-popover .asset-list {
     max-height: calc(100vh - 198px);
+  }
+
+  .servers-popover {
+    top: 116px;
+  }
+
+  .project-tasks-popover {
+    top: 169px;
+  }
+
+  .run-queue-popover {
+    top: 222px;
   }
 
   .left-panel {

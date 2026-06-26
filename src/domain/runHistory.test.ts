@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getNodeRunHistory } from './runHistory'
+import { getNodeRunHistory, getProjectRunHistory, getSelectedNodesRunHistory } from './runHistory'
 import type { ExecutionTask, ProjectState } from './types'
 
 const task = (overrides: Partial<ExecutionTask>): ExecutionTask => ({
@@ -134,5 +134,56 @@ describe('getNodeRunHistory', () => {
       status: 'failed',
       errorMessage: 'OpenAI request failed: 401 invalid api key',
     })
+  })
+})
+
+describe('getProjectRunHistory', () => {
+  it('returns all project tasks newest first', () => {
+    const history = getProjectRunHistory(
+      project({
+        task_old: task({ id: 'task_old', createdAt: '2026-05-08T09:00:00.000Z' }),
+        task_new: task({ id: 'task_new', createdAt: '2026-05-08T09:02:00.000Z' }),
+        task_middle: task({ id: 'task_middle', createdAt: '2026-05-08T09:01:00.000Z' }),
+      }),
+    )
+
+    expect(history.map((item) => item.taskId)).toEqual(['task_new', 'task_middle', 'task_old'])
+  })
+})
+
+describe('getSelectedNodesRunHistory', () => {
+  it('returns only selected node tasks newest first and dedupes shared tasks', () => {
+    const state = project({
+      task_1: task({
+        id: 'task_1',
+        functionNodeId: 'node_fn_1',
+        createdAt: '2026-05-08T09:00:00.000Z',
+      }),
+      task_2: task({
+        id: 'task_2',
+        functionNodeId: 'node_fn_1',
+        createdAt: '2026-05-08T09:02:00.000Z',
+      }),
+      task_other: task({
+        id: 'task_other',
+        functionNodeId: 'node_fn_other',
+        createdAt: '2026-05-08T09:03:00.000Z',
+      }),
+    })
+
+    const history = getSelectedNodesRunHistory(state, ['node_fn_1', 'node_result_1', 'node_res_1'])
+
+    expect(history.map((item) => item.taskId)).toEqual(['task_2', 'task_1'])
+  })
+
+  it('returns no runs when there is no selection', () => {
+    expect(
+      getSelectedNodesRunHistory(
+        project({
+          task_1: task({ id: 'task_1' }),
+        }),
+        [],
+      ),
+    ).toEqual([])
   })
 })

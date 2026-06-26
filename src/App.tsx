@@ -3,20 +3,17 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   Activity,
   Boxes,
-  ChevronLeft,
   Database,
   Moon,
-  PanelRightClose,
   Settings,
   Sun,
 } from 'lucide-react'
 import { CanvasWorkspace } from './components/CanvasWorkspace'
-import { LeftPanel, RightPanel, SettingsPage } from './components/WorkbenchPanels'
+import { LeftPanel, SettingsPage } from './components/WorkbenchPanels'
 import { useProjectStore } from './store/projectStore'
 import './styles.css'
 
 export default function App() {
-  const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [theme, setTheme] = useState<'light' | 'dark'>('light')
   const project = useProjectStore((state) => state.project)
@@ -85,29 +82,11 @@ export default function App() {
           </button>
         </nav>
       </header>
-      <main
-        className={[
-          'workbench',
-          rightPanelCollapsed ? 'right-collapsed' : '',
-        ]
-          .filter(Boolean)
-          .join(' ')}
-      >
+      <main className="workbench">
         <div className="panel-shell left-panel-shell">
           <LeftPanel />
         </div>
         <CanvasWorkspace />
-        <div className={`panel-shell right-panel-shell ${rightPanelCollapsed ? 'is-collapsed' : ''}`}>
-          <button
-            className="panel-collapse-button right-collapse-button"
-            type="button"
-            aria-label={rightPanelCollapsed ? 'Expand right panel' : 'Collapse right panel'}
-            onClick={() => setRightPanelCollapsed((value) => !value)}
-          >
-            {rightPanelCollapsed ? <ChevronLeft size={17} /> : <PanelRightClose size={17} />}
-          </button>
-          {!rightPanelCollapsed ? <RightPanel /> : null}
-        </div>
       </main>
       {settingsOpen ? <SettingsPage onClose={() => setSettingsOpen(false)} /> : null}
     </div>
