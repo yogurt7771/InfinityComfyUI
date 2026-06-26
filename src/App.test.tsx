@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { projectStore } from './store/projectStore'
@@ -87,5 +87,38 @@ describe('App', () => {
 
     expect(projectSelector).toHaveValue(secondProjectId)
     expect(projectSelector).toHaveDisplayValue('Mood Board')
+  })
+
+  it('moves project import, export, and metadata editing into the topbar', () => {
+    projectStore.getState().updateProjectMetadata({
+      name: 'Kitchen Board',
+      description: 'Original project brief',
+    })
+
+    render(<App />)
+
+    const topbar = screen.getByRole('banner')
+    expect(within(topbar).queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument()
+    expect(within(topbar).getByRole('button', { name: /export project/i })).toBeVisible()
+    expect(within(topbar).getByRole('button', { name: /import project/i })).toBeVisible()
+
+    const projectSelector = within(topbar).getByRole('combobox', { name: 'Current project' })
+    expect(projectSelector).toHaveDisplayValue('Kitchen Board')
+
+    fireEvent.click(within(topbar).getByRole('button', { name: /edit project (information|details|metadata)/i }))
+
+    const dialog = screen.getByRole('dialog', { name: /project (information|details|metadata)/i })
+    fireEvent.change(within(dialog).getByLabelText('Project name'), { target: { value: 'Renamed Kitchen Board' } })
+    fireEvent.change(within(dialog).getByLabelText('Project description'), {
+      target: { value: 'Updated project brief' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: /save/i }))
+
+    expect(projectStore.getState().project.project).toMatchObject({
+      name: 'Renamed Kitchen Board',
+      description: 'Updated project brief',
+    })
+    expect(projectSelector).toHaveDisplayValue('Renamed Kitchen Board')
+    expect(screen.queryByRole('dialog', { name: /project (information|details|metadata)/i })).not.toBeInTheDocument()
   })
 })

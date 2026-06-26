@@ -174,6 +174,101 @@ describe('LeftPanel', () => {
     )
   })
 
+  it('manages functions from the left dock list', () => {
+    render(<LeftPanel />)
+
+    expect(screen.getByRole('button', { name: 'Assets' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'History' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Project Tasks' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Run Queue' })).toBeVisible()
+
+    const functionsToggle = screen.getByRole('button', { name: 'Functions' })
+    expect(functionsToggle).toHaveAttribute('aria-expanded', 'false')
+
+    fireEvent.click(functionsToggle)
+
+    expect(functionsToggle).toHaveAttribute('aria-expanded', 'true')
+    const functionsPopover = screen.getByLabelText('Functions popover')
+    expect(within(functionsPopover).getByRole('heading', { name: 'Functions' })).toBeVisible()
+    expect(within(functionsPopover).getByRole('button', { name: /new|新建/i })).toBeVisible()
+
+    const functionList = within(functionsPopover).getByLabelText('Function list')
+    expect(within(functionList).getByText('Flux Render')).toBeVisible()
+    expect(within(functionList).getByRole('button', { name: /edit function flux render/i })).toBeVisible()
+    expect(within(functionList).getByRole('button', { name: /delete function flux render/i })).toBeVisible()
+    expect(screen.queryByRole('dialog', { name: 'Function Management' })).not.toBeInTheDocument()
+
+    fireEvent.click(within(functionsPopover).getByRole('button', { name: /new|新建/i }))
+    const createDialog = screen.getByRole('dialog', { name: /new function/i })
+    fireEvent.change(within(createDialog).getByLabelText('Function type'), { target: { value: 'request' } })
+    fireEvent.change(within(createDialog).getByLabelText('Function name'), { target: { value: 'Sidebar Request' } })
+    fireEvent.change(within(createDialog).getByLabelText('Request URL'), {
+      target: { value: 'https://api.example.com/sidebar' },
+    })
+    fireEvent.change(within(createDialog).getByLabelText('Response parse mode'), { target: { value: 'json' } })
+    fireEvent.click(within(createDialog).getByRole('button', { name: /save function/i }))
+
+    expect(within(functionList).getByText('Sidebar Request')).toBeVisible()
+    expect(Object.values(projectStore.getState().project.functions).some((fn) => fn.name === 'Sidebar Request')).toBe(true)
+
+    fireEvent.click(within(functionList).getByRole('button', { name: /edit function sidebar request/i }))
+    const functionName = screen.getByLabelText('Function name')
+    fireEvent.change(functionName, { target: { value: 'Sidebar Request Edited' } })
+    fireEvent.blur(functionName)
+
+    expect(Object.values(projectStore.getState().project.functions).some((fn) => fn.name === 'Sidebar Request Edited')).toBe(true)
+    expect(within(functionList).getByText('Sidebar Request Edited')).toBeVisible()
+
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    fireEvent.click(within(functionList).getByRole('button', { name: /delete function sidebar request edited/i }))
+
+    expect(Object.values(projectStore.getState().project.functions).some((fn) => fn.name === 'Sidebar Request Edited')).toBe(false)
+    expect(within(functionList).queryByText('Sidebar Request Edited')).not.toBeInTheDocument()
+  })
+
+  it('manages ComfyUI servers from the left dock list', () => {
+    render(<LeftPanel />)
+
+    const serversToggle = screen.getByRole('button', { name: 'ComfyUI Servers' })
+    expect(serversToggle).toHaveAttribute('aria-expanded', 'false')
+
+    fireEvent.click(serversToggle)
+
+    expect(serversToggle).toHaveAttribute('aria-expanded', 'true')
+    const serversPopover = screen.getByLabelText('ComfyUI Servers popover')
+    expect(within(serversPopover).getByRole('heading', { name: 'ComfyUI Servers' })).toBeVisible()
+    expect(within(serversPopover).getByRole('button', { name: /new|新建/i })).toBeVisible()
+
+    const serverList = within(serversPopover).getByLabelText('ComfyUI server list')
+    expect(within(serverList).getByText('Local ComfyUI')).toBeVisible()
+    expect(within(serverList).getByRole('button', { name: /edit (server|endpoint) local comfyui/i })).toBeVisible()
+    expect(within(serverList).getByRole('button', { name: /delete (server|endpoint) local comfyui/i })).toBeVisible()
+    expect(screen.queryByRole('dialog', { name: 'ComfyUI Server Management' })).not.toBeInTheDocument()
+
+    fireEvent.click(within(serversPopover).getByRole('button', { name: /new|新建/i }))
+
+    expect(projectStore.getState().project.comfy.endpoints).toHaveLength(2)
+    expect(within(serverList).getByText('ComfyUI 2')).toBeVisible()
+
+    fireEvent.click(within(serverList).getByRole('button', { name: /edit (server|endpoint) comfyui 2/i }))
+    const endpointName = screen.getByLabelText(/(server|endpoint) name comfyui 2/i)
+    fireEvent.change(endpointName, { target: { value: 'Sidebar ComfyUI' } })
+    fireEvent.blur(endpointName)
+
+    expect(projectStore.getState().project.comfy.endpoints[1]).toMatchObject({ name: 'Sidebar ComfyUI' })
+    expect(within(serverList).getByText('Sidebar ComfyUI')).toBeVisible()
+
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    fireEvent.click(within(serverList).getByRole('button', { name: /delete (server|endpoint) sidebar comfyui/i }))
+
+    expect(projectStore.getState().project.comfy.endpoints).toHaveLength(1)
+    expect(within(serverList).queryByText('Sidebar ComfyUI')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Assets' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'History' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Project Tasks' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Run Queue' })).toBeVisible()
+  })
+
   it('collapses the asset list popover when the pointer leaves the assets dock', () => {
     render(<LeftPanel />)
 

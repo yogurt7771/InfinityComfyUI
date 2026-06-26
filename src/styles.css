@@ -110,6 +110,24 @@
   cursor: pointer;
 }
 
+.project-switcher-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.project-info-button {
+  width: 26px;
+  min-width: 26px;
+  min-height: 26px;
+  padding: 0;
+  border-color: var(--line);
+  color: var(--ink-soft);
+  background: rgba(17, 25, 35, 0.72);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.1);
+}
+
 .project-switcher:focus-visible {
   outline: none;
   border-color: var(--line-strong);
@@ -123,6 +141,7 @@
 }
 
 .topbar-metrics span,
+.topbar-action-button,
 .topbar-settings-button,
 .theme-toggle-button,
 .panel-footer span {
@@ -140,6 +159,10 @@
 }
 
 .topbar-settings-button {
+  min-height: 30px;
+}
+
+.topbar-action-button {
   min-height: 30px;
 }
 
@@ -922,16 +945,20 @@ div.server-list-item {
   width: min(430px, calc(100vw - 92px));
 }
 
-.servers-popover {
+.functions-popover {
   top: 124px;
 }
 
-.project-tasks-popover {
+.servers-popover {
   top: 180px;
 }
 
-.run-queue-popover {
+.project-tasks-popover {
   top: 236px;
+}
+
+.run-queue-popover {
+  top: 292px;
 }
 
 .dock-popover-note {
@@ -939,6 +966,125 @@ div.server-list-item {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.4;
+}
+
+.dock-management-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.dock-create-button {
+  width: 100%;
+  justify-content: flex-start;
+  min-height: 38px;
+  border-color: rgba(94, 234, 212, 0.38);
+  color: var(--ink);
+  background:
+    linear-gradient(180deg, rgba(94, 234, 212, 0.12), rgba(15, 23, 42, 0.02)),
+    var(--panel);
+}
+
+.dock-management-list {
+  display: grid;
+  gap: 8px;
+  max-height: min(560px, calc(100vh - 300px));
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #eef5f7;
+}
+
+.dock-management-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 58px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--teal);
+  border-radius: 9px;
+  background: var(--panel);
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.04);
+}
+
+.server-management-item {
+  border-left-color: var(--amber);
+}
+
+.dock-management-item > svg {
+  color: var(--teal);
+}
+
+.dock-management-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.dock-management-copy strong,
+.dock-management-copy small,
+.dock-management-item em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dock-management-copy strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.dock-management-copy small,
+.dock-management-item em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.dock-management-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dock-management-actions button {
+  width: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+}
+
+.dock-toast-error,
+.app-toast-error {
+  z-index: 80;
+}
+
+.project-info-dialog {
+  display: grid;
+  gap: 14px;
+  min-width: min(640px, calc(100vw - 72px));
+  padding: 16px 18px 18px;
+}
+
+.project-info-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.project-info-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .run-queue-list {
@@ -4665,16 +4811,20 @@ textarea[aria-invalid="true"] {
     max-height: calc(100vh - 198px);
   }
 
-  .servers-popover {
+  .functions-popover {
     top: 116px;
   }
 
-  .project-tasks-popover {
+  .servers-popover {
     top: 169px;
   }
 
-  .run-queue-popover {
+  .project-tasks-popover {
     top: 222px;
+  }
+
+  .run-queue-popover {
+    top: 275px;
   }
 
   .left-panel {
@@ -4708,6 +4858,7 @@ textarea[aria-invalid="true"] {
 }
 
 .side-panel::-webkit-scrollbar,
+.dock-management-list::-webkit-scrollbar,
 .manager-sidebar::-webkit-scrollbar,
 .manager-editor::-webkit-scrollbar,
 .endpoint-manager-list::-webkit-scrollbar,
@@ -4719,6 +4870,7 @@ textarea[aria-invalid="true"] {
 }
 
 .side-panel::-webkit-scrollbar-thumb,
+.dock-management-list::-webkit-scrollbar-thumb,
 .manager-sidebar::-webkit-scrollbar-thumb,
 .manager-editor::-webkit-scrollbar-thumb,
 .endpoint-manager-list::-webkit-scrollbar-thumb,
@@ -4730,7 +4882,9 @@ textarea[aria-invalid="true"] {
   background: rgba(94, 234, 212, 0.42);
 }
 
+.topbar-action-button:hover,
 .topbar-settings-button:hover,
+.project-info-button:hover,
 .panel-collapse-button:hover,
 .section-manage-button:hover,
 .history-row-actions button:hover,
@@ -5506,6 +5660,7 @@ option {
   }
 
   .topbar-metrics span,
+  .topbar-action-button,
   .topbar-settings-button {
     min-height: 36px;
   }
@@ -5586,6 +5741,8 @@ option {
 }
 
 .app-shell[data-theme='light'] .topbar-metrics span,
+.app-shell[data-theme='light'] .topbar-action-button,
+.app-shell[data-theme='light'] .project-info-button,
 .app-shell[data-theme='light'] .topbar-settings-button,
 .app-shell[data-theme='light'] .theme-toggle-button,
 .app-shell[data-theme='light'] .panel-footer span {
@@ -5605,6 +5762,27 @@ option {
   border-color: rgba(13, 148, 136, 0.55);
   background: #ffffff;
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.12);
+}
+
+.app-shell[data-theme='light'] .dock-create-button,
+.app-shell[data-theme='light'] .dock-management-item {
+  border-color: rgba(148, 163, 184, 0.36);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+
+.app-shell[data-theme='light'] .dock-management-list {
+  border-color: rgba(148, 163, 184, 0.28);
+  background: rgba(239, 249, 250, 0.82);
+}
+
+.app-shell[data-theme='light'] .dock-management-copy strong {
+  color: #101828;
+}
+
+.app-shell[data-theme='light'] .dock-management-copy small,
+.app-shell[data-theme='light'] .dock-management-item em {
+  color: #52616f;
 }
 
 .app-shell[data-theme='light'] input,

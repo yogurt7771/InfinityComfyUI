@@ -1,11 +1,11 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import JSZip from 'jszip'
 import {
   Download,
   FileInput,
   History,
   Image as ImageIcon,
   Network,
+  Pencil,
   Plus,
   Route,
   RotateCcw,
@@ -14,6 +14,7 @@ import {
   Trash2,
   Upload,
   Volume2,
+  Workflow,
   X,
   Zap,
 } from 'lucide-react'
@@ -33,7 +34,7 @@ import { defaultOpenAILlmConfig, isOpenAILlmFunction, mergedOpenAILlmConfig } fr
 import { defaultGeminiLlmConfig, isGeminiLlmFunction, mergedGeminiLlmConfig } from '../domain/geminiLlm'
 import { getProjectRunHistory, getSelectedNodesRunHistory } from '../domain/runHistory'
 import { formatDurationMs, formatHistoryTimestamp, runDurationMs } from '../domain/runTiming'
-import { collectProjectAssetFiles, hydrateProjectAssetFiles, type ProjectAssetFileEntry } from '../domain/projectAssets'
+import { downloadConfigPackage, downloadProjectPackage, readPackageFile } from '../domain/projectTransfer'
 import type {
   ComfyEndpointConfig,
   ComfyUiWorkflow,
@@ -245,52 +246,6 @@ export function highlightedJson(value: string): ReactNode[] {
   return parts
 }
 
-function downloadBlob(filename: string, blob: Blob) {
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = filename
-  anchor.click()
-  URL.revokeObjectURL(url)
-}
-
-async function downloadPackage(filename: string, entries: Record<string, unknown>, files: ProjectAssetFileEntry[] = []) {
-  const zip = new JSZip()
-  for (const [path, value] of Object.entries(entries)) {
-    zip.file(path, JSON.stringify(value, null, 2))
-  }
-  for (const file of files) {
-    zip.file(file.path, file.blob)
-  }
-  downloadBlob(filename, await zip.generateAsync({ type: 'blob' }))
-}
-
-async function readPackageFile(file: File) {
-  if (file.name.endsWith('.json')) {
-    return JSON.parse(await file.text())
-  }
-
-  const zip = await JSZip.loadAsync(file)
-  const manifestFile = zip.file('manifest.json')
-  const projectFile = zip.file('project.json')
-  const configFile = zip.file('config.json')
-  const assetManifestFile = zip.file('config/assets.json') ?? zip.file('assets.json')
-  const assetManifest = assetManifestFile ? JSON.parse(await assetManifestFile.async('text')) : undefined
-  const project = projectFile ? JSON.parse(await projectFile.async('text')) : undefined
-  const hydratedProject = project
-    ? await hydrateProjectAssetFiles(project, assetManifest, async (assetPath) => {
-        const normalizedPath = assetPath.startsWith('assets/') ? assetPath : `assets/${assetPath}`
-        return (await (zip.file(normalizedPath) ?? zip.file(assetPath))?.async('blob')) ?? undefined
-      })
-    : undefined
-
-  return {
-    manifest: manifestFile ? JSON.parse(await manifestFile.async('text')) : undefined,
-    project: hydratedProject,
-    config: configFile ? JSON.parse(await configFile.async('text')) : undefined,
-  }
-}
-
 function ResourceListPreview({ resource }: { resource: Resource }) {
   const label = resourceLabel(resource)
   const mediaSource = useResourceMediaSource(resource)
@@ -320,38 +275,6 @@ function ResourceListPreview({ resource }: { resource: Resource }) {
   }
 
   return <span className="asset-thumb-text">{String(resource.value).slice(0, 2) || '--'}</span>
-}
-
-function EndpointStatusList({
-  endpoints,
-  queueCounts,
-}: {
-  endpoints: ComfyEndpointConfig[]
-  queueCounts: Record<string, number>
-}) {
-  return (
-    <div className="endpoint-list" aria-label="ComfyUI server list">
-      {endpoints.length > 0 ? (
-        endpoints.map((endpoint) => {
-          const status = endpoint.enabled ? (endpoint.health?.status ?? 'unknown') : 'disabled'
-          const queueCount = queueCounts[endpoint.id] ?? 0
-          return (
-            <div key={endpoint.id} className="server-list-item">
-              <span className={`status-dot ${status}`} />
-              <span className="server-copy">
-                <span title={endpoint.name}>{endpoint.name}</span>
-                <small title={endpoint.baseUrl}>{endpoint.baseUrl}</small>
-              </span>
-              <strong>{status}</strong>
-              <em>queue {queueCount}</em>
-            </div>
-          )
-        })
-      ) : (
-        <div className="empty-list">No servers</div>
-      )}
-    </div>
-  )
 }
 
 const inputSnapshotDisplayValue = (input: ExecutionInputSnapshot) => {
@@ -2885,6 +2808,68 @@ function EndpointManager({
   )
 }
 
+export function ProjectInfoDialog({
+  project,
+  onUpdate,
+  onClose,
+}: {
+  project: ProjectState['project']
+  onUpdate: (patch: { name?: string; description?: string }) => void
+  onClose: () => void
+}) {
+  const [draft, setDraft] = useState({
+    name: project.name,
+    description: project.description ?? '',
+  })
+
+  useEffect(() => {
+    setDraft({
+      name: project.name,
+      description: project.description ?? '',
+    })
+  }, [project.description, project.id, project.name])
+
+  const saveProjectInfo = () => {
+    onUpdate({ name: draft.name, description: draft.description })
+    onClose()
+  }
+
+  return (
+    <ModalShell label="Project information" onClose={onClose}>
+      <div className="project-info-dialog" aria-label="Project information form">
+        <label className="field">
+          <span>Project name</span>
+          <input
+            aria-label="Project name"
+            value={draft.name}
+            onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+          />
+        </label>
+        <label className="field">
+          <span>Project description</span>
+          <textarea
+            aria-label="Project description"
+            value={draft.description}
+            onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))}
+          />
+        </label>
+        <div className="project-info-meta">
+          <span>Created {formatHistoryTimestamp(project.createdAt)}</span>
+          <span>Updated {formatHistoryTimestamp(project.updatedAt)}</span>
+        </div>
+        <div className="project-info-actions">
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="button" className="primary-action" onClick={saveProjectInfo}>
+            Save
+          </button>
+        </div>
+      </div>
+    </ModalShell>
+  )
+}
+
 export function SettingsPage({ onClose }: { onClose: () => void }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const project = useProjectStore((state) => state.project)
@@ -2981,33 +2966,19 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
   }
 
   const handleExportProject = async () => {
-    const pkg = exportProject()
-    const assetFiles = await collectProjectAssetFiles(pkg.project)
-    await downloadPackage(
-      'project.aicanvas',
-      {
-        'manifest.json': pkg.manifest,
-        'project.json': pkg.project,
-        'config/assets.json': assetFiles.manifest,
-      },
-      assetFiles.files,
-    )
+    await downloadProjectPackage(exportProject())
   }
 
   const handleExportConfig = async () => {
-    const pkg = exportConfig()
-    await downloadPackage('config.aicanvas-config', {
-      'manifest.json': pkg.manifest,
-      'config.json': pkg.config,
-    })
+    await downloadConfigPackage(exportConfig())
   }
 
   const handleImport = async (file?: File) => {
     if (!file) return
     try {
       const payload = await readPackageFile(file)
-      if ('project' in payload && payload.project) importProject(payload)
-      if ('config' in payload && payload.config) importConfig(payload)
+      if (payload.project) importProject({ project: payload.project })
+      if (payload.config) importConfig({ config: payload.config })
       setError(undefined)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Import failed')
@@ -3171,7 +3142,7 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
   )
 }
 
-type LeftDockPanel = 'assets' | 'history' | 'servers' | 'tasks' | 'runQueue'
+type LeftDockPanel = 'assets' | 'history' | 'functions' | 'servers' | 'tasks' | 'runQueue'
 
 export function LeftPanel() {
   const project = useProjectStore((state) => state.project)
@@ -3181,9 +3152,24 @@ export function LeftPanel() {
   const undoLastProjectChange = useProjectStore((state) => state.undoLastProjectChange)
   const redoProjectChange = useProjectStore((state) => state.redoProjectChange)
   const fetchComfyHistory = useProjectStore((state) => state.fetchComfyHistory)
+  const addFunctionFromWorkflow = useProjectStore((state) => state.addFunctionFromWorkflow)
+  const addRequestFunction = useProjectStore((state) => state.addRequestFunction)
+  const addOpenAILlmFunction = useProjectStore((state) => state.addOpenAILlmFunction)
+  const addGeminiLlmFunction = useProjectStore((state) => state.addGeminiLlmFunction)
+  const updateFunction = useProjectStore((state) => state.updateFunction)
+  const deleteFunction = useProjectStore((state) => state.deleteFunction)
+  const addEndpoint = useProjectStore((state) => state.addEndpoint)
+  const updateEndpoint = useProjectStore((state) => state.updateEndpoint)
+  const deleteEndpoint = useProjectStore((state) => state.deleteEndpoint)
+  const checkEndpointStatus = useProjectStore((state) => state.checkEndpointStatus)
   const [openDock, setOpenDock] = useState<LeftDockPanel>()
   const [historyRows, setHistoryRows] = useState<HistoryDockRow[]>([])
   const [expandedTaskId, setExpandedTaskId] = useState<string | undefined>()
+  const [selectedFunctionId, setSelectedFunctionId] = useState<string>()
+  const [functionManagerOpen, setFunctionManagerOpen] = useState(false)
+  const [createFunctionOpen, setCreateFunctionOpen] = useState(false)
+  const [endpointManagerOpen, setEndpointManagerOpen] = useState(false)
+  const [dockError, setDockError] = useState<string>()
   const [previewResource, setPreviewResource] = useState<Resource | undefined>()
   const [historyDialog, setHistoryDialog] = useState<{
     title: string
@@ -3194,10 +3180,14 @@ export function LeftPanel() {
   const historyRefreshTimerRef = useRef<number | undefined>(undefined)
   const assetsOpen = openDock === 'assets'
   const historyOpen = openDock === 'history'
+  const functionsOpen = openDock === 'functions'
   const serversOpen = openDock === 'servers'
   const tasksOpen = openDock === 'tasks'
   const runQueueOpen = openDock === 'runQueue'
   const resources = Object.values(project.resources)
+  const functions = useMemo(() => Object.values(project.functions), [project.functions])
+  const managedFunctions = useMemo(() => functions.filter((fn) => !isBuiltInFunction(fn)), [functions])
+  const workflowFunctionIds = useMemo(() => managedFunctions.filter(isComfyWorkflowFunction).map((fn) => fn.id), [managedFunctions])
   const historyCount = (project.history?.undoStack.length ?? 0) + (project.history?.redoStack.length ?? 0)
   const queueCounts = useMemo(() => endpointQueueCounts(project.tasks), [project.tasks])
   const projectTasks = useMemo(
@@ -3260,6 +3250,98 @@ export function LeftPanel() {
         })
       })
   }
+  const bindNewWorkflowFunctionToEndpoint = (functionId: string, endpointId: string) => {
+    const nextWorkflowFunctionIds = [...workflowFunctionIds, functionId]
+    for (const endpoint of project.comfy.endpoints) {
+      const supportedFunctions = endpoint.capabilities?.supportedFunctions
+      const nextSupportedFunctions =
+        endpoint.id === endpointId
+          ? [...(supportedFunctions ?? workflowFunctionIds), functionId]
+          : supportedFunctions === undefined
+            ? workflowFunctionIds
+            : supportedFunctions.filter((id) => id !== functionId)
+      updateEndpoint(endpoint.id, endpointCapabilitiesPatch(endpoint, nextSupportedFunctions.filter((id) => nextWorkflowFunctionIds.includes(id))))
+    }
+  }
+  const handleWorkflowAdd = (
+    name: string,
+    workflow: ComfyWorkflow,
+    options?: { uiJson?: ComfyUiWorkflow; editor?: ComfyWorkflowEditorMetadata },
+  ) => {
+    try {
+      const functionId = addFunctionFromWorkflow(name.trim() || 'ComfyUI Workflow', workflow, options)
+      setDockError(undefined)
+      setSelectedFunctionId(functionId)
+      return functionId
+    } catch (err) {
+      setDockError(err instanceof Error ? err.message : 'Invalid workflow JSON')
+      return undefined
+    }
+  }
+  const handleRequestFunctionAdd = (name: string, config: Partial<RequestFunctionConfig>) => {
+    try {
+      const functionId = addRequestFunction(name.trim() || 'Request Function', config)
+      setDockError(undefined)
+      setSelectedFunctionId(functionId)
+      return functionId
+    } catch (err) {
+      setDockError(err instanceof Error ? err.message : 'Invalid request function')
+      return undefined
+    }
+  }
+  const handleOpenAIFunctionAdd = (name: string, config: Partial<OpenAILlmConfig>) => {
+    try {
+      const functionId = addOpenAILlmFunction(name.trim() || 'OpenAI LLM Function', config)
+      setDockError(undefined)
+      setSelectedFunctionId(functionId)
+      return functionId
+    } catch (err) {
+      setDockError(err instanceof Error ? err.message : 'Invalid OpenAI function')
+      return undefined
+    }
+  }
+  const handleGeminiFunctionAdd = (name: string, config: Partial<GeminiLlmConfig>) => {
+    try {
+      const functionId = addGeminiLlmFunction(name.trim() || 'Gemini LLM Function', config)
+      setDockError(undefined)
+      setSelectedFunctionId(functionId)
+      return functionId
+    } catch (err) {
+      setDockError(err instanceof Error ? err.message : 'Invalid Gemini function')
+      return undefined
+    }
+  }
+  const editFunction = (functionId: string) => {
+    setSelectedFunctionId(functionId)
+    setFunctionManagerOpen(true)
+  }
+  const removeFunction = (functionId: string) => {
+    const fn = managedFunctions.find((item) => item.id === functionId)
+    if (fn && !window.confirm(`Delete function "${fn.name}"?`)) return
+    deleteFunction(functionId)
+    if (selectedFunctionId === functionId) setSelectedFunctionId(undefined)
+  }
+  const removeEndpoint = (endpoint: ComfyEndpointConfig) => {
+    const activeEndpointTasks = Object.values(project.tasks).filter(
+      (task) => task.endpointId === endpoint.id && activeTaskStatuses.has(task.status),
+    )
+    if (activeEndpointTasks.length > 0) {
+      setDockError(`Cannot delete "${endpoint.name}" while ${activeEndpointTasks.length} task${activeEndpointTasks.length > 1 ? 's are' : ' is'} active.`)
+      return
+    }
+    if (!window.confirm(`Delete ComfyUI server "${endpoint.name}"?`)) return
+    deleteEndpoint(endpoint.id)
+    setDockError(undefined)
+  }
+  const functionKind = (fn: GenerationFunction) => {
+    if (isRequestFunction(fn)) return 'request'
+    if (isOpenAILlmFunction(fn)) return 'openai'
+    if (isGeminiLlmFunction(fn)) return 'gemini'
+    return 'comfyui'
+  }
+  const functionSummary = (fn: GenerationFunction) =>
+    `${fn.inputs.length} inputs · ${fn.outputs.length} outputs · ${fn.workflow.format}`
+
   useEffect(
     () => () => {
       if (previewTimerRef.current === undefined) return
@@ -3308,6 +3390,45 @@ export function LeftPanel() {
           </div>
         </ModalShell>
       ) : null}
+      {functionManagerOpen ? (
+        <FunctionManager
+          functions={managedFunctions}
+          comfyEndpoints={project.comfy.endpoints}
+          selectedFunctionId={selectedFunctionId}
+          onSelectFunction={setSelectedFunctionId}
+          onAddWorkflow={handleWorkflowAdd}
+          onAddRequestFunction={handleRequestFunctionAdd}
+          onAddOpenAIFunction={handleOpenAIFunctionAdd}
+          onAddGeminiFunction={handleGeminiFunctionAdd}
+          onUpdateFunction={updateFunction}
+          onDeleteFunction={deleteFunction}
+          onUpdateEndpoint={updateEndpoint}
+          onClose={() => setFunctionManagerOpen(false)}
+        />
+      ) : null}
+      {createFunctionOpen ? (
+        <NewFunctionDialog
+          comfyEndpoints={project.comfy.endpoints}
+          onClose={() => setCreateFunctionOpen(false)}
+          onSaveComfy={handleWorkflowAdd}
+          onSaveRequest={handleRequestFunctionAdd}
+          onSaveOpenAI={handleOpenAIFunctionAdd}
+          onSaveGemini={handleGeminiFunctionAdd}
+          onBindComfyEndpoint={bindNewWorkflowFunctionToEndpoint}
+        />
+      ) : null}
+      {endpointManagerOpen ? (
+        <EndpointManager
+          endpoints={project.comfy.endpoints}
+          functions={managedFunctions}
+          queueCounts={queueCounts}
+          onAddEndpoint={addEndpoint}
+          onUpdateEndpoint={updateEndpoint}
+          onDeleteEndpoint={deleteEndpoint}
+          onTestEndpoint={(endpoint) => void checkEndpointStatus(endpoint.id)}
+          onClose={() => setEndpointManagerOpen(false)}
+        />
+      ) : null}
       <div className="assets-dock-stack">
         <button
           type="button"
@@ -3328,6 +3449,19 @@ export function LeftPanel() {
           onClick={() => toggleDock('history')}
         >
           <History size={20} />
+        </button>
+        <button
+          type="button"
+          className={`assets-dock-button${functionsOpen ? ' is-active' : ''}`}
+          aria-label="Functions"
+          aria-expanded={functionsOpen}
+          aria-controls="functions-popover"
+          onClick={() => toggleDock('functions')}
+        >
+          <Workflow size={20} />
+          <span className="task-dock-badge" aria-hidden="true">
+            {managedFunctions.length}
+          </span>
         </button>
         <button
           type="button"
@@ -3484,6 +3618,55 @@ export function LeftPanel() {
           </div>
         </section>
       ) : null}
+      {functionsOpen ? (
+        <section
+          id="functions-popover"
+          className="side-panel left-panel asset-popover left-dock-popover functions-popover"
+          aria-label="Functions popover"
+        >
+          <div className="panel-title asset-popover-title">
+            <Workflow size={16} />
+            <h2>Functions</h2>
+            <span>{managedFunctions.length}</span>
+          </div>
+          <div className="dock-management-toolbar">
+            <button type="button" className="dock-create-button" onClick={() => setCreateFunctionOpen(true)}>
+              <Plus size={15} />
+              New function
+            </button>
+          </div>
+          <div className="dock-management-list function-management-list" aria-label="Function list">
+            {managedFunctions.length > 0 ? (
+              managedFunctions.map((fn) => (
+                <article key={fn.id} className="dock-management-item function-management-item">
+                  <Workflow size={18} />
+                  <span className="dock-management-copy">
+                    <strong title={fn.name}>{fn.name}</strong>
+                    <small title={functionSummary(fn)}>{functionSummary(fn)}</small>
+                  </span>
+                  <em>{functionKind(fn)}</em>
+                  <span className="dock-management-actions">
+                    <button type="button" aria-label={`Edit function ${fn.name}`} onClick={() => editFunction(fn.id)}>
+                      <Pencil size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      className="danger-button"
+                      aria-label={`Delete function ${fn.name}`}
+                      onClick={() => removeFunction(fn.id)}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </span>
+                </article>
+              ))
+            ) : (
+              <div className="empty-list">No custom functions</div>
+            )}
+          </div>
+          {dockError ? <div className="toast-error dock-toast-error">{dockError}</div> : null}
+        </section>
+      ) : null}
       {serversOpen ? (
         <section
           id="comfyui-servers-popover"
@@ -3495,7 +3678,58 @@ export function LeftPanel() {
             <h2>ComfyUI Servers</h2>
             <span>{project.comfy.endpoints.length}</span>
           </div>
-          <EndpointStatusList endpoints={project.comfy.endpoints} queueCounts={queueCounts} />
+          <div className="dock-management-toolbar">
+            <button
+              type="button"
+              className="dock-create-button"
+              onClick={() => {
+                addEndpoint()
+                setEndpointManagerOpen(true)
+              }}
+            >
+              <Plus size={15} />
+              New server
+            </button>
+          </div>
+          <div className="dock-management-list endpoint-list" aria-label="ComfyUI server list">
+            {project.comfy.endpoints.length > 0 ? (
+              project.comfy.endpoints.map((endpoint) => {
+                const status = endpoint.enabled ? (endpoint.health?.status ?? 'unknown') : 'disabled'
+                const queueCount = queueCounts[endpoint.id] ?? 0
+                return (
+                  <article key={endpoint.id} className="dock-management-item server-management-item">
+                    <span className={`status-dot ${status}`} />
+                    <span className="dock-management-copy">
+                      <strong title={endpoint.name}>{endpoint.name}</strong>
+                      <small title={endpoint.baseUrl}>{endpoint.baseUrl}</small>
+                    </span>
+                    <em>
+                      {status} · queue {queueCount}
+                    </em>
+                    <span className="dock-management-actions">
+                      <button
+                        type="button"
+                        aria-label={`Edit server ${endpoint.name}`}
+                        onClick={() => setEndpointManagerOpen(true)}
+                      >
+                        <Pencil size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        className="danger-button"
+                        aria-label={`Delete server ${endpoint.name}`}
+                      onClick={() => removeEndpoint(endpoint)}
+                    >
+                        <Trash2 size={14} />
+                      </button>
+                    </span>
+                  </article>
+                )
+              })
+            ) : (
+              <div className="empty-list">No servers</div>
+            )}
+          </div>
         </section>
       ) : null}
       {tasksOpen ? (

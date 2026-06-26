@@ -1,25 +1,35 @@
 import '@xyflow/react/dist/style.css'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   Boxes,
   Database,
+  Download,
   Moon,
-  Settings,
+  Pencil,
   Sun,
+  Upload,
 } from 'lucide-react'
 import { CanvasWorkspace } from './components/CanvasWorkspace'
-import { LeftPanel, SettingsPage } from './components/WorkbenchPanels'
+import { LeftPanel, ProjectInfoDialog } from './components/WorkbenchPanels'
+import { downloadConfigPackage, downloadProjectPackage, readPackageFile } from './domain/projectTransfer'
 import { useProjectStore } from './store/projectStore'
 import './styles.css'
 
 export default function App() {
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const [projectInfoOpen, setProjectInfoOpen] = useState(false)
+  const [packageError, setPackageError] = useState<string>()
   const [theme, setTheme] = useState<'light' | 'dark'>('light')
   const project = useProjectStore((state) => state.project)
   const projectLibrary = useProjectStore((state) => state.projectLibrary)
   const switchProject = useProjectStore((state) => state.switchProject)
+  const updateProjectMetadata = useProjectStore((state) => state.updateProjectMetadata)
   const checkComfyEndpointStatuses = useProjectStore((state) => state.checkComfyEndpointStatuses)
+  const exportProject = useProjectStore((state) => state.exportProject)
+  const exportConfig = useProjectStore((state) => state.exportConfig)
+  const importProject = useProjectStore((state) => state.importProject)
+  const importConfig = useProjectStore((state) => state.importConfig)
   const nextTheme = theme === 'light' ? 'dark' : 'light'
   const projectOptions = useMemo(() => {
     const projects = {
@@ -37,6 +47,36 @@ export default function App() {
     return () => window.clearInterval(intervalId)
   }, [checkComfyEndpointStatuses])
 
+  const handleExportProject = async () => {
+    try {
+      await downloadProjectPackage(exportProject())
+      setPackageError(undefined)
+    } catch (err) {
+      setPackageError(err instanceof Error ? err.message : 'Project export failed')
+    }
+  }
+
+  const handleExportConfig = async () => {
+    try {
+      await downloadConfigPackage(exportConfig())
+      setPackageError(undefined)
+    } catch (err) {
+      setPackageError(err instanceof Error ? err.message : 'Config export failed')
+    }
+  }
+
+  const handleImport = async (file?: File) => {
+    if (!file) return
+    try {
+      const payload = await readPackageFile(file)
+      if (payload.project) importProject({ project: payload.project })
+      if (payload.config) importConfig({ config: payload.config })
+      setPackageError(undefined)
+    } catch (err) {
+      setPackageError(err instanceof Error ? err.message : 'Import failed')
+    }
+  }
+
   return (
     <div className="app-shell" data-theme={theme} aria-label="Infinity ComfyUI workbench">
       <header className="topbar">
@@ -44,18 +84,28 @@ export default function App() {
           <Boxes size={24} />
           <div className="brand-copy">
             <h1>Infinity ComfyUI</h1>
-            <select
-              className="project-switcher"
-              aria-label="Current project"
-              value={project.project.id}
-              onChange={(event) => switchProject(event.target.value)}
-            >
-              {projectOptions.map((item) => (
-                <option key={item.project.id} value={item.project.id}>
-                  {item.project.name || 'Untitled Project'}
-                </option>
-              ))}
-            </select>
+            <div className="project-switcher-row">
+              <select
+                className="project-switcher"
+                aria-label="Current project"
+                value={project.project.id}
+                onChange={(event) => switchProject(event.target.value)}
+              >
+                {projectOptions.map((item) => (
+                  <option key={item.project.id} value={item.project.id}>
+                    {item.project.name || 'Untitled Project'}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="project-info-button"
+                aria-label="Edit project information"
+                onClick={() => setProjectInfoOpen(true)}
+              >
+                <Pencil size={13} />
+              </button>
+            </div>
           </div>
         </div>
         <nav className="topbar-metrics" aria-label="Project metrics">
@@ -67,6 +117,28 @@ export default function App() {
             <Activity size={15} />
             {Object.keys(project.tasks).length} tasks
           </span>
+          <button type="button" className="topbar-action-button" onClick={handleExportProject}>
+            <Download size={15} />
+            Export Project
+          </button>
+          <button type="button" className="topbar-action-button" onClick={handleExportConfig}>
+            <Download size={15} />
+            Export Config
+          </button>
+          <button type="button" className="topbar-action-button" onClick={() => fileInputRef.current?.click()}>
+            <Upload size={15} />
+            Import Project
+          </button>
+          <input
+            ref={fileInputRef}
+            className="hidden-input"
+            type="file"
+            accept=".aicanvas,.aicanvas-config,.json"
+            onChange={(event) => {
+              void handleImport(event.target.files?.[0])
+              event.currentTarget.value = ''
+            }}
+          />
           <button
             type="button"
             className="theme-toggle-button"
@@ -76,10 +148,6 @@ export default function App() {
             {theme === 'light' ? <Sun size={15} /> : <Moon size={15} />}
             {theme === 'light' ? 'Light' : 'Dark'}
           </button>
-          <button type="button" className="topbar-settings-button" aria-label="Settings" onClick={() => setSettingsOpen(true)}>
-            <Settings size={15} />
-            Settings
-          </button>
         </nav>
       </header>
       <main className="workbench">
@@ -88,7 +156,14 @@ export default function App() {
         </div>
         <CanvasWorkspace />
       </main>
-      {settingsOpen ? <SettingsPage onClose={() => setSettingsOpen(false)} /> : null}
+      {projectInfoOpen ? (
+        <ProjectInfoDialog
+          project={project.project}
+          onUpdate={updateProjectMetadata}
+          onClose={() => setProjectInfoOpen(false)}
+        />
+      ) : null}
+      {packageError ? <div className="toast-error app-toast-error">{packageError}</div> : null}
     </div>
   )
 }
