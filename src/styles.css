@@ -113,7 +113,7 @@
   align-items: center;
   gap: 2px;
   width: fit-content;
-  max-width: min(370px, 42vw);
+  max-width: min(405px, 42vw);
   min-width: 0;
   padding: 2px;
   border: 1px solid var(--line);
@@ -124,6 +124,7 @@
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
 }
 
+.project-new-button,
 .project-info-button {
   width: 28px;
   min-width: 28px;
@@ -138,6 +139,10 @@
 .project-switcher:focus-visible {
   outline: none;
   box-shadow: inset 0 0 0 1px var(--line-strong), var(--shadow-focus);
+}
+
+.project-new-button {
+  color: var(--teal);
 }
 
 .topbar-metrics {
@@ -4953,6 +4958,7 @@ textarea[aria-invalid="true"] {
 
 .topbar-action-button:hover,
 .topbar-settings-button:hover,
+.project-new-button:hover,
 .project-info-button:hover,
 .panel-collapse-button:hover,
 .section-manage-button:hover,
@@ -5827,6 +5833,7 @@ option {
 
 .app-shell[data-theme='light'] .topbar-stat-pill,
 .app-shell[data-theme='light'] .topbar-action-button,
+.app-shell[data-theme='light'] .project-new-button,
 .app-shell[data-theme='light'] .project-info-button,
 .app-shell[data-theme='light'] .topbar-settings-button,
 .app-shell[data-theme='light'] .theme-toggle-button,
@@ -5850,6 +5857,7 @@ option {
 }
 
 .app-shell[data-theme='light'] .assets-dock-button,
+.app-shell[data-theme='light'] .project-new-button,
 .app-shell[data-theme='light'] .project-info-button {
   border-color: transparent;
   background: transparent;
@@ -5858,6 +5866,7 @@ option {
 
 .app-shell[data-theme='light'] .assets-dock-button:hover,
 .app-shell[data-theme='light'] .assets-dock-button.is-active,
+.app-shell[data-theme='light'] .project-new-button:hover,
 .app-shell[data-theme='light'] .project-info-button:hover {
   border-color: rgba(13, 148, 136, 0.32);
   background:

@@ -7,6 +7,7 @@ import {
   Download,
   Moon,
   Pencil,
+  Plus,
   Sun,
   Upload,
 } from 'lucide-react'
@@ -23,6 +24,7 @@ export default function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>('light')
   const project = useProjectStore((state) => state.project)
   const projectLibrary = useProjectStore((state) => state.projectLibrary)
+  const createProject = useProjectStore((state) => state.createProject)
   const switchProject = useProjectStore((state) => state.switchProject)
   const updateProjectMetadata = useProjectStore((state) => state.updateProjectMetadata)
   const checkComfyEndpointStatuses = useProjectStore((state) => state.checkComfyEndpointStatuses)
@@ -77,6 +79,11 @@ export default function App() {
     }
   }
 
+  const handleCreateProject = () => {
+    createProject()
+    setProjectInfoOpen(true)
+  }
+
   return (
     <div className="app-shell" data-theme={theme} aria-label="Infinity ComfyUI workbench">
       <header className="topbar">
@@ -97,6 +104,15 @@ export default function App() {
                   </option>
                 ))}
               </select>
+              <button
+                type="button"
+                className="project-new-button"
+                aria-label="New project"
+                title="New project"
+                onClick={handleCreateProject}
+              >
+                <Plus size={14} />
+              </button>
               <button
                 type="button"
                 className="project-info-button"
