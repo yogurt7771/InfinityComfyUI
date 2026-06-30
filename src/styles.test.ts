@@ -118,6 +118,65 @@ const colorContrast = (selector: string, background: RgbColor) => {
   return foreground ? contrastRatio(foreground, background) : 0
 }
 
+const darkDialogBackdrop: RgbColor = { r: 15, g: 23, b: 42 }
+
+const cssBlocksForSelector = (selector: string) =>
+  Array.from(styles.matchAll(/(?<selectors>[^{}]+)\{(?<body>[^}]*)\}/g))
+    .filter((match) => {
+      const selectors = match.groups?.selectors
+      return selectors
+        ?.split(',')
+        .map((value) => value.trim())
+        .includes(selector)
+    })
+    .map((match) => match.groups?.body ?? '')
+    .join('\n')
+
+const cssDeclarationValueForSelector = (selector: string, property: string) => {
+  const block = cssBlocksForSelector(selector)
+  const escapedProperty = property.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const matches = Array.from(block.matchAll(new RegExp(`${escapedProperty}\\s*:\\s*([^;]+)`, 'g')))
+
+  return matches.length ? matches[matches.length - 1][1].trim() : undefined
+}
+
+const cssSurfaceValueForSelector = (selector: string) =>
+  cssDeclarationValueForSelector(selector, 'background') ?? cssDeclarationValueForSelector(selector, 'background-color')
+
+const parseCssSurfaceColor = (value: string | undefined, background: RgbColor = darkDialogBackdrop) => {
+  const directColor = parseCssColor(value, background)
+  if (directColor || !value) return directColor
+
+  const colorTokens = value.match(/var\(\s*--[\w-]+(?:\s*,\s*[^)]*)?\)|#[\da-f]{3,6}\b|rgba?\([^)]*\)/gi) ?? []
+
+  for (const token of colorTokens.reverse()) {
+    const color = parseCssColor(token, background)
+    if (color) return color
+  }
+
+  return undefined
+}
+
+const expectDarkDialogSurface = (selector: string) => {
+  const surfaceValue = cssSurfaceValueForSelector(selector)
+  expect(surfaceValue).toBeDefined()
+
+  const surfaceColor = parseCssSurfaceColor(surfaceValue)
+  expect(surfaceColor).toBeDefined()
+  if (!surfaceColor) return
+
+  expect(relativeLuminance(surfaceColor)).toBeLessThan(0.32)
+}
+
+const expectScopedFunctionRunControl = (selector: string) => {
+  expect(cssBlocksForSelector(selector)).not.toBe('')
+  expectDarkDialogSurface(selector)
+  expect(cssDeclarationValueForSelector(selector, 'color')).toBeDefined()
+  expect(
+    cssDeclarationValueForSelector(selector, 'border') ?? cssDeclarationValueForSelector(selector, 'border-color'),
+  ).toBeDefined()
+}
+
 describe('preview media CSS', () => {
   it('forces connected and reference media previews to render contained inside their frame', () => {
     const block = cssBlock('.media-preview-contain')
@@ -207,18 +266,30 @@ describe('canvas resource UI CSS', () => {
 })
 
 describe('function run dialog CSS', () => {
-  it('keeps resource input labels and pick controls readable on light field cards', () => {
-    const fieldSurface = parseCssColor(cssDeclarationValue('.function-run-field', 'background')) ?? {
-      r: 255,
-      g: 255,
-      b: 255,
-    }
+  it('keeps resource input labels and pick controls readable on the dialog field surface', () => {
+    const fieldSurface = parseCssSurfaceColor(cssSurfaceValueForSelector('.function-run-field')) ?? darkDialogBackdrop
     const pickButtonSurface =
-      parseCssColor(cssDeclarationValue('.function-run-pick-button', 'background'), fieldSurface) ?? fieldSurface
+      parseCssSurfaceColor(cssSurfaceValueForSelector('.function-run-pick-button'), fieldSurface) ?? fieldSurface
 
     expect(colorContrast('.function-run-field-heading > span', fieldSurface)).toBeGreaterThanOrEqual(4.5)
     expect(colorContrast('.function-run-field strong', fieldSurface)).toBeGreaterThanOrEqual(4.5)
     expect(colorContrast('.function-run-manual-label', fieldSurface)).toBeGreaterThanOrEqual(4.5)
     expect(colorContrast('.function-run-pick-button', pickButtonSurface)).toBeGreaterThanOrEqual(3)
+  })
+
+  it('keeps function run dialog local surfaces on the dark dialog skin', () => {
+    expectDarkDialogSurface('.function-run-gallery')
+    expectDarkDialogSurface('.function-run-gallery-item')
+    expectDarkDialogSurface('.function-run-slot-editor')
+    expectDarkDialogSurface('.function-run-field')
+    expectDarkDialogSurface('.function-run-pick-button')
+    expectDarkDialogSurface('.function-run-input-preview')
+  })
+
+  it('scopes function run field and slot editor controls to the dialog skin', () => {
+    expectScopedFunctionRunControl('.function-run-slot-editor select')
+    expectScopedFunctionRunControl('.function-run-field select')
+    expectScopedFunctionRunControl('.function-run-field input')
+    expectScopedFunctionRunControl('.function-run-field textarea')
   })
 })

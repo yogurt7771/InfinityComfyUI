@@ -2399,6 +2399,10 @@ textarea[aria-invalid="true"] {
 }
 
 .function-run-dialog {
+  --function-run-surface: rgba(12, 20, 30, 0.92);
+  --function-run-surface-soft: rgba(16, 27, 39, 0.86);
+  --function-run-control: rgba(8, 13, 21, 0.9);
+  --function-run-control-border: rgba(148, 163, 184, 0.28);
   width: min(760px, calc(100vw - 48px));
 }
 
@@ -2410,9 +2414,9 @@ textarea[aria-invalid="true"] {
   min-height: 92px;
   padding: 10px;
   overflow-x: auto;
-  border: 1px dashed var(--line);
+  border: 1px dashed rgba(148, 163, 184, 0.28);
   border-radius: 10px;
-  background: rgba(241, 245, 249, 0.72);
+  background: var(--function-run-surface-soft);
 }
 
 .function-run-gallery p {
@@ -2427,9 +2431,9 @@ textarea[aria-invalid="true"] {
   gap: 6px;
   min-width: 0;
   padding: 6px;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--function-run-surface);
 }
 
 .function-run-gallery-item .resource-preview-image,
@@ -2455,9 +2459,9 @@ textarea[aria-invalid="true"] {
   gap: 10px;
   align-items: center;
   padding: 10px;
-  border: 1px solid rgba(13, 148, 136, 0.22);
+  border: 1px solid rgba(94, 234, 212, 0.24);
   border-radius: 10px;
-  background: rgba(240, 253, 250, 0.64);
+  background: var(--function-run-surface-soft);
 }
 
 .function-run-slot-editor > div {
@@ -2504,16 +2508,16 @@ textarea[aria-invalid="true"] {
   gap: 7px;
   min-width: 0;
   padding: 10px;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 10px;
-  background: #ffffff;
+  background: var(--function-run-surface);
 }
 
 .function-run-field-invalid {
   border-color: rgba(225, 29, 72, 0.72);
   background:
-    linear-gradient(180deg, rgba(255, 241, 242, 0.94), rgba(255, 255, 255, 0.92)),
-    #ffffff;
+    linear-gradient(180deg, rgba(225, 29, 72, 0.16), rgba(9, 14, 23, 0.02)),
+    var(--function-run-surface);
   box-shadow: 0 0 0 3px rgba(225, 29, 72, 0.1);
 }
 
@@ -2529,7 +2533,7 @@ textarea[aria-invalid="true"] {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  color: #102033;
+  color: var(--ink);
   font-size: 12px;
   font-weight: 900;
 }
@@ -2551,7 +2555,7 @@ textarea[aria-invalid="true"] {
 .function-run-field strong {
   padding: 3px 7px;
   border-radius: 999px;
-  color: #0f766e;
+  color: var(--teal);
   background: rgba(20, 184, 166, 0.14);
   font-size: 10px;
   text-transform: uppercase;
@@ -2572,8 +2576,8 @@ textarea[aria-invalid="true"] {
   height: 38px;
   border: 1px solid rgba(13, 148, 136, 0.34);
   border-radius: 8px;
-  color: #0f766e;
-  background: rgba(240, 253, 250, 0.92);
+  color: var(--teal);
+  background: rgba(45, 212, 191, 0.1);
   cursor: pointer;
   transition:
     border-color 160ms ease,
@@ -2582,9 +2586,9 @@ textarea[aria-invalid="true"] {
 }
 
 .function-run-pick-button:hover {
-  border-color: rgba(13, 148, 136, 0.64);
-  background: rgba(204, 251, 241, 0.92);
-  box-shadow: 0 8px 22px rgba(13, 148, 136, 0.14);
+  border-color: rgba(94, 234, 212, 0.62);
+  background: rgba(45, 212, 191, 0.18);
+  box-shadow: 0 8px 22px rgba(13, 148, 136, 0.22);
 }
 
 .function-run-pick-button:focus-visible {
@@ -2593,7 +2597,7 @@ textarea[aria-invalid="true"] {
 }
 
 .function-run-manual-label {
-  color: #475467;
+  color: var(--muted);
   font-size: 11px;
   font-weight: 800;
 }
@@ -2655,6 +2659,15 @@ textarea[aria-invalid="true"] {
 .function-run-field textarea {
   width: 100%;
   min-width: 0;
+  border-color: var(--function-run-control-border);
+  color: var(--ink);
+  background: var(--function-run-control);
+}
+
+.function-run-slot-editor select {
+  border-color: var(--function-run-control-border);
+  color: var(--ink);
+  background: var(--function-run-control);
 }
 
 .function-run-field textarea {
@@ -2665,7 +2678,7 @@ textarea[aria-invalid="true"] {
 .function-run-field input:disabled,
 .function-run-field textarea:disabled {
   color: var(--muted);
-  background: rgba(241, 245, 249, 0.76);
+  background: rgba(15, 23, 33, 0.72);
 }
 
 .function-run-count {
