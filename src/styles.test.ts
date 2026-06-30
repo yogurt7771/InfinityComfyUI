@@ -16,6 +16,108 @@ const cssNumericValue = (selector: string, property: string) => {
   return match ? Number(match[1]) : undefined
 }
 
+type RgbColor = {
+  r: number
+  g: number
+  b: number
+}
+
+const cssDeclarationValue = (selector: string, property: string) => {
+  const block = cssBlock(selector)
+  const match = new RegExp(`${property}\\s*:\\s*([^;]+)`).exec(block)
+  return match?.[1]?.trim()
+}
+
+const customPropertyValue = (property: string) => {
+  const escaped = property.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = new RegExp(`${escaped}\\s*:\\s*([^;]+)`).exec(styles)
+  return match?.[1]?.trim()
+}
+
+const resolveCssColorValue = (value: string | undefined, seen = new Set<string>()): string | undefined => {
+  if (!value) return undefined
+
+  const trimmedValue = value.trim()
+  const varMatch = /^var\(\s*(--[\w-]+)\s*(?:,\s*(.*))?\)$/i.exec(trimmedValue)
+
+  if (!varMatch) return trimmedValue
+
+  const [, property, fallback] = varMatch
+  if (seen.has(property)) return fallback ? resolveCssColorValue(fallback, seen) : undefined
+
+  const resolvedProperty = customPropertyValue(property)
+  if (resolvedProperty) {
+    seen.add(property)
+    return resolveCssColorValue(resolvedProperty, seen)
+  }
+
+  return fallback ? resolveCssColorValue(fallback, seen) : undefined
+}
+
+const blendColor = (foreground: RgbColor, alpha: number, background: RgbColor): RgbColor => ({
+  r: Math.round(foreground.r * alpha + background.r * (1 - alpha)),
+  g: Math.round(foreground.g * alpha + background.g * (1 - alpha)),
+  b: Math.round(foreground.b * alpha + background.b * (1 - alpha)),
+})
+
+const parseCssColor = (value: string | undefined, background: RgbColor = { r: 255, g: 255, b: 255 }) => {
+  const resolvedValue = resolveCssColorValue(value)
+  if (!resolvedValue) return undefined
+
+  const hexMatch = /^#([\da-f]{3}|[\da-f]{6})$/i.exec(resolvedValue)
+  if (hexMatch) {
+    const hex = hexMatch[1]
+    const normalizedHex =
+      hex.length === 3
+        ? hex
+            .split('')
+            .map((value) => value + value)
+            .join('')
+        : hex
+
+    return {
+      r: Number.parseInt(normalizedHex.slice(0, 2), 16),
+      g: Number.parseInt(normalizedHex.slice(2, 4), 16),
+      b: Number.parseInt(normalizedHex.slice(4, 6), 16),
+    }
+  }
+
+  const rgbMatch = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)$/i.exec(resolvedValue)
+  if (!rgbMatch) return undefined
+
+  const color = {
+    r: Number(rgbMatch[1]),
+    g: Number(rgbMatch[2]),
+    b: Number(rgbMatch[3]),
+  }
+  const alpha = rgbMatch[4] ? Number(rgbMatch[4]) : 1
+
+  return alpha < 1 ? blendColor(color, alpha, background) : color
+}
+
+const relativeLuminance = (color: RgbColor) => {
+  const [red, green, blue] = [color.r, color.g, color.b].map((channel) => {
+    const value = channel / 255
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+  })
+
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+}
+
+const contrastRatio = (foreground: RgbColor, background: RgbColor) => {
+  const foregroundLuminance = relativeLuminance(foreground)
+  const backgroundLuminance = relativeLuminance(background)
+  const lighter = Math.max(foregroundLuminance, backgroundLuminance)
+  const darker = Math.min(foregroundLuminance, backgroundLuminance)
+
+  return (lighter + 0.05) / (darker + 0.05)
+}
+
+const colorContrast = (selector: string, background: RgbColor) => {
+  const foreground = parseCssColor(cssDeclarationValue(selector, 'color'), background)
+  return foreground ? contrastRatio(foreground, background) : 0
+}
+
 describe('preview media CSS', () => {
   it('forces connected and reference media previews to render contained inside their frame', () => {
     const block = cssBlock('.media-preview-contain')
@@ -101,5 +203,22 @@ describe('canvas resource UI CSS', () => {
     expect(cssNumericValue('.full-preview-backdrop', 'z-index')).toBeGreaterThan(
       cssNumericValue('.local-action-backdrop', 'z-index') ?? 0,
     )
+  })
+})
+
+describe('function run dialog CSS', () => {
+  it('keeps resource input labels and pick controls readable on light field cards', () => {
+    const fieldSurface = parseCssColor(cssDeclarationValue('.function-run-field', 'background')) ?? {
+      r: 255,
+      g: 255,
+      b: 255,
+    }
+    const pickButtonSurface =
+      parseCssColor(cssDeclarationValue('.function-run-pick-button', 'background'), fieldSurface) ?? fieldSurface
+
+    expect(colorContrast('.function-run-field-heading > span', fieldSurface)).toBeGreaterThanOrEqual(4.5)
+    expect(colorContrast('.function-run-field strong', fieldSurface)).toBeGreaterThanOrEqual(4.5)
+    expect(colorContrast('.function-run-manual-label', fieldSurface)).toBeGreaterThanOrEqual(4.5)
+    expect(colorContrast('.function-run-pick-button', pickButtonSurface)).toBeGreaterThanOrEqual(3)
   })
 })

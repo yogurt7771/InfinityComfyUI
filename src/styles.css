@@ -3,6 +3,7 @@
 .manager-modal,
 .full-preview-modal,
 .openai-message-modal,
+.local-action-dialog,
 .side-panel {
   --ink: #f6fbfc;
   --ink-soft: #dce8ed;
@@ -18,6 +19,7 @@
   --media-preview-border: rgba(94, 234, 212, 0.22);
   --dark-action: #17202c;
   --teal: #35dcc8;
+  --teal-strong: #0f766e;
   --teal-soft: rgba(45, 212, 191, 0.14);
   --amber: #f6c453;
   --danger: #fb7185;
@@ -2527,7 +2529,7 @@ textarea[aria-invalid="true"] {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  color: var(--ink);
+  color: #102033;
   font-size: 12px;
   font-weight: 900;
 }
@@ -2549,7 +2551,7 @@ textarea[aria-invalid="true"] {
 .function-run-field strong {
   padding: 3px 7px;
   border-radius: 999px;
-  color: var(--teal-strong);
+  color: #0f766e;
   background: rgba(20, 184, 166, 0.14);
   font-size: 10px;
   text-transform: uppercase;
@@ -2570,7 +2572,7 @@ textarea[aria-invalid="true"] {
   height: 38px;
   border: 1px solid rgba(13, 148, 136, 0.34);
   border-radius: 8px;
-  color: var(--teal-strong);
+  color: #0f766e;
   background: rgba(240, 253, 250, 0.92);
   cursor: pointer;
   transition:
@@ -2591,7 +2593,7 @@ textarea[aria-invalid="true"] {
 }
 
 .function-run-manual-label {
-  color: var(--muted);
+  color: #475467;
   font-size: 11px;
   font-weight: 800;
 }
