@@ -339,9 +339,14 @@ const inputPreviewResource = (project: ProjectState, input: ExecutionInputSnapsh
   return undefined
 }
 
+const unsafeInspectorFileCharacterPattern = new RegExp('[<>:"/\\\\|?*#%&]+', 'g')
+
+const replaceInspectorControlCharacters = (value: string) =>
+  Array.from(value, (character) => (character.charCodeAt(0) <= 0x1f ? '-' : character)).join('')
+
 const safeInspectorFilePart = (value: string) => {
-  const cleaned = value
-    .replace(/[<>:"/\\|?*#%&\u0000-\u001f]+/g, '-')
+  const cleaned = replaceInspectorControlCharacters(value)
+    .replace(unsafeInspectorFileCharacterPattern, '-')
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-')
     .replace(/^[.\-\s]+|[.\-\s]+$/g, '')
@@ -1347,17 +1352,20 @@ export function ComfyWorkflowEditorDialog({
   const [error, setError] = useState<string>()
   const [saving, setSaving] = useState(false)
   const [frameReady, setFrameReady] = useState(false)
+  const endpointId = endpoint?.id
   const proxyUrl = endpoint
     ? comfyProxyUrl(endpoint.baseUrl, {
         bearerToken: endpoint.auth?.type === 'token' ? endpoint.auth.token : undefined,
       })
     : undefined
 
+  /* eslint-disable react-hooks/set-state-in-effect -- A changed endpoint invalidates the iframe readiness state immediately. */
   useEffect(() => {
     setFrameReady(false)
-    setStatus(endpoint ? 'Loading ComfyUI editor' : 'No ComfyUI endpoint configured')
+    setStatus(endpointId ? 'Loading ComfyUI editor' : 'No ComfyUI endpoint configured')
     setError(undefined)
-  }, [endpoint?.id, proxyUrl])
+  }, [endpointId, proxyUrl])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const initializeFrame = useCallback(async () => {
     if (initializingRef.current) return initializingRef.current
@@ -1540,6 +1548,8 @@ function NewFunctionDialog({
   useEffect(() => {
     if (functionType !== 'comfyui') return
     const nextEndpointId = selectedComfyEndpoint?.id ?? ''
+    // The endpoint list is external store state; keep the local selector on an available entry.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (selectedComfyEndpointId !== nextEndpointId) setSelectedComfyEndpointId(nextEndpointId)
   }, [functionType, selectedComfyEndpoint?.id, selectedComfyEndpointId])
 
@@ -1958,6 +1968,7 @@ export function FunctionManager({
     selectableEditorComfyEndpoints.find((endpoint) => endpoint.id === selectedFunction?.workflow.editor?.endpointId) ??
     selectableEditorComfyEndpoints[0]
 
+  /* eslint-disable react-hooks/set-state-in-effect -- Function and endpoint selections are external store state that can disappear independently. */
   useEffect(() => {
     if (!selectedFunction?.id || !selectedIsComfyWorkflow) {
       if (selectedEditorComfySelection) setSelectedEditorComfySelection(undefined)
@@ -1972,6 +1983,7 @@ export function FunctionManager({
       setSelectedEditorComfySelection({ functionId: selectedFunction.id, endpointId: nextEndpointId })
     }
   }, [selectedFunction?.id, selectedIsComfyWorkflow, selectedEditorComfyEndpoint?.id, selectedEditorComfySelection])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const bindNewWorkflowFunctionToEndpoint = (functionId: string, endpointId: string) => {
     if (!onUpdateEndpoint) return
@@ -2882,9 +2894,11 @@ function EndpointManager({
     endpoint ? cloneEndpointDraft(endpoint) : createEndpointDraft(endpointCount, workflowFunctionIds),
   )
 
+  /* eslint-disable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps -- Reset an unsaved draft only when endpoint identity or compatible functions change. */
   useEffect(() => {
     setDraft(endpoint ? cloneEndpointDraft(endpoint) : createEndpointDraft(endpointCount, workflowFunctionIds))
   }, [endpoint?.id, endpointCount, workflowFunctionKey])
+  /* eslint-enable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
 
   const updateDraft = (patch: Partial<ComfyEndpointConfig>) => {
     setDraft((current) => ({ ...current, ...patch }))
@@ -3120,12 +3134,14 @@ export function ProjectInfoDialog({
     description: project.description ?? '',
   })
 
+  /* eslint-disable react-hooks/set-state-in-effect -- The dialog draft must refresh when another project becomes active. */
   useEffect(() => {
     setDraft({
       name: project.name,
       description: project.description ?? '',
     })
   }, [project.description, project.id, project.name])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const saveProjectInfo = () => {
     onUpdate({ name: draft.name, description: draft.description })

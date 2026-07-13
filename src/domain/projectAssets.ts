@@ -26,9 +26,14 @@ export type CollectedProjectAssetFiles = {
 const mediaValue = (resource: Resource): MediaResourceValue | undefined =>
   typeof resource.value === 'object' && resource.value !== null && 'assetId' in resource.value ? resource.value : undefined
 
+const unsafePackageCharacterPattern = new RegExp('[<>:"/\\\\|?*]', 'g')
+
+const replacePackageControlCharacters = (value: string) =>
+  Array.from(value, (character) => (character.charCodeAt(0) <= 0x1f ? '_' : character)).join('')
+
 const safePackageSegment = (value: string, fallback: string) => {
-  const cleaned = value
-    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+  const cleaned = replacePackageControlCharacters(value)
+    .replace(unsafePackageCharacterPattern, '_')
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/[. ]+$/g, '')

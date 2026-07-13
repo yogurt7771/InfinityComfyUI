@@ -414,13 +414,15 @@ const isMediaResourceValue = (value: Resource['value']): value is MediaResourceV
   typeof value === 'object' && value !== null && 'assetId' in value
 
 const compactHistoryAssetRecord = (asset: AssetRecord): AssetRecord => {
-  const { blobUrl, ...metadata } = asset
+  const metadata = { ...asset }
+  delete metadata.blobUrl
   return metadata
 }
 
 const compactHistoryResource = (resource: Resource): Resource => {
   if (!isMediaResourceValue(resource.value)) return resource
-  const { thumbnailUrl, ...valueWithoutThumbnail } = resource.value
+  const valueWithoutThumbnail = { ...resource.value }
+  delete valueWithoutThumbnail.thumbnailUrl
   return {
     ...resource,
     value: {
@@ -9132,12 +9134,17 @@ const PROJECT_STORAGE_KEY = 'infinity-comfyui.project.v1'
 const PROJECT_LIBRARY_STORAGE_KEY = 'infinity-comfyui.projects.v1'
 
 const persistentProjectSnapshot = (project: ProjectState): ProjectState => {
-  const { history: _history, ...baseProject } = withoutBuiltInProjectFunctions(project)
+  const baseProject = withoutBuiltInProjectFunctions(project)
+  delete baseProject.history
   return {
     ...baseProject,
     comfy: {
       ...baseProject.comfy,
-      endpoints: baseProject.comfy.endpoints.map(({ health, ...endpoint }) => endpoint),
+      endpoints: baseProject.comfy.endpoints.map((endpoint) => {
+        const persistentEndpoint = { ...endpoint }
+        delete persistentEndpoint.health
+        return persistentEndpoint
+      }),
     },
   }
 }

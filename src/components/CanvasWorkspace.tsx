@@ -714,7 +714,7 @@ const comfyMinimapPanelSize = (content: MinimapRect, nodeCount: number) => {
   const aspect = clamp(content.width / Math.max(content.height, 1), 0.85, 2.35)
   const nodeBoost = clamp(nodeCount * 5, 0, 72)
   let width = clamp(292 + nodeBoost, COMFY_MINIMAP_MIN_WIDTH, COMFY_MINIMAP_MAX_WIDTH)
-  let height = clamp(width / aspect, COMFY_MINIMAP_MIN_HEIGHT, COMFY_MINIMAP_MAX_HEIGHT)
+  const height = clamp(width / aspect, COMFY_MINIMAP_MIN_HEIGHT, COMFY_MINIMAP_MAX_HEIGHT)
   if (height === COMFY_MINIMAP_MAX_HEIGHT && aspect > 1) width = clamp(height * aspect, COMFY_MINIMAP_MIN_WIDTH, COMFY_MINIMAP_MAX_WIDTH)
   return { width: Math.round(width), height: Math.round(height) }
 }
@@ -2878,6 +2878,7 @@ function CanvasSurface() {
       : inspectedPrimaryResource?.source.taskId
   const inspectedTask = inspectedTaskId ? project.tasks[inspectedTaskId] : undefined
 
+  /* eslint-disable react-hooks/set-state-in-effect -- External canvas selection changes must synchronously dismiss stale transient overlays. */
   useEffect(() => {
     setQuickToolbar((current) => {
       if (!current) return current
@@ -2902,6 +2903,7 @@ function CanvasSurface() {
   useEffect(() => {
     if (quickToolbar && quickToolbarResourceRefs.length === 0) setQuickToolbar(undefined)
   }, [quickToolbar, quickToolbarResourceRefs.length])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   useLayoutEffect(() => {
     if (!quickToolbar) return
@@ -3155,12 +3157,14 @@ function CanvasSurface() {
     setInspectorPreviewResource(undefined)
   }
 
+  /* eslint-disable react-hooks/set-state-in-effect -- The inspected node can be removed by the external project store while this panel is open. */
   useEffect(() => {
     if (inspectorNodeId && !inspectedNode) {
       setInspectorNodeId(undefined)
       setInspectorPreviewResource(undefined)
     }
   }, [inspectedNode, inspectorNodeId])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const focusInspectorNode = (nodeId: string) => {
     selectNode(nodeId)
@@ -3465,27 +3469,30 @@ function CanvasSurface() {
     return { x: (event as MouseEvent).clientX, y: (event as MouseEvent).clientY }
   }
 
-  const handleInfoFromElement = (element: Element | null) => {
+  const handleInfoFromElement = useCallback((element: Element | null) => {
     if (element?.classList.contains('asset-lineage-anchor-handle')) return undefined
     const nodeId = element?.closest('.react-flow__node')?.getAttribute('data-id') ?? undefined
     const handleId = element?.getAttribute('data-slot-handle') ?? element?.getAttribute('data-handleid') ?? undefined
     return nodeId ? { nodeId, handleId } : undefined
-  }
+  }, [])
 
-  const handleInfoNearPoint = (clientX: number, clientY: number) => {
-    for (const handle of document.querySelectorAll('.workspace-canvas .react-flow__handle')) {
-      const rect = handle.getBoundingClientRect()
-      const padding = 14
-      const isNear =
-        clientX >= rect.left - padding &&
-        clientX <= rect.right + padding &&
-        clientY >= rect.top - padding &&
-        clientY <= rect.bottom + padding
-      if (isNear) return handleInfoFromElement(handle)
-    }
+  const handleInfoNearPoint = useCallback(
+    (clientX: number, clientY: number) => {
+      for (const handle of document.querySelectorAll('.workspace-canvas .react-flow__handle')) {
+        const rect = handle.getBoundingClientRect()
+        const padding = 14
+        const isNear =
+          clientX >= rect.left - padding &&
+          clientX <= rect.right + padding &&
+          clientY >= rect.top - padding &&
+          clientY <= rect.bottom + padding
+        if (isNear) return handleInfoFromElement(handle)
+      }
 
-    return undefined
-  }
+      return undefined
+    },
+    [handleInfoFromElement],
+  )
 
   const pointInsideCanvasNode = (clientX: number, clientY: number) => {
     for (const node of document.querySelectorAll<HTMLElement>('.workspace-canvas .react-flow__node')) {
@@ -3734,6 +3741,7 @@ function CanvasSurface() {
     [
       connectByNodeRoles,
       connectionResourceType,
+      handleInfoNearPoint,
       inputTypeForFunctionInput,
       openAddMenu,
       project.canvas.nodes,

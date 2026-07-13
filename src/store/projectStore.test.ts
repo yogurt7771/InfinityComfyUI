@@ -3715,7 +3715,7 @@ describe('project store actions', () => {
     await waitForState(slice, (state) => queuedPromptIds.length === 1 && tasksForFunction(state).some((task) => task.status === 'running'))
 
     let state = slice.getState()
-    let tasks = tasksForFunction(state)
+    const tasks = tasksForFunction(state)
     const runningTask = tasks.find((task) => task.status === 'running')
     const queuedTask = tasks.find((task) => task.status === 'queued')
     expect(queuedPromptIds).toEqual(['prompt_1'])

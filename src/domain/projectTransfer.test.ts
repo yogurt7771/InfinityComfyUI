@@ -44,7 +44,11 @@ const projectPackage = (name: string): FullProjectPackage => ({
 
 const configPackage = (projectName: string) => createConfigPackage(projectState(projectName), exportedAt)
 
-const unsafeFilenameChars = /[<>:"/\\|?*#%&\x00-\x1F]/
+const unsafeFilenamePunctuation = /[<>:"/\\|?*#%&]/
+const containsControlCharacter = (value: string) =>
+  Array.from(value).some((character) => character.charCodeAt(0) <= 31)
+const containsUnsafeFilenameCharacter = (value: string) =>
+  unsafeFilenamePunctuation.test(value) || containsControlCharacter(value)
 
 const captureDownloadFilename = async (download: () => Promise<void>) => {
   const createObjectUrl = URL.createObjectURL
@@ -77,7 +81,7 @@ describe('project transfer downloads', () => {
     expect(filename).toContain('Client')
     expect(filename).toContain('Mood')
     expect(filename).toContain('Board')
-    expect(filename).not.toMatch(unsafeFilenameChars)
+    expect(containsUnsafeFilenameCharacter(filename ?? '')).toBe(false)
   })
 
   it('names config package downloads from the sanitized project name and keeps the config extension', async () => {
@@ -89,7 +93,7 @@ describe('project transfer downloads', () => {
     expect(filename).toContain('Client')
     expect(filename).toContain('Mood')
     expect(filename).toContain('Board')
-    expect(filename).not.toMatch(unsafeFilenameChars)
+    expect(containsUnsafeFilenameCharacter(filename ?? '')).toBe(false)
   })
 
   it('uses stable fallback names when project names are blank', async () => {
@@ -98,7 +102,9 @@ describe('project transfer downloads', () => {
 
     expect(projectFilename).toBeDefined()
     expect(configFilename).toBeDefined()
-    expect(projectFilename).toMatch(/^[^<>:"/\\|?*#%&\x00-\x1F]+\.aicanvas$/)
-    expect(configFilename).toMatch(/^[^<>:"/\\|?*#%&\x00-\x1F]+\.aicanvas-config$/)
+    expect(projectFilename).toMatch(/^[^<>:"/\\|?*#%&]+\.aicanvas$/)
+    expect(configFilename).toMatch(/^[^<>:"/\\|?*#%&]+\.aicanvas-config$/)
+    expect(containsControlCharacter(projectFilename ?? '')).toBe(false)
+    expect(containsControlCharacter(configFilename ?? '')).toBe(false)
   })
 })

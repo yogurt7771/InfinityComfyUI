@@ -34,7 +34,8 @@ const sanitizeEndpoint = (endpoint: ComfyEndpointConfig): ComfyEndpointConfig =>
 }
 
 export function createProjectPackage(project: ProjectState, exportedAt = new Date().toISOString()): FullProjectPackage {
-  const { history: _history, ...exportedProject } = withoutBuiltInProjectFunctions(project)
+  const exportedProject = withoutBuiltInProjectFunctions(project)
+  delete exportedProject.history
 
   return {
     manifest: {

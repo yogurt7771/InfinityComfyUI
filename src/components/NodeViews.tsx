@@ -340,7 +340,7 @@ function OptionalPrimitiveInput({
           onClick={(event) => event.stopPropagation()}
           onDoubleClick={(event) => event.stopPropagation()}
         />
-        <span>{Boolean(value) ? 'true' : 'false'}</span>
+        <span>{value ? 'true' : 'false'}</span>
       </label>
     )
   }
@@ -882,7 +882,7 @@ const sourceHighlightRules: Record<Exclude<TextDisplayMode, 'render markdown' | 
     { className: 'syntax-comment', pattern: /<!--[\s\S]*?-->/g },
     { className: 'syntax-code', pattern: /```[\s\S]*?```|`[^`\n]+`/g },
     { className: 'syntax-heading', pattern: /^#{1,6}\s+.*$/gm },
-    { className: 'syntax-link', pattern: /!?\[[^\]\n]*\]\([^\)\n]*\)/g },
+    { className: 'syntax-link', pattern: /!?\[[^\]\n]*\]\([^)\n]*\)/g },
     { className: 'syntax-emphasis', pattern: /(?:\*\*|__)[^\n]+?(?:\*\*|__)|(?:\*|_)[^\n]+?(?:\*|_)/g },
     { className: 'syntax-punctuation', pattern: /^\s*(?:>|[-+*]|\d+\.)\s+/gm },
   ],
@@ -2128,9 +2128,12 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
 
   useEffect(() => {
     if (!showLiveDuration) return undefined
-    setLiveDurationNow(new Date().toISOString())
+    const initialTimer = window.setTimeout(() => setLiveDurationNow(new Date().toISOString()), 0)
     const timer = window.setInterval(() => setLiveDurationNow(new Date().toISOString()), 1000)
-    return () => window.clearInterval(timer)
+    return () => {
+      window.clearTimeout(initialTimer)
+      window.clearInterval(timer)
+    }
   }, [showLiveDuration, task?.startedAt])
 
   return (

@@ -17,12 +17,30 @@ function downloadBlob(filename: string, blob: Blob) {
   URL.revokeObjectURL(url)
 }
 
+const unsafeDownloadCharacters = new Set(['<', '>', ':', '"', '/', '\\', '|', '?', '*', '#', '%', '&'])
+
+const replaceUnsafeDownloadCharacters = (value: string) => {
+  let cleaned = ''
+  let unsafeRun = false
+  for (const character of value) {
+    const unsafe = character.charCodeAt(0) <= 0x1f || unsafeDownloadCharacters.has(character)
+    if (unsafe) {
+      if (!unsafeRun) cleaned += '-'
+      unsafeRun = true
+      continue
+    }
+    cleaned += character
+    unsafeRun = false
+  }
+  return cleaned
+}
+
 const safeDownloadBaseName = (name: string | undefined, fallback: string) => {
   const normalized = name
-    ?.trim()
-    .replace(/[<>:"/\\|?*#%&\u0000-\u001f]+/g, '-')
-    .replace(/\s+/g, ' ')
-    .replace(/[. ]+$/g, '')
+    ? replaceUnsafeDownloadCharacters(name.trim())
+        .replace(/\s+/g, ' ')
+        .replace(/[. ]+$/g, '')
+    : undefined
   return normalized || fallback
 }
 

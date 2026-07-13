@@ -19,4 +19,16 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
+  {
+    // These component modules intentionally export pure helpers that are shared with their focused tests.
+    files: [
+      'src/components/CanvasWorkspace.tsx',
+      'src/components/ModalFrame.tsx',
+      'src/components/ResourcePreviewModal.tsx',
+      'src/components/WorkbenchPanels.tsx',
+    ],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
 ])

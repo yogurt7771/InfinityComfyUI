@@ -51,6 +51,8 @@ export function ModalFrame({
     const id = idRef.current
     modalStack = modalStack.filter((item) => item !== id)
     modalStack.push(id)
+    // Modal depth is only known after registering in the shared stack.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDepth(modalStack.length - 1)
 
     return () => {
