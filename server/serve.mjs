@@ -59,6 +59,121 @@ function normalizedComfyBaseUrl(baseUrl) {
   return parsed.toString().replace(/\/+$/, '')
 }
 
+class ComfyProxyTargetError extends Error {}
+
+function validatedComfyProxyTargetBase(configuredTarget) {
+  const targetBase = normalizedComfyBaseUrl(configuredTarget)
+  const parsed = new URL(targetBase)
+  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
+    throw new ComfyProxyTargetError('ComfyUI proxy target is invalid')
+  }
+  return targetBase
+}
+
+function configuredValueList(value) {
+  const configuredValue = String(value ?? '').trim()
+  if (!configuredValue) return []
+  if (!configuredValue.startsWith('[')) return [configuredValue]
+
+  let parsed
+  try {
+    parsed = JSON.parse(configuredValue)
+  } catch {
+    throw new ComfyProxyTargetError('Configured proxy list is invalid JSON')
+  }
+  if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== 'string')) {
+    throw new ComfyProxyTargetError('Configured proxy list must be an array of strings')
+  }
+  return parsed.map((item) => item.trim()).filter(Boolean)
+}
+
+function configuredComfyProxyTargets() {
+  const primaryTarget = process.env.COMFY_PROXY_TARGET_BASE?.trim()
+  const additionalTargets = configuredValueList(process.env.COMFY_PROXY_TARGET_BASES)
+  const primaryTargetBase = primaryTarget ? validatedComfyProxyTargetBase(primaryTarget) : undefined
+  const allowedTargetBases = new Set([
+    ...(primaryTargetBase ? [primaryTargetBase] : []),
+    ...additionalTargets.map(validatedComfyProxyTargetBase),
+  ])
+  if (allowedTargetBases.size === 0) throw new ComfyProxyTargetError('ComfyUI proxy target is not configured')
+  return { primaryTargetBase, allowedTargetBases }
+}
+
+function configuredComfyProxyAppOrigins() {
+  const configuredOrigins = configuredValueList(process.env.COMFY_PROXY_APP_ORIGINS)
+  const originValues =
+    configuredOrigins.length > 0
+      ? configuredOrigins
+      : [`http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://[::1]:${port}`]
+  return new Set(
+    originValues.map((value) => {
+      const parsed = new URL(value)
+      if (
+        !['http:', 'https:'].includes(parsed.protocol) ||
+        parsed.username ||
+        parsed.password ||
+        parsed.pathname !== '/' ||
+        parsed.search ||
+        parsed.hash
+      ) {
+        throw new ComfyProxyTargetError('Configured app origin is invalid')
+      }
+      return parsed.origin
+    }),
+  )
+}
+
+function allowedComfyProxyTargetUrl(targetBase, targetPath) {
+  const { allowedTargetBases } = configuredComfyProxyTargets()
+  if (!allowedTargetBases.has(targetBase)) throw new ComfyProxyTargetError('ComfyUI proxy target is not allowed')
+
+  let decodedTargetPath
+  try {
+    decodedTargetPath = decodeURIComponent(targetPath)
+  } catch {
+    throw new ComfyProxyTargetError('ComfyUI proxy path is invalid')
+  }
+  if (
+    targetPath.startsWith('//') ||
+    decodedTargetPath.startsWith('//') ||
+    targetPath.includes('\\') ||
+    decodedTargetPath.includes('\\')
+  ) {
+    throw new ComfyProxyTargetError('ComfyUI proxy path is invalid')
+  }
+
+  const allowedBaseUrl = new URL(`${targetBase}/`)
+  const targetUrl = new URL(targetPath.replace(/^\/+/, ''), allowedBaseUrl)
+  const allowedPathPrefix = allowedBaseUrl.pathname
+  const targetStaysInAllowedBase =
+    targetUrl.origin === allowedBaseUrl.origin &&
+    (targetUrl.pathname === allowedPathPrefix.slice(0, -1) || targetUrl.pathname.startsWith(allowedPathPrefix))
+  if (!targetStaysInAllowedBase) throw new ComfyProxyTargetError('ComfyUI proxy path is not allowed')
+
+  return targetUrl
+}
+
+function proxyRequestComesFromAllowedOrigin(request) {
+  const fetchSite = String(request.headers['sec-fetch-site'] ?? '').trim().toLowerCase()
+  if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') return false
+
+  const origin = String(request.headers.origin ?? '').trim()
+  if (!origin || origin === 'undefined') return true
+  if (origin === 'null') return false
+
+  try {
+    return configuredComfyProxyAppOrigins().has(new URL(origin).origin)
+  } catch {
+    return false
+  }
+}
+
+function assertAllowedProxyRequestOrigin(request) {
+  if (!proxyRequestComesFromAllowedOrigin(request)) {
+    throw new ComfyProxyTargetError('Cross-origin ComfyUI proxy requests are not allowed')
+  }
+}
+
 function readRequestBody(request) {
   return new Promise((resolve, reject) => {
     const chunks = []
@@ -73,7 +188,10 @@ function comfyProxyTokenFromFileContent(content) {
   return token || undefined
 }
 
-async function configuredProxyBearerToken() {
+async function configuredProxyBearerToken(targetBase) {
+  const { primaryTargetBase } = configuredComfyProxyTargets()
+  if (!primaryTargetBase || targetBase !== primaryTargetBase) return undefined
+
   const envToken = process.env.COMFY_PROXY_BEARER_TOKEN?.trim()
   if (envToken) return envToken
 
@@ -85,6 +203,12 @@ async function configuredProxyBearerToken() {
   } catch {
     return undefined
   }
+}
+
+async function upstreamProxyBearerToken(targetBase, clientBearerToken) {
+  const token = clientBearerToken || (await configuredProxyBearerToken(targetBase))
+  if (!token || !/^[\x21-\x7e]+$/.test(token)) return undefined
+  return token
 }
 
 async function proxyRequestHeaders(request, bearerToken) {
@@ -193,13 +317,17 @@ function websocketProxyHeaders(request, targetUrl, bearerToken) {
   return headers
 }
 
+function scriptSafeJson(value) {
+  return JSON.stringify(value).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
+}
+
 function comfyProxyBridge(proxyBase, targetBase, bearerToken) {
   return `<script>
 (() => {
-  const proxyBase = ${JSON.stringify(proxyBase)};
-  const targetBase = ${JSON.stringify(targetBase)};
-  const proxyTokenParam = ${JSON.stringify(COMFY_PROXY_TOKEN_PARAM)};
-  const proxyBearerToken = ${JSON.stringify(bearerToken ?? '')};
+  const proxyBase = ${scriptSafeJson(proxyBase)};
+  const targetBase = ${scriptSafeJson(targetBase)};
+  const proxyTokenParam = ${scriptSafeJson(COMFY_PROXY_TOKEN_PARAM)};
+  const proxyBearerToken = ${scriptSafeJson(bearerToken ?? '')};
   const proxyAuthParams = new URLSearchParams(location.search);
   if (proxyBearerToken && !proxyAuthParams.has(proxyTokenParam)) proxyAuthParams.set(proxyTokenParam, proxyBearerToken);
   const withProxyAuth = (value) => {
@@ -382,6 +510,7 @@ function setComfyProxyResponseHeaders(response, headers, proxyBase, targetBase, 
 
 async function handleComfyProxy(request, response) {
   try {
+    assertAllowedProxyRequestOrigin(request)
     const parts = comfyProxyRequestParts(request.url)
     if (!parts) {
       response.statusCode = 404
@@ -389,33 +518,32 @@ async function handleComfyProxy(request, response) {
       return
     }
     const { requestUrl, targetPath, targetBase, proxyBase } = parts
-    const targetUrl = proxiedTargetUrl(new URL(targetPath, `${targetBase}/`))
+    const targetUrl = proxiedTargetUrl(allowedComfyProxyTargetUrl(targetBase, targetPath))
     targetUrl.search = requestUrl.search
     targetUrl.searchParams.delete(COMFY_PROXY_TOKEN_PARAM)
-    const bearerToken = requestUrl.searchParams.get(COMFY_PROXY_TOKEN_PARAM)?.trim() || (await configuredProxyBearerToken())
+    const clientBearerToken = requestUrl.searchParams.get(COMFY_PROXY_TOKEN_PARAM)?.trim()
+    const upstreamBearerToken = await upstreamProxyBearerToken(targetBase, clientBearerToken)
 
     const hasBody = request.method !== 'GET' && request.method !== 'HEAD'
     const bodyBuffer = hasBody ? await readRequestBody(request) : undefined
     const proxied = await fetch(targetUrl, {
       method: request.method,
-      headers: await proxyRequestHeaders(request, shouldAttachProxyBearer(request, targetUrl) ? bearerToken : undefined),
+      headers: await proxyRequestHeaders(request, shouldAttachProxyBearer(request, targetUrl) ? upstreamBearerToken : undefined),
       body: bodyBuffer,
       redirect: 'manual',
     })
     const contentType = proxied.headers.get('content-type') ?? ''
     response.statusCode = proxied.status
-    setComfyProxyResponseHeaders(response, proxied.headers, proxyBase, targetBase, bearerToken)
-    response.setHeader('Access-Control-Allow-Origin', '*')
-
+    setComfyProxyResponseHeaders(response, proxied.headers, proxyBase, targetBase, clientBearerToken)
     if (contentType.includes('text/html')) {
       response.setHeader('content-type', 'text/html; charset=utf-8')
-      response.end(injectComfyProxyBridge(await proxied.text(), proxyBase, targetBase, bearerToken))
+      response.end(injectComfyProxyBridge(await proxied.text(), proxyBase, targetBase, clientBearerToken))
       return
     }
 
     response.end(Buffer.from(await proxied.arrayBuffer()))
   } catch (err) {
-    response.statusCode = 502
+    response.statusCode = err instanceof ComfyProxyTargetError ? 403 : 502
     response.setHeader('content-type', 'text/plain; charset=utf-8')
     response.end(err instanceof Error ? err.message : 'ComfyUI proxy failed')
   }
@@ -467,25 +595,27 @@ const server = createServer((request, response) => {
 
 server.on('upgrade', (request, socket, head) => {
   void (async () => {
-    const fail = () => {
+    const fail = (status = '502 Bad Gateway') => {
       if (!socket.destroyed) {
-        socket.write('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n')
+        socket.write(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\n`)
         socket.destroy()
       }
     }
 
     try {
+      assertAllowedProxyRequestOrigin(request)
       const parts = comfyProxyRequestParts(request.url)
       if (!parts) {
         socket.destroy()
         return
       }
       const { requestUrl, targetPath, targetBase } = parts
-      const targetUrl = proxiedTargetUrl(new URL(targetPath, `${targetBase}/`))
+      const targetUrl = proxiedTargetUrl(allowedComfyProxyTargetUrl(targetBase, targetPath))
       targetUrl.protocol = targetUrl.protocol === 'https:' ? 'wss:' : 'ws:'
       targetUrl.search = requestUrl.search
       targetUrl.searchParams.delete(COMFY_PROXY_TOKEN_PARAM)
-      const bearerToken = requestUrl.searchParams.get(COMFY_PROXY_TOKEN_PARAM)?.trim() || (await configuredProxyBearerToken())
+      const clientBearerToken = requestUrl.searchParams.get(COMFY_PROXY_TOKEN_PARAM)?.trim()
+      const upstreamBearerToken = await upstreamProxyBearerToken(targetBase, clientBearerToken)
       const portNumber = Number(targetUrl.port || (targetUrl.protocol === 'wss:' ? 443 : 80))
       const connectOptions = { host: targetUrl.hostname, port: portNumber, servername: targetUrl.hostname }
       const upstream =
@@ -493,7 +623,9 @@ server.on('upgrade', (request, socket, head) => {
 
       function onConnect() {
         const pathAndSearch = `${targetUrl.pathname}${targetUrl.search}`
-        upstream.write(`GET ${pathAndSearch} HTTP/1.1\r\n${websocketProxyHeaders(request, targetUrl, bearerToken).join('\r\n')}\r\n\r\n`)
+        upstream.write(
+          `GET ${pathAndSearch} HTTP/1.1\r\n${websocketProxyHeaders(request, targetUrl, upstreamBearerToken).join('\r\n')}\r\n\r\n`,
+        )
         if (head.length > 0) upstream.write(head)
         upstream.pipe(socket)
         socket.pipe(upstream)
@@ -501,8 +633,8 @@ server.on('upgrade', (request, socket, head) => {
 
       upstream.on('error', fail)
       socket.on('error', () => upstream.destroy())
-    } catch {
-      fail()
+    } catch (error) {
+      fail(error instanceof ComfyProxyTargetError ? '403 Forbidden' : '502 Bad Gateway')
     }
   })()
 })

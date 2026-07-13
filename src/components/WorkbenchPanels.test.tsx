@@ -4,6 +4,7 @@ import { ComfyWorkflowEditorDialog, LeftPanel, SettingsPage, highlightedJson } f
 import { projectStore } from '../store/projectStore'
 import type { ProjectState } from '../domain/types'
 import { createOpenAIImageFunction } from '../domain/openaiImage'
+import { comfyProxyUrl } from '../domain/comfyProxy'
 
 const panelProject = (): ProjectState => ({
   schemaVersion: '1.0.0',
@@ -1761,7 +1762,8 @@ describe('LeftPanel', () => {
     expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'infinity-focus-node' }))
     fireEvent.click(within(queue).getByRole('button', { name: 'Open ComfyUI history for Run 1/2' }))
     await screen.findByRole('dialog', { name: 'ComfyUI history' })
-    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:27707/history/prompt_1', {
+    const proxyBaseUrl = new URL(comfyProxyUrl(state.comfy.endpoints[0]!.baseUrl), window.location.origin).toString()
+    expect(fetchMock).toHaveBeenCalledWith(`${proxyBaseUrl}history/prompt_1`, {
       method: 'GET',
       headers: { 'X-Workspace': 'infinity' },
     })

@@ -7,6 +7,7 @@ import { createOpenAIImageFunction, OPENAI_IMAGE_FUNCTION_ID } from '../domain/o
 import { createGeminiImageFunction, GEMINI_IMAGE_FUNCTION_ID } from '../domain/geminiImage'
 import { REQUEST_FUNCTION_ID } from '../domain/requestFunction'
 import { LOCAL_TEXT_TRIM_FUNCTION_ID } from '../domain/localTransforms'
+import { comfyProxyUrl } from '../domain/comfyProxy'
 import type { FunctionInputDef, GenerationFunction } from '../domain/types'
 
 describe('project store actions', () => {
@@ -1124,9 +1125,10 @@ describe('project store actions', () => {
 
       await slice.getState().runFunctionNodeWithComfy('node_openai_image', 1)
 
+      const proxyBaseUrl = new URL(comfyProxyUrl('http://127.0.0.1:27707'), window.location.origin).toString()
       expect(fetchMock).toHaveBeenNthCalledWith(
         1,
-        'http://127.0.0.1:27707/view?filename=reference.png&subfolder=renders&type=output',
+        `${proxyBaseUrl}view?filename=reference.png&subfolder=renders&type=output`,
         {
           method: 'GET',
           headers: { 'X-Workspace': 'infinity' },

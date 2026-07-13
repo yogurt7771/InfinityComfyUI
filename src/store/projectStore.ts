@@ -2,6 +2,7 @@ import { useStore } from 'zustand'
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import { get as getIdb, set as setIdb } from 'idb-keyval'
 import { ComfyClient, type ComfyUploadImageOptions, type ComfyUploadImageResult } from '../domain/comfyClient'
+import { comfyProxyUrl } from '../domain/comfyProxy'
 import { ComfyServer, comfyFileFromResource } from '../domain/comfyServer'
 import { extractComfyOutputs, type ComfyFileRef } from '../domain/comfyOutputs'
 import { runComfyPrompt, type ComfyPromptClient } from '../domain/comfyRunner'
@@ -376,7 +377,10 @@ const defaultDeps: ProjectStoreDeps = {
   randomInt: (min, max) => Math.floor(Math.random() * (max - min + 1)) + min,
   createComfyClient: (endpoint) =>
     new ComfyClient({
-      baseUrl: endpoint.baseUrl,
+      baseUrl:
+        typeof window !== 'undefined' && window.location.origin !== 'null'
+          ? new URL(comfyProxyUrl(endpoint.baseUrl), window.location.origin).toString()
+          : endpoint.baseUrl,
       clientId: crypto.randomUUID(),
       token: endpoint.auth?.type === 'token' ? endpoint.auth.token : undefined,
       headers: endpoint.customHeaders,

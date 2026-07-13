@@ -118,7 +118,7 @@ export class ComfyClient {
   createWebSocketUrl() {
     const url = new URL(this.baseUrl)
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
-    url.pathname = '/ws'
+    url.pathname = `${url.pathname.replace(/\/+$/, '')}/ws`
     url.search = new URLSearchParams({ clientId: this.clientId }).toString()
     return url.toString()
   }

@@ -4,6 +4,7 @@ import { ResourcePreview } from './ResourcePreview'
 import { FullResourcePreviewModal } from './ResourcePreviewModal'
 import type { Resource } from '../domain/types'
 import { projectStore } from '../store/projectStore'
+import { comfyProxyUrl } from '../domain/comfyProxy'
 
 const mediaResource = (type: 'image' | 'video' | 'audio', url: string, endpointId?: string): Resource => ({
   id: `res_${type}`,
@@ -75,8 +76,9 @@ describe('ResourcePreview', () => {
 
     render(<ResourcePreview resource={resource} />)
 
+    const proxyBaseUrl = new URL(comfyProxyUrl('http://127.0.0.1:27707'), window.location.origin).toString()
     await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:27707/view?filename=image.png&subfolder=renders&type=output', {
+      expect(fetchMock).toHaveBeenCalledWith(`${proxyBaseUrl}view?filename=image.png&subfolder=renders&type=output`, {
         method: 'GET',
         headers: { 'X-Workspace': 'infinity' },
       }),

@@ -2047,6 +2047,8 @@ function CanvasSurface() {
   const [functionEditor, setFunctionEditor] = useState<FunctionEditorState>()
   const [functionRunDialog, setFunctionRunDialog] = useState<FunctionRunDialogState>()
   const [temporaryComfyWorkflow, setTemporaryComfyWorkflow] = useState<TemporaryComfyWorkflowState>()
+  const [templateNameDialogOpen, setTemplateNameDialogOpen] = useState(false)
+  const [templateName, setTemplateName] = useState('Template')
   const [inputPickMode, setInputPickMode] = useState<FunctionInputPickMode>()
   const [comparePair, setComparePair] = useState<CompareImagePair | null>(null)
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([])
@@ -2714,9 +2716,7 @@ function CanvasSurface() {
             : mode === 'remove'
               ? activeSelectedNodeIds.filter((selectedId) => !changedNodeIds.includes(selectedId))
               : changedNodeIds
-        const selectionUnchanged =
-          activeSelectedNodeIds.length === nextSelectedNodeIds.length &&
-          activeSelectedNodeIds.every((selectedId, index) => selectedId === nextSelectedNodeIds[index])
+        const selectionUnchanged = sameNodeIdSet(activeSelectedNodeIds, nextSelectedNodeIds)
         if (selectionUnchanged) return
 
         clearSelectedEdgeIds()
@@ -3422,10 +3422,16 @@ function CanvasSurface() {
   }
 
   const saveSelectionAsTemplate = () => {
-    const name = window.prompt('Template name', 'Template')
-    if (name === null) return
-    saveTemplateFromSelection(name)
+    setTemplateName('Template')
     setGroupNodeMenu(undefined)
+    setTemplateNameDialogOpen(true)
+  }
+
+  const submitTemplateName = () => {
+    const name = templateName.trim()
+    if (!name) return
+    const templateId = saveTemplateFromSelection(name)
+    if (templateId) setTemplateNameDialogOpen(false)
   }
 
   const createTextAtPoint = (text: string, clientX: number, clientY: number) => {
@@ -3801,6 +3807,8 @@ function CanvasSurface() {
       }
       const selectionMode = selectionModeFromEvent(event)
       const nextSelectedNodeIds = selectionIdsForNodeClick(node.id, selectionMode)
+      forcedFlowSelectionNodeIds.current = nextSelectedNodeIds
+      ignoreSelectionSyncUntil.current = Date.now() + 250
       recordNodeSelectionRecency([node.id])
       selectNode(node.id, selectionMode)
       syncFlowNodeSelection(nextSelectedNodeIds)
@@ -4088,6 +4096,55 @@ function CanvasSurface() {
             <span>Edit All Nodes</span>
           </button>
         </div>
+      ) : null}
+      {templateNameDialogOpen ? (
+        <ModalFrame
+          label="Save selection as template"
+          onClose={() => setTemplateNameDialogOpen(false)}
+          backdropClassName="local-action-backdrop nodrag nopan"
+          dialogClassName="local-action-dialog"
+        >
+          <form
+            className="local-action-fields"
+            onSubmit={(event) => {
+              event.preventDefault()
+              submitTemplateName()
+            }}
+          >
+            <header>
+              <div>
+                <h2>Save as Template</h2>
+                <span>Reuse the selected nodes from the Add node menu.</span>
+              </div>
+              <button
+                type="button"
+                aria-label="Close template naming dialog"
+                onClick={() => setTemplateNameDialogOpen(false)}
+              >
+                <X size={16} />
+              </button>
+            </header>
+            <div className="local-action-fields">
+              <label>
+                <span>Template name</span>
+                <input
+                  aria-label="Template name"
+                  autoFocus
+                  value={templateName}
+                  onChange={(event) => setTemplateName(event.target.value)}
+                />
+              </label>
+            </div>
+            <div className="local-action-footer">
+              <button type="button" onClick={() => setTemplateNameDialogOpen(false)}>
+                Cancel
+              </button>
+              <button type="submit" className="primary" disabled={!templateName.trim()}>
+                Save
+              </button>
+            </div>
+          </form>
+        </ModalFrame>
       ) : null}
       {groupNodeMenu ? (
         <div

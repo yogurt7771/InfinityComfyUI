@@ -1351,4 +1351,168 @@ describe('CanvasWorkspace', () => {
       expectCanvasSelectionUnchanged()
     })
   })
+
+  it('renders consecutive text assets in React Flow without reloading the canvas', async () => {
+    const emptyProject: ProjectState = {
+      ...originalProject,
+      canvas: {
+        ...originalProject.canvas,
+        nodes: [],
+        edges: [],
+      },
+      resources: {},
+      assets: {},
+      tasks: {},
+      ...(originalProject.history
+        ? {
+            history: {
+              ...originalProject.history,
+              undoStack: [],
+              redoStack: [],
+            },
+          }
+        : {}),
+    }
+    projectStore.setState({
+      project: emptyProject,
+      selectedNodeId: undefined,
+      selectedNodeIds: [],
+    } as Partial<ReturnType<typeof projectStore.getState>>)
+
+    const { container } = render(<CanvasWorkspace />)
+    const canvas = screen.getByLabelText('Canvas')
+    expect(container.querySelectorAll('.react-flow__node-resource[data-id]')).toHaveLength(0)
+
+    const addTextAsset = async (clientX: number, clientY: number) => {
+      fireEvent.doubleClick(canvas, { button: 0, clientX, clientY })
+      const addMenu = await screen.findByRole('menu', { name: 'Add node' })
+      fireEvent.click(within(addMenu).getByRole('menuitem', { name: 'Text Asset' }))
+    }
+
+    await addTextAsset(180, 220)
+    const firstNodeId = await waitFor(() => {
+      expect(Object.keys(projectStore.getState().project.resources)).toHaveLength(1)
+      expect(projectStore.getState().project.canvas.nodes).toHaveLength(1)
+      const nodeId = projectStore.getState().project.canvas.nodes[0]?.id
+      expect(nodeId).toBeDefined()
+      expect(container.querySelector(`.react-flow__node-resource[data-id="${nodeId}"]`)).not.toBeNull()
+      return nodeId!
+    })
+
+    await addTextAsset(520, 260)
+    const secondNodeId = await waitFor(() => {
+      expect(Object.keys(projectStore.getState().project.resources)).toHaveLength(2)
+      expect(projectStore.getState().project.canvas.nodes).toHaveLength(2)
+      const nodeId = projectStore
+        .getState()
+        .project.canvas.nodes.map((node) => node.id)
+        .find((nodeId) => nodeId !== firstNodeId)
+      expect(nodeId).toBeDefined()
+      return nodeId!
+    })
+
+    await waitFor(() => {
+      const renderedNodeIds = Array.from(container.querySelectorAll<HTMLElement>('.react-flow__node-resource[data-id]'))
+        .map((node) => node.dataset.id)
+        .filter((nodeId): nodeId is string => Boolean(nodeId))
+      expect(
+        renderedNodeIds,
+        'the second React Flow text node should appear after the project state update without a canvas reload',
+      ).toContain(secondNodeId)
+      expect(renderedNodeIds).toHaveLength(2)
+    })
+  })
+
+  it('keeps the canvas mounted when Ctrl-click adds a second text node to the selection', async () => {
+    const emptyProject: ProjectState = {
+      ...originalProject,
+      canvas: {
+        ...originalProject.canvas,
+        nodes: [],
+        edges: [],
+      },
+      resources: {},
+      assets: {},
+      tasks: {},
+      ...(originalProject.history
+        ? {
+            history: {
+              ...originalProject.history,
+              undoStack: [],
+              redoStack: [],
+            },
+          }
+        : {}),
+    }
+    projectStore.setState({
+      project: emptyProject,
+      selectedNodeId: undefined,
+      selectedNodeIds: [],
+    } as Partial<ReturnType<typeof projectStore.getState>>)
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const uncaughtErrors: string[] = []
+    const captureWindowError = (event: ErrorEvent) => {
+      uncaughtErrors.push(String(event.error ?? event.message))
+      event.preventDefault()
+    }
+    window.addEventListener('error', captureWindowError)
+
+    try {
+      const { container } = render(<CanvasWorkspace />)
+      const canvas = screen.getByLabelText('Canvas')
+      const addTextAsset = async (clientX: number, clientY: number) => {
+        fireEvent.doubleClick(canvas, { button: 0, clientX, clientY })
+        const addMenu = await screen.findByRole('menu', { name: 'Add node' })
+        fireEvent.click(within(addMenu).getByRole('menuitem', { name: 'Text Asset' }))
+      }
+
+      await addTextAsset(180, 220)
+      await waitFor(() => expect(projectStore.getState().project.canvas.nodes).toHaveLength(1))
+      await addTextAsset(520, 260)
+      const nodeIds = await waitFor(() => {
+        expect(Object.keys(projectStore.getState().project.resources)).toHaveLength(2)
+        expect(projectStore.getState().project.canvas.nodes).toHaveLength(2)
+        const ids = projectStore.getState().project.canvas.nodes.map((node) => node.id)
+        expect(ids).toHaveLength(2)
+        expect(container.querySelectorAll('.react-flow__node-resource[data-id]')).toHaveLength(2)
+        return ids
+      })
+      const firstNode = container.querySelector<HTMLElement>(`.react-flow__node-resource[data-id="${nodeIds[0]}"]`)
+      const secondNode = container.querySelector<HTMLElement>(`.react-flow__node-resource[data-id="${nodeIds[1]}"]`)
+      expect(firstNode).not.toBeNull()
+      expect(secondNode).not.toBeNull()
+
+      const clickNodeWithPrimaryMouse = (node: HTMLElement, modifier: { ctrlKey?: boolean; metaKey?: boolean } = {}) => {
+        fireEvent.pointerDown(node, { button: 0, buttons: 1, pointerId: 1, pointerType: 'mouse', ...modifier })
+        fireEvent.mouseDown(node, { button: 0, buttons: 1, ...modifier })
+        fireEvent.pointerUp(node, { button: 0, buttons: 0, pointerId: 1, pointerType: 'mouse', ...modifier })
+        fireEvent.mouseUp(node, { button: 0, buttons: 0, ...modifier })
+        fireEvent.click(node, { button: 0, detail: 1, ...modifier })
+      }
+
+      clickNodeWithPrimaryMouse(firstNode!)
+      await waitFor(() => {
+        expect(projectStore.getState().selectedNodeId).toBe(nodeIds[0])
+        expect(projectStore.getState().selectedNodeIds).toEqual([nodeIds[0]])
+        expect(firstNode).toHaveClass('selected')
+      })
+
+      fireEvent.keyDown(window, { key: 'Control', code: 'ControlLeft', ctrlKey: true })
+      clickNodeWithPrimaryMouse(secondNode!, { ctrlKey: true })
+      fireEvent.keyUp(window, { key: 'Control', code: 'ControlLeft' })
+
+      await waitFor(() => {
+        expect(projectStore.getState().selectedNodeIds).toEqual(expect.arrayContaining(nodeIds))
+        expect(projectStore.getState().selectedNodeIds).toHaveLength(2)
+        expect(firstNode).toHaveClass('selected')
+        expect(secondNode).toHaveClass('selected')
+        expect(container.querySelector('.workspace-canvas')).not.toBeNull()
+      })
+
+      const errorText = [...consoleError.mock.calls.flat(), ...uncaughtErrors].map((value) => String(value)).join('\n')
+      expect(errorText).not.toMatch(/Maximum update depth exceeded|Minified React error #185/i)
+    } finally {
+      window.removeEventListener('error', captureWindowError)
+    }
+  })
 })

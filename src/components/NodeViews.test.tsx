@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EmptyNodeView, FunctionNodeView, GroupNodeView, ResourceNodeView, ResultGroupNodeView } from './NodeViews'
 import { projectStore } from '../store/projectStore'
 import { createRequestFunction, REQUEST_FUNCTION_ID } from '../domain/requestFunction'
+import { comfyProxyUrl } from '../domain/comfyProxy'
 import type {
   FunctionOutputDef,
   GeminiImageConfig,
@@ -2121,8 +2122,9 @@ describe('NodeViews', () => {
 
     fireEvent.click(within(container).getByRole('button', { name: 'Copy asset' }))
 
+    const proxyBaseUrl = new URL(comfyProxyUrl('http://127.0.0.1:27707'), window.location.origin).toString()
     await waitFor(() =>
-      expect(fetch).toHaveBeenCalledWith('http://127.0.0.1:27707/view?filename=render.png&subfolder=&type=output', {
+      expect(fetch).toHaveBeenCalledWith(`${proxyBaseUrl}view?filename=render.png&subfolder=&type=output`, {
         method: 'GET',
         headers: { 'X-Workspace': 'infinity' },
       }),
