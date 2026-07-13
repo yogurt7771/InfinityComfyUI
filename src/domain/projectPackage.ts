@@ -16,6 +16,7 @@ export type ConfigPackage = {
     exportedAt: string
     schemaVersion: string
   }
+  project?: Pick<ProjectState['project'], 'name'>
   config: Pick<ProjectState, 'schemaVersion' | 'functions' | 'comfy'>
 }
 
@@ -51,6 +52,9 @@ export function createConfigPackage(project: ProjectState, exportedAt = new Date
       kind: 'aicanvas_config',
       exportedAt,
       schemaVersion: project.schemaVersion,
+    },
+    project: {
+      name: project.project.name,
     },
     config: {
       schemaVersion: project.schemaVersion,

@@ -17,6 +17,15 @@ function downloadBlob(filename: string, blob: Blob) {
   URL.revokeObjectURL(url)
 }
 
+const safeDownloadBaseName = (name: string | undefined, fallback: string) => {
+  const normalized = name
+    ?.trim()
+    .replace(/[<>:"/\\|?*#%&\u0000-\u001f]+/g, '-')
+    .replace(/\s+/g, ' ')
+    .replace(/[. ]+$/g, '')
+  return normalized || fallback
+}
+
 export async function downloadPackage(
   filename: string,
   entries: Record<string, unknown>,
@@ -32,7 +41,10 @@ export async function downloadPackage(
   downloadBlob(filename, await zip.generateAsync({ type: 'blob' }))
 }
 
-export async function downloadProjectPackage(pkg: FullProjectPackage, filename = 'project.aicanvas') {
+export async function downloadProjectPackage(
+  pkg: FullProjectPackage,
+  filename = `${safeDownloadBaseName(pkg.project.project.name, 'project')}.aicanvas`,
+) {
   const assetFiles = await collectProjectAssetFiles(pkg.project)
   await downloadPackage(
     filename,
@@ -45,7 +57,10 @@ export async function downloadProjectPackage(pkg: FullProjectPackage, filename =
   )
 }
 
-export async function downloadConfigPackage(pkg: ConfigPackage, filename = 'config.aicanvas-config') {
+export async function downloadConfigPackage(
+  pkg: ConfigPackage,
+  filename = `${safeDownloadBaseName(pkg.project?.name, 'config')}.aicanvas-config`,
+) {
   await downloadPackage(filename, {
     'manifest.json': pkg.manifest,
     'config.json': pkg.config,

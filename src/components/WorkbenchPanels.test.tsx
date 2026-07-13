@@ -226,7 +226,7 @@ describe('LeftPanel', () => {
     expect(within(functionList).queryByText('Sidebar Request Edited')).not.toBeInTheDocument()
   })
 
-  it('manages ComfyUI servers from the left dock list', () => {
+  it('opens a single ComfyUI server creation form from the left dock list and only creates on save', () => {
     render(<LeftPanel />)
 
     const serversToggle = screen.getByRole('button', { name: 'ComfyUI Servers' })
@@ -246,16 +246,39 @@ describe('LeftPanel', () => {
     expect(screen.queryByRole('dialog', { name: 'ComfyUI Server Management' })).not.toBeInTheDocument()
 
     fireEvent.click(within(serversPopover).getByRole('button', { name: /new|新建/i }))
+    const createDialog = screen.getByRole('dialog', { name: /new comfyui server|create comfyui server/i })
+
+    expect(within(createDialog).queryByLabelText('ComfyUI server list')).not.toBeInTheDocument()
+    expect(within(createDialog).getByRole('button', { name: /cancel/i })).toBeVisible()
+    expect(within(createDialog).getByRole('button', { name: /save/i })).toBeVisible()
+    expect(projectStore.getState().project.comfy.endpoints).toHaveLength(1)
+
+    fireEvent.change(within(createDialog).getByLabelText(/(server|endpoint) name/i), {
+      target: { value: 'Cancelled ComfyUI' },
+    })
+    fireEvent.click(within(createDialog).getByRole('button', { name: /cancel/i }))
+
+    expect(screen.queryByRole('dialog', { name: /new comfyui server|create comfyui server/i })).not.toBeInTheDocument()
+    expect(projectStore.getState().project.comfy.endpoints).toHaveLength(1)
+    expect(within(serverList).queryByText('Cancelled ComfyUI')).not.toBeInTheDocument()
+
+    fireEvent.click(within(serversPopover).getByRole('button', { name: /new|新建/i }))
+    const saveDialog = screen.getByRole('dialog', { name: /new comfyui server|create comfyui server/i })
+    fireEvent.change(within(saveDialog).getByLabelText(/(server|endpoint) name/i), {
+      target: { value: 'Sidebar ComfyUI' },
+    })
+    fireEvent.change(within(saveDialog).getByLabelText(/url/i), {
+      target: { value: 'http://127.0.0.1:8188' },
+    })
+    expect(projectStore.getState().project.comfy.endpoints).toHaveLength(1)
+
+    fireEvent.click(within(saveDialog).getByRole('button', { name: /save/i }))
 
     expect(projectStore.getState().project.comfy.endpoints).toHaveLength(2)
-    expect(within(serverList).getByText('ComfyUI 2')).toBeVisible()
-
-    fireEvent.click(within(serverList).getByRole('button', { name: /edit (server|endpoint) comfyui 2/i }))
-    const endpointName = screen.getByLabelText(/(server|endpoint) name comfyui 2/i)
-    fireEvent.change(endpointName, { target: { value: 'Sidebar ComfyUI' } })
-    fireEvent.blur(endpointName)
-
-    expect(projectStore.getState().project.comfy.endpoints[1]).toMatchObject({ name: 'Sidebar ComfyUI' })
+    expect(projectStore.getState().project.comfy.endpoints[1]).toMatchObject({
+      name: 'Sidebar ComfyUI',
+      baseUrl: 'http://127.0.0.1:8188',
+    })
     expect(within(serverList).getByText('Sidebar ComfyUI')).toBeVisible()
 
     vi.spyOn(window, 'confirm').mockReturnValue(true)
@@ -267,6 +290,74 @@ describe('LeftPanel', () => {
     expect(screen.getByRole('button', { name: 'History' })).toBeVisible()
     expect(screen.getByRole('button', { name: 'Project Tasks' })).toBeVisible()
     expect(screen.getByRole('button', { name: 'Run Queue' })).toBeVisible()
+  })
+
+  it('opens a single ComfyUI server edit form from the left dock list and only updates on save', () => {
+    const state = panelProject()
+    state.comfy.endpoints = [
+      state.comfy.endpoints[0]!,
+      {
+        ...state.comfy.endpoints[0]!,
+        id: 'endpoint_remote',
+        name: 'Remote ComfyUI',
+        baseUrl: 'http://127.0.0.1:8188',
+      },
+    ]
+    projectStore.setState({
+      project: state,
+      projectLibrary: { [state.project.id]: state },
+      selectedNodeId: undefined,
+      selectedNodeIds: [],
+    } as unknown as Partial<ReturnType<typeof projectStore.getState>>)
+
+    render(<LeftPanel />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'ComfyUI Servers' }))
+    const serversPopover = screen.getByLabelText('ComfyUI Servers popover')
+    const serverList = within(serversPopover).getByLabelText('ComfyUI server list')
+
+    fireEvent.click(within(serverList).getByRole('button', { name: /edit (server|endpoint) local comfyui/i }))
+    const cancelDialog = screen.getByRole('dialog', { name: /edit comfyui server/i })
+
+    expect(within(cancelDialog).queryByLabelText('ComfyUI server list')).not.toBeInTheDocument()
+    expect(within(cancelDialog).getByDisplayValue('Local ComfyUI')).toBeVisible()
+    expect(within(cancelDialog).queryByText('Remote ComfyUI')).not.toBeInTheDocument()
+    expect(within(cancelDialog).getByRole('button', { name: /cancel/i })).toBeVisible()
+    expect(within(cancelDialog).getByRole('button', { name: /save/i })).toBeVisible()
+
+    fireEvent.change(within(cancelDialog).getByLabelText(/(server|endpoint) name/i), {
+      target: { value: 'Cancelled Local ComfyUI' },
+    })
+    fireEvent.change(within(cancelDialog).getByLabelText(/url/i), {
+      target: { value: 'http://127.0.0.1:9999' },
+    })
+    fireEvent.click(within(cancelDialog).getByRole('button', { name: /cancel/i }))
+
+    expect(projectStore.getState().project.comfy.endpoints[0]).toMatchObject({
+      name: 'Local ComfyUI',
+      baseUrl: 'http://127.0.0.1:27707',
+    })
+
+    fireEvent.click(within(serverList).getByRole('button', { name: /edit (server|endpoint) local comfyui/i }))
+    const saveDialog = screen.getByRole('dialog', { name: /edit comfyui server/i })
+    fireEvent.change(within(saveDialog).getByLabelText(/(server|endpoint) name/i), {
+      target: { value: 'Saved Local ComfyUI' },
+    })
+    fireEvent.change(within(saveDialog).getByLabelText(/url/i), {
+      target: { value: 'http://127.0.0.1:8189' },
+    })
+    expect(projectStore.getState().project.comfy.endpoints[0]).toMatchObject({
+      name: 'Local ComfyUI',
+      baseUrl: 'http://127.0.0.1:27707',
+    })
+
+    fireEvent.click(within(saveDialog).getByRole('button', { name: /save/i }))
+
+    expect(projectStore.getState().project.comfy.endpoints[0]).toMatchObject({
+      name: 'Saved Local ComfyUI',
+      baseUrl: 'http://127.0.0.1:8189',
+    })
+    expect(within(serverList).getByText('Saved Local ComfyUI')).toBeVisible()
   })
 
   it('collapses the asset list popover when the pointer leaves the assets dock', () => {
@@ -773,6 +864,41 @@ describe('LeftPanel', () => {
     })
   })
 
+  it('closes manager dialogs from the backdrop click and Escape without leaking press or context events', () => {
+    const onShellPointerDown = vi.fn()
+    const onShellMouseDown = vi.fn()
+    const onShellContextMenu = vi.fn()
+    render(
+      <div onPointerDown={onShellPointerDown} onMouseDown={onShellMouseDown} onContextMenu={onShellContextMenu}>
+        <SettingsPage onClose={() => undefined} />
+      </div>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Function Management' }))
+    expect(screen.getByRole('dialog', { name: 'Function Management' })).toBeVisible()
+
+    const visibleBackdrops = document.querySelectorAll<HTMLElement>('.modal-backdrop:not(.modal-backdrop-hidden)')
+    const backdrop = visibleBackdrops[visibleBackdrops.length - 1]!
+    fireEvent.contextMenu(backdrop, { clientX: 80, clientY: 90 })
+    expect(onShellContextMenu).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: 'Function Management' })).toBeVisible()
+
+    fireEvent.pointerDown(backdrop, { clientX: 80, clientY: 90 })
+    expect(onShellPointerDown).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: 'Function Management' })).toBeVisible()
+
+    fireEvent.mouseDown(backdrop, { clientX: 80, clientY: 90 })
+    expect(onShellMouseDown).not.toHaveBeenCalled()
+
+    fireEvent.click(backdrop, { clientX: 80, clientY: 90 })
+    expect(screen.queryByRole('dialog', { name: 'Function Management' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Function Management' }))
+    expect(screen.getByRole('dialog', { name: 'Function Management' })).toBeVisible()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'Function Management' })).not.toBeInTheDocument()
+  })
+
   it('limits request function media outputs to binary response parsing', () => {
     render(<SettingsPage onClose={() => undefined} />)
 
@@ -1152,18 +1278,21 @@ describe('LeftPanel', () => {
     expect(within(serverList).getByText(/queue 1/)).toBeVisible()
   })
 
-  it('edits ComfyUI servers from settings management', () => {
-    render(<SettingsPage onClose={() => undefined} />)
+  it('does not save ComfyUI server field edits until the single edit form is saved', () => {
+    render(<LeftPanel />)
 
-    fireEvent.click(screen.getByRole('button', { name: 'ComfyUI Server Management' }))
-    const dialog = screen.getByRole('dialog', { name: 'ComfyUI Server Management' })
+    fireEvent.click(screen.getByRole('button', { name: 'ComfyUI Servers' }))
+    const serverList = screen.getByLabelText('ComfyUI server list')
+    fireEvent.click(within(serverList).getByRole('button', { name: /edit (server|endpoint) local comfyui/i }))
+    const dialog = screen.getByRole('dialog', { name: /edit comfyui server/i })
 
-    const endpointUrl = within(dialog).getByLabelText('Endpoint URL Local ComfyUI')
+    const endpointUrl = within(dialog).getByLabelText(/url/i)
     fireEvent.change(endpointUrl, {
       target: { value: 'http://127.0.0.1:8188' },
     })
     expect(projectStore.getState().project.comfy.endpoints[0]?.baseUrl).toBe('http://127.0.0.1:27707')
-    fireEvent.blur(endpointUrl)
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /save/i }))
 
     expect(projectStore.getState().project.comfy.endpoints[0]).toMatchObject({
       baseUrl: 'http://127.0.0.1:8188',
@@ -1214,40 +1343,48 @@ describe('LeftPanel', () => {
     ])
   })
 
-  it('chooses supported workflow functions when editing or adding ComfyUI servers', () => {
-    render(<SettingsPage onClose={() => undefined} />)
+  it('saves supported workflow function choices from single ComfyUI server forms', () => {
+    render(<LeftPanel />)
 
-    fireEvent.click(screen.getByRole('button', { name: 'ComfyUI Server Management' }))
-    const dialog = screen.getByRole('dialog', { name: 'ComfyUI Server Management' })
+    fireEvent.click(screen.getByRole('button', { name: 'ComfyUI Servers' }))
+    const serverList = screen.getByLabelText('ComfyUI server list')
+    fireEvent.click(within(serverList).getByRole('button', { name: /edit (server|endpoint) local comfyui/i }))
+    const editDialog = screen.getByRole('dialog', { name: /edit comfyui server/i })
 
-    const allLocal = within(dialog).getByLabelText('Endpoint supports all functions Local ComfyUI')
-    const localFunction = within(dialog).getByLabelText('Endpoint supports Flux Render Local ComfyUI')
+    const allLocal = within(editDialog).getByLabelText(/supports all functions/i)
+    const localFunction = within(editDialog).getByLabelText(/supports flux render/i)
     expect(allLocal).toBeChecked()
     expect(localFunction).toBeChecked()
     expect(localFunction).toBeDisabled()
 
     fireEvent.click(allLocal)
-    expect(projectStore.getState().project.comfy.endpoints[0]?.capabilities?.supportedFunctions).toEqual(['fn_render'])
     expect(localFunction).not.toBeDisabled()
 
     fireEvent.click(localFunction)
+    expect(projectStore.getState().project.comfy.endpoints[0]?.capabilities?.supportedFunctions).toBeUndefined()
+    fireEvent.click(within(editDialog).getByRole('button', { name: /save/i }))
     expect(projectStore.getState().project.comfy.endpoints[0]?.capabilities?.supportedFunctions).toEqual([])
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Server' }))
-    const newEndpointFunction = within(dialog).getByLabelText('Endpoint supports Flux Render ComfyUI 2')
-    expect(within(dialog).getByLabelText('Endpoint supports all functions ComfyUI 2')).not.toBeChecked()
+    fireEvent.click(within(screen.getByLabelText('ComfyUI Servers popover')).getByRole('button', { name: /new|新建/i }))
+    const createDialog = screen.getByRole('dialog', { name: /new comfyui server|create comfyui server/i })
+    const newEndpointFunction = within(createDialog).getByLabelText(/supports flux render/i)
+    expect(within(createDialog).getByLabelText(/supports all functions/i)).not.toBeChecked()
     expect(newEndpointFunction).toBeChecked()
+    expect(projectStore.getState().project.comfy.endpoints).toHaveLength(1)
+    fireEvent.click(within(createDialog).getByRole('button', { name: /save/i }))
     expect(projectStore.getState().project.comfy.endpoints[1]?.capabilities?.supportedFunctions).toEqual(['fn_render'])
   })
 
-  it('edits per-server custom headers in ComfyUI server management', () => {
-    render(<SettingsPage onClose={() => undefined} />)
+  it('saves per-server custom headers from a single ComfyUI server edit form', () => {
+    render(<LeftPanel />)
 
-    fireEvent.click(screen.getByRole('button', { name: 'ComfyUI Server Management' }))
-    const dialog = screen.getByRole('dialog', { name: 'ComfyUI Server Management' })
+    fireEvent.click(screen.getByRole('button', { name: 'ComfyUI Servers' }))
+    const serverList = screen.getByLabelText('ComfyUI server list')
+    fireEvent.click(within(serverList).getByRole('button', { name: /edit (server|endpoint) local comfyui/i }))
+    const dialog = screen.getByRole('dialog', { name: /edit comfyui server/i })
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Header' }))
-    const headerName = within(dialog).getByLabelText('Header name Local ComfyUI 1')
+    const headerName = within(dialog).getByLabelText(/header name/i)
     headerName.focus()
     fireEvent.compositionStart(headerName)
     fireEvent.change(headerName, {
@@ -1258,16 +1395,16 @@ describe('LeftPanel', () => {
       target: { value: 'X-Workspace' },
     })
     expect(document.activeElement).toBe(headerName)
-    expect(projectStore.getState().project.comfy.endpoints[0]?.customHeaders).toEqual({ '': '' })
+    expect(projectStore.getState().project.comfy.endpoints[0]?.customHeaders).toBeUndefined()
     fireEvent.blur(headerName)
-    const headerValue = within(dialog).getByLabelText('Header value Local ComfyUI 1')
+    const headerValue = within(dialog).getByLabelText(/header value/i)
     fireEvent.change(headerValue, {
       target: { value: 'infinity' },
     })
-    expect(projectStore.getState().project.comfy.endpoints[0]?.customHeaders).toEqual({
-      'X-Workspace': '',
-    })
     fireEvent.blur(headerValue)
+    expect(projectStore.getState().project.comfy.endpoints[0]?.customHeaders).toBeUndefined()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /save/i }))
 
     expect(projectStore.getState().project.comfy.endpoints[0]?.customHeaders).toEqual({
       'X-Workspace': 'infinity',
@@ -1406,7 +1543,7 @@ describe('LeftPanel', () => {
     expect(screen.queryByRole('heading', { name: 'Final Workflow' })).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Run queue list')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Run Queue' }))
-    expect(screen.getByRole('heading', { name: 'Run Queue' })).toBeVisible()
+    expect(screen.getByRole('heading', { name: 'Runs' })).toBeVisible()
     const queue = screen.getByLabelText('Run queue list')
     expect(within(queue).getByText('task_audit')).toBeVisible()
     expect(within(queue).getByText('Local ComfyUI')).toBeVisible()
@@ -1416,7 +1553,7 @@ describe('LeftPanel', () => {
     const state = panelProject()
     state.tasks.task_running = {
       ...state.tasks.task_running,
-      status: 'succeeded',
+      status: 'running',
       inputValuesSnapshot: {
         prompt: {
           key: 'prompt',
@@ -1455,12 +1592,13 @@ describe('LeftPanel', () => {
     fireEvent.click(taskToggle)
 
     expect(taskToggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('heading', { name: 'Active Runs' })).toBeVisible()
     const taskList = screen.getByLabelText('Project task list')
     const taskCard = within(taskList).getByRole('button', { name: /Flux Render/ })
     expect(within(taskCard).getByText('Flux Render')).toBeVisible()
     expect(within(taskCard).getByText('Local ComfyUI')).toBeVisible()
     expect(within(taskCard).getByText('image')).toBeVisible()
-    expect(within(taskCard).getByText('succeeded')).toBeVisible()
+    expect(within(taskCard).getByText('running')).toBeVisible()
     expect(screen.queryByRole('heading', { name: 'Run Details' })).not.toBeInTheDocument()
 
     fireEvent.click(taskCard)
@@ -1617,7 +1755,7 @@ describe('LeftPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Run Queue' }))
     const queue = screen.getByLabelText('Run queue list')
-    expect(within(queue).getByText('Run 1/2')).toBeVisible()
+    expect(within(queue).getByText(/Run 1\/2/)).toBeVisible()
     fireEvent.click(within(queue).getByRole('button', { name: 'Locate Run 1/2 result node' }))
     expect(projectStore.getState().selectedNodeId).toBe('node_result_1')
     expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'infinity-focus-node' }))

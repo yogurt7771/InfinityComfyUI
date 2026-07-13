@@ -76,6 +76,7 @@ describe('project store actions', () => {
         },
       },
     }))
+    return functionId
   }
 
   const exposePromptInput = (
@@ -1961,7 +1962,7 @@ describe('project store actions', () => {
                 id: 'endpoint_local',
                 name: 'Selected Local',
                 baseUrl: 'http://127.0.0.1:27707',
-                capabilities: { supportedFunctions: ['fn_other'] },
+                capabilities: { supportedFunctions: ['fn_other', temporaryComfyFunction.id] },
               },
             ],
           },
@@ -2628,6 +2629,61 @@ describe('project store actions', () => {
     expect(slice.getState().project.canvas.nodes.some((node) => node.id === 'node_group_1')).toBe(true)
   })
 
+  it('sizes a group from measured selected node bounds when available', () => {
+    const ids = ['res_1', 'res_2', 'group_1']
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now: () => '2026-05-09T00:00:00.000Z',
+      randomInt: () => 1,
+    })
+
+    slice.getState().addTextResourceAtPosition('Prompt 1', 'first', { x: 100, y: 120 })
+    slice.getState().addTextResourceAtPosition('Prompt 2', 'second', { x: 480, y: 360 })
+    slice.getState().selectNodes(['node_res_1', 'node_res_2'])
+
+    const groupNodeId = slice.getState().groupSelectedNodes({
+      nodeSizesById: {
+        node_res_1: { width: 340, height: 260 },
+        node_res_2: { width: 420, height: 310 },
+      },
+    })
+
+    expect(groupNodeId).toBe('node_group_1')
+    const groupNode = slice.getState().project.canvas.nodes.find((node) => node.id === groupNodeId)
+    expect(groupNode).toMatchObject({
+      position: { x: 52, y: 72 },
+      data: {
+        size: { width: 896, height: 646 },
+      },
+    })
+  })
+
+  it('applies a group drag delta to child nodes in the same position update', () => {
+    const ids = ['res_1', 'res_2', 'group_1']
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now: () => '2026-05-09T00:00:00.000Z',
+      randomInt: () => 1,
+    })
+
+    slice.getState().addTextResourceAtPosition('Prompt 1', 'first', { x: 100, y: 120 })
+    slice.getState().addTextResourceAtPosition('Prompt 2', 'second', { x: 320, y: 120 })
+    slice.getState().selectNodes(['node_res_1', 'node_res_2'])
+    const groupNodeId = slice.getState().groupSelectedNodes()
+    expect(groupNodeId).toBe('node_group_1')
+
+    const before = new Map(slice.getState().project.canvas.nodes.map((node) => [node.id, node.position]))
+    const groupStart = before.get('node_group_1')
+    expect(groupStart).toBeDefined()
+
+    slice.getState().updateNodePosition('node_group_1', { x: groupStart!.x + 48, y: groupStart!.y + 32 })
+
+    const after = new Map(slice.getState().project.canvas.nodes.map((node) => [node.id, node.position]))
+    expect(after.get('node_group_1')).toEqual({ x: groupStart!.x + 48, y: groupStart!.y + 32 })
+    expect(after.get('node_res_1')).toEqual({ x: before.get('node_res_1')!.x + 48, y: before.get('node_res_1')!.y + 32 })
+    expect(after.get('node_res_2')).toEqual({ x: before.get('node_res_2')!.x + 48, y: before.get('node_res_2')!.y + 32 })
+  })
+
   it('saves a selected subgraph as a template and creates grouped template instances', () => {
     const ids = ['res_1', 'res_2', 'template_1', 'res_3', 'res_4', 'group_1']
     const slice = createProjectSlice({
@@ -2681,6 +2737,325 @@ describe('project store actions', () => {
         label: 'Create template instance',
         transactionType: 'template',
       }),
+    )
+  })
+
+  it('preserves assets, internal edges, and run context when saving and instantiating a generated subgraph template', () => {
+    const ids = [
+      'template_render',
+      'res_prompt_copy',
+      'res_ref_copy',
+      'asset_ref_copy',
+      'res_output_copy',
+      'asset_output_copy',
+      'fn_copy',
+      'result_copy',
+      'group_copy',
+      'task_copy',
+      'fallback',
+    ]
+    const now = () => '2026-05-09T00:00:00.000Z'
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now,
+      randomInt: () => 1,
+    })
+
+    slice.setState((state) => ({
+      project: {
+        ...state.project,
+        functions: {
+          fn_render: {
+            id: 'fn_render',
+            name: 'Render',
+            category: 'Render',
+            workflow: {
+              format: 'comfyui_api_json',
+              rawJson: {
+                '6': { class_type: 'CLIPTextEncode', inputs: { text: 'warm interior' } },
+                '20': { class_type: 'SaveImage', inputs: { filename_prefix: 'render' } },
+              },
+            },
+            inputs: [
+              {
+                key: 'prompt',
+                label: 'Prompt',
+                type: 'text',
+                required: true,
+                bind: { nodeId: '6', nodeTitle: 'Prompt', path: 'inputs.text' },
+                upload: { strategy: 'none' },
+              },
+              {
+                key: 'reference',
+                label: 'Reference',
+                type: 'image',
+                required: false,
+                bind: { nodeId: '10', nodeTitle: 'Load Image', path: 'inputs.image' },
+                upload: { strategy: 'comfy_upload' },
+              },
+            ],
+            outputs: [
+              {
+                key: 'image',
+                label: 'Image',
+                type: 'image',
+                bind: { nodeId: '20', nodeTitle: 'Save Image' },
+                extract: { source: 'history' },
+              },
+            ],
+            createdAt: now(),
+            updatedAt: now(),
+          },
+        },
+        canvas: {
+          ...state.project.canvas,
+          nodes: [
+            { id: 'node_prompt', type: 'resource', position: { x: 100, y: 120 }, data: { resourceId: 'res_prompt', title: 'Prompt' } },
+            { id: 'node_ref', type: 'resource', position: { x: 100, y: 320 }, data: { resourceId: 'res_ref', title: 'Reference' } },
+            {
+              id: 'node_render',
+              type: 'function',
+              position: { x: 420, y: 180 },
+              data: {
+                functionId: 'fn_render',
+                title: 'Render',
+                inputValues: {
+                  prompt: { resourceId: 'res_prompt', type: 'text' },
+                  reference: { resourceId: 'res_ref', type: 'image' },
+                },
+              },
+            },
+            {
+              id: 'node_result',
+              type: 'result_group',
+              position: { x: 760, y: 180 },
+              data: {
+                sourceFunctionNodeId: 'node_render',
+                functionId: 'fn_render',
+                taskId: 'task_render',
+                resources: [{ resourceId: 'res_output', type: 'image' }],
+                status: 'succeeded',
+              },
+            },
+            {
+              id: 'node_group',
+              type: 'group',
+              position: { x: 60, y: 80 },
+              data: {
+                title: 'Reusable Render',
+                childNodeIds: ['node_prompt', 'node_ref', 'node_render', 'node_result'],
+                size: { width: 1040, height: 520 },
+              },
+            },
+          ],
+          edges: [
+            {
+              id: 'edge_prompt_render',
+              source: { nodeId: 'node_prompt', handleId: 'resource:res_prompt', resourceId: 'res_prompt' },
+              target: { nodeId: 'node_render', inputKey: 'prompt' },
+              type: 'resource_to_input',
+            },
+            {
+              id: 'edge_ref_render',
+              source: { nodeId: 'node_ref', handleId: 'resource:res_ref', resourceId: 'res_ref' },
+              target: { nodeId: 'node_render', inputKey: 'reference' },
+              type: 'resource_to_input',
+            },
+          ],
+        },
+        resources: {
+          res_prompt: {
+            id: 'res_prompt',
+            type: 'text',
+            name: 'Prompt',
+            value: 'warm interior',
+            source: { kind: 'manual_input' },
+            metadata: { createdAt: now() },
+          },
+          res_ref: {
+            id: 'res_ref',
+            type: 'image',
+            name: 'Reference',
+            value: {
+              assetId: 'asset_ref',
+              url: 'data:image/png;base64,cmVm',
+              filename: 'reference.png',
+              mimeType: 'image/png',
+              sizeBytes: 3,
+            },
+            source: { kind: 'user_upload' },
+            metadata: { createdAt: now() },
+          },
+          res_output: {
+            id: 'res_output',
+            type: 'image',
+            name: 'Render Output',
+            value: {
+              assetId: 'asset_output',
+              url: 'data:image/png;base64,b3V0',
+              filename: 'render.png',
+              mimeType: 'image/png',
+              sizeBytes: 3,
+            },
+            source: {
+              kind: 'function_output',
+              functionNodeId: 'node_render',
+              resultGroupNodeId: 'node_result',
+              taskId: 'task_render',
+              outputKey: 'image',
+            },
+            metadata: { createdAt: now(), workflowFunctionId: 'fn_render' },
+          },
+        },
+        assets: {
+          asset_ref: {
+            id: 'asset_ref',
+            name: 'reference.png',
+            mimeType: 'image/png',
+            sizeBytes: 3,
+            blobUrl: 'data:image/png;base64,cmVm',
+            createdAt: now(),
+          },
+          asset_output: {
+            id: 'asset_output',
+            name: 'render.png',
+            mimeType: 'image/png',
+            sizeBytes: 3,
+            blobUrl: 'data:image/png;base64,b3V0',
+            createdAt: now(),
+          },
+        },
+        tasks: {
+          task_render: {
+            id: 'task_render',
+            functionNodeId: 'node_render',
+            functionId: 'fn_render',
+            runIndex: 1,
+            runTotal: 1,
+            status: 'succeeded',
+            inputRefs: {
+              prompt: { resourceId: 'res_prompt', type: 'text' },
+              reference: { resourceId: 'res_ref', type: 'image' },
+            },
+            inputSnapshot: {
+              res_prompt: {
+                id: 'res_prompt',
+                type: 'text',
+                name: 'Prompt',
+                value: 'warm interior',
+                source: { kind: 'manual_input' },
+                metadata: { createdAt: now() },
+              },
+            },
+            inputValuesSnapshot: {
+              prompt: {
+                key: 'prompt',
+                label: 'Prompt',
+                type: 'text',
+                required: true,
+                source: 'resource',
+                resourceId: 'res_prompt',
+                resourceName: 'Prompt',
+                value: 'warm interior',
+              },
+            },
+            paramsSnapshot: { runCount: 1 },
+            functionSnapshot: {
+              id: 'fn_render',
+              name: 'Render',
+              category: 'Render',
+              workflow: { format: 'comfyui_api_json', rawJson: {} },
+              inputs: [],
+              outputs: [],
+              createdAt: now(),
+              updatedAt: now(),
+            },
+            workflowTemplateSnapshot: {
+              '6': { class_type: 'CLIPTextEncode', inputs: { text: 'warm interior' } },
+              '20': { class_type: 'SaveImage', inputs: { filename_prefix: 'render' } },
+            },
+            compiledWorkflowSnapshot: {
+              '6': { class_type: 'CLIPTextEncode', inputs: { text: 'warm interior' } },
+              '20': { class_type: 'SaveImage', inputs: { filename_prefix: 'render' } },
+            },
+            seedPatchLog: [{ nodeId: '3', path: 'inputs.seed', oldValue: 0, newValue: 42, patchedAt: now() }],
+            outputRefs: { image: [{ resourceId: 'res_output', type: 'image' }] },
+            createdAt: now(),
+            startedAt: now(),
+            updatedAt: now(),
+            completedAt: now(),
+          },
+        },
+      },
+      selectedNodeIds: ['node_group'],
+      selectedNodeId: 'node_group',
+    }))
+
+    const templateId = slice.getState().saveTemplateFromSelection('Reusable Render')
+    expect(templateId).toBe('template_render')
+    const template = slice.getState().project.templates?.template_render
+    expect(template).toBeDefined()
+    expect(template?.nodes.map((node) => node.id).sort()).toEqual(['node_prompt', 'node_ref', 'node_render', 'node_result'])
+    expect(template?.edges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'edge_prompt_render' }),
+        expect.objectContaining({ id: 'edge_ref_render' }),
+      ]),
+    )
+    expect(template?.resources).toEqual(expect.objectContaining({ res_prompt: expect.any(Object), res_ref: expect.any(Object), res_output: expect.any(Object) }))
+    expect(template?.assets).toEqual(expect.objectContaining({ asset_ref: expect.any(Object), asset_output: expect.any(Object) }))
+    const templateRecord = template as unknown as {
+      functions?: Record<string, unknown>
+      tasks?: Record<string, unknown>
+    }
+    expect(templateRecord.functions).toEqual(expect.objectContaining({ fn_render: expect.any(Object) }))
+    expect(templateRecord.tasks).toEqual(expect.objectContaining({ task_render: expect.any(Object) }))
+
+    const groupNodeId = slice.getState().instantiateTemplate('template_render', { x: 1400, y: 900 })
+    expect(groupNodeId).toBeDefined()
+    const state = slice.getState().project
+    const copiedOutput = Object.values(state.resources).find(
+      (resource) =>
+        resource.id !== 'res_output' &&
+        typeof resource.value === 'object' &&
+        resource.value !== null &&
+        'filename' in resource.value &&
+        resource.value.filename === 'render.png',
+    )
+    expect(copiedOutput).toBeDefined()
+    expect(copiedOutput?.source).toMatchObject({
+      kind: 'function_output',
+      outputKey: 'image',
+    })
+    expect(copiedOutput?.source.taskId).toEqual(expect.any(String))
+    expect(state.tasks[String(copiedOutput?.source.taskId)]).toMatchObject({
+      status: 'succeeded',
+      functionId: 'fn_render',
+      inputRefs: {
+        prompt: expect.objectContaining({ type: 'text' }),
+        reference: expect.objectContaining({ type: 'image' }),
+      },
+      outputRefs: { image: [expect.objectContaining({ resourceId: copiedOutput?.id, type: 'image' })] },
+      compiledWorkflowSnapshot: expect.objectContaining({
+        '6': expect.objectContaining({ class_type: 'CLIPTextEncode' }),
+      }),
+    })
+    const copiedMedia = copiedOutput?.value
+    const copiedAssetId =
+      copiedMedia && typeof copiedMedia === 'object' && 'assetId' in copiedMedia ? String(copiedMedia.assetId) : undefined
+    expect(copiedAssetId).toBeDefined()
+    expect(copiedAssetId).not.toBe('asset_output')
+    expect(state.assets[String(copiedAssetId)]).toMatchObject({
+      name: 'render.png',
+      blobUrl: 'data:image/png;base64,b3V0',
+    })
+    expect(state.canvas.edges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: expect.objectContaining({ resourceId: expect.not.stringMatching(/^res_(prompt|ref)$/) }),
+          target: expect.objectContaining({ inputKey: expect.stringMatching(/prompt|reference/) }),
+        }),
+      ]),
     )
   })
 
@@ -3249,6 +3624,143 @@ describe('project store actions', () => {
     })
   })
 
+  it('keeps a second ComfyUI function command queued when the only endpoint is busy', async () => {
+    let generatedId = 0
+    const queuedPromptIds: string[] = []
+    const historyResolvers: Record<string, (history: unknown) => void> = {}
+    const viewFile = vi.fn(async (file: { filename: string }) => new Blob([`${file.filename}-bytes`], { type: 'image/png' }))
+    const slice = createProjectSlice({
+      idFactory: () => `generated_${(generatedId += 1)}`,
+      now: () => '2026-05-08T09:00:00.000Z',
+      randomInt: () => 42,
+      createComfyClient: () => ({
+        queuePrompt: async () => {
+          const promptId = `prompt_${queuedPromptIds.length + 1}`
+          queuedPromptIds.push(promptId)
+          return { prompt_id: promptId, number: queuedPromptIds.length }
+        },
+        getHistory: async (promptId) =>
+          new Promise<unknown>((resolve) => {
+            historyResolvers[promptId] = resolve
+          }),
+        viewFile,
+      }),
+      comfyRunOptions: {
+        maxPollAttempts: 1,
+        pollIntervalMs: 1,
+      },
+    })
+
+    const imageHistory = (promptId: string, filename: string) => ({
+      [promptId]: {
+        outputs: {
+          '20': {
+            images: [{ filename, subfolder: 'renders', type: 'output' }],
+          },
+        },
+      },
+    })
+
+    slice.getState().addTextResource('Prompt', 'warm kitchen')
+    const functionId = addTestWorkflowFunction(slice)
+    const promptResource = Object.values(slice.getState().project.resources).find(
+      (resource) => resource.type === 'text' && resource.name === 'Prompt' && resource.value === 'warm kitchen',
+    )
+    expect(promptResource).toBeDefined()
+    slice.setState((state) => ({
+      project: {
+        ...state.project,
+        comfy: {
+          ...state.project.comfy,
+          endpoints: [
+            {
+              ...state.project.comfy.endpoints[0]!,
+              id: 'endpoint_local',
+              name: 'Local',
+              enabled: true,
+              maxConcurrentJobs: 1,
+              capabilities: { supportedFunctions: [functionId] },
+            },
+          ],
+        },
+        functions: {
+          ...state.project.functions,
+          [functionId]: {
+            ...state.project.functions[functionId]!,
+            outputs: [
+              {
+                key: 'image',
+                label: 'Image',
+                type: 'image',
+                bind: { nodeTitle: 'Result_Image' },
+                extract: { source: 'history', multiple: true },
+              },
+            ],
+          },
+        },
+      },
+    }))
+
+    const textInput = slice.getState().project.functions[functionId]!.inputs.find((input) => input.type === 'text')
+    expect(textInput).toBeDefined()
+    const inputRefs = { [textInput!.key]: { resourceId: promptResource!.id, type: 'text' as const } }
+    const firstRun = slice.getState().runFunctionAtPosition(functionId, inputRefs, { x: 360, y: 0 }, 1)
+    const secondRun = slice.getState().runFunctionAtPosition(functionId, inputRefs, { x: 360, y: 160 }, 1)
+
+    const tasksForFunction = (state: ReturnType<ReturnType<typeof createProjectSlice>['getState']>) =>
+      Object.values(state.project.tasks).filter((task) => task.functionId === functionId)
+    const taskResourceNode = (state: ReturnType<ReturnType<typeof createProjectSlice>['getState']>, taskId: string) =>
+      state.project.canvas.nodes.find((node) => node.type === 'resource' && node.data.taskId === taskId)
+
+    await waitForState(slice, (state) => queuedPromptIds.length === 1 && tasksForFunction(state).some((task) => task.status === 'running'))
+
+    let state = slice.getState()
+    let tasks = tasksForFunction(state)
+    const runningTask = tasks.find((task) => task.status === 'running')
+    const queuedTask = tasks.find((task) => task.status === 'queued')
+    expect(queuedPromptIds).toEqual(['prompt_1'])
+    expect(runningTask).toMatchObject({ status: 'running', endpointId: 'endpoint_local' })
+    expect(queuedTask).toMatchObject({ status: 'queued', endpointId: 'endpoint_local' })
+    expect(taskResourceNode(state, runningTask!.id)?.data).toMatchObject({
+      taskId: runningTask!.id,
+      status: 'running',
+      endpointId: 'endpoint_local',
+    })
+    expect(taskResourceNode(state, queuedTask!.id)?.data).toMatchObject({
+      taskId: queuedTask!.id,
+      status: 'queued',
+      endpointId: 'endpoint_local',
+    })
+
+    historyResolvers.prompt_1?.(imageHistory('prompt_1', 'first.png'))
+    await waitForState(
+      slice,
+      (current) => current.project.tasks[runningTask!.id]?.status === 'succeeded' && current.project.tasks[queuedTask!.id]?.status === 'running',
+    )
+    state = slice.getState()
+    expect(queuedPromptIds).toEqual(['prompt_1', 'prompt_2'])
+    expect(state.project.tasks[runningTask!.id]?.status).toBe('succeeded')
+    expect(state.project.tasks[queuedTask!.id]).toMatchObject({ status: 'running', endpointId: 'endpoint_local' })
+
+    historyResolvers.prompt_2?.(imageHistory('prompt_2', 'second.png'))
+    await Promise.all([firstRun, secondRun])
+
+    state = slice.getState()
+    const completedQueuedTask = state.project.tasks[queuedTask!.id]
+    const completedQueuedImage = completedQueuedTask?.outputRefs.image?.[0]
+    expect(completedQueuedTask).toMatchObject({
+      status: 'succeeded',
+      outputRefs: { image: [expect.objectContaining({ type: 'image' })] },
+    })
+    expect(completedQueuedImage).toBeDefined()
+    expect(taskResourceNode(state, queuedTask!.id)?.data).toMatchObject({
+      taskId: queuedTask!.id,
+      resourceId: completedQueuedImage!.resourceId,
+      status: 'succeeded',
+    })
+    expect(viewFile).toHaveBeenCalledTimes(2)
+  })
+
   it('updates the initial Comfy result node instead of appending a second node when outputs arrive', async () => {
     const ids = ['res_1', 'fn_1', 'node_fn_1', 'task_1', 'node_result_1', 'asset_1', 'res_img_1']
     let resolveHistory: (history: unknown) => void = () => undefined
@@ -3768,6 +4280,351 @@ describe('project store actions', () => {
       status: 'failed',
       error: { code: 'endpoint_unavailable', message: 'No eligible ComfyUI endpoint' },
     })
+  })
+
+  it('fails a queued ComfyUI function command when endpoint capabilities no longer support it', async () => {
+    const ids = ['res_prompt', 'fn_1', 'task_first', 'res_first', 'task_second', 'res_second', 'asset_first']
+    const queuedPromptIds: string[] = []
+    const historyResolvers: Record<string, (history: unknown) => void> = {}
+    const createComfyClient = vi.fn(() => ({
+      queuePrompt: async () => {
+        const promptId = `prompt_${queuedPromptIds.length + 1}`
+        queuedPromptIds.push(promptId)
+        return { prompt_id: promptId, number: queuedPromptIds.length }
+      },
+      getHistory: async (promptId: string) =>
+        new Promise<unknown>((resolve) => {
+          historyResolvers[promptId] = resolve
+        }),
+      viewFile: async (file: { filename: string }) => new Blob([`${file.filename}-bytes`], { type: 'image/png' }),
+    }))
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now: () => '2026-05-08T09:00:00.000Z',
+      randomInt: () => 42,
+      createComfyClient,
+      comfyRunOptions: {
+        maxPollAttempts: 1,
+        pollIntervalMs: 1,
+      },
+    })
+
+    slice.getState().addTextResource('Prompt', 'warm kitchen')
+    const functionId = addTestWorkflowFunction(slice)
+    const promptResource = Object.values(slice.getState().project.resources).find(
+      (resource) => resource.type === 'text' && resource.name === 'Prompt',
+    )
+    expect(promptResource).toBeDefined()
+    slice.setState((state) => ({
+      project: {
+        ...state.project,
+        comfy: {
+          ...state.project.comfy,
+          endpoints: [
+            {
+              ...state.project.comfy.endpoints[0]!,
+              id: 'endpoint_local',
+              name: 'Local',
+              enabled: true,
+              maxConcurrentJobs: 1,
+              capabilities: { supportedFunctions: [functionId] },
+            },
+          ],
+        },
+        functions: {
+          ...state.project.functions,
+          [functionId]: {
+            ...state.project.functions[functionId]!,
+            outputs: [
+              {
+                key: 'image',
+                label: 'Image',
+                type: 'image',
+                bind: { nodeTitle: 'Result_Image' },
+                extract: { source: 'history', multiple: true },
+              },
+            ],
+          },
+        },
+      },
+    }))
+
+    const textInput = slice.getState().project.functions[functionId]!.inputs.find((input) => input.type === 'text')
+    expect(textInput).toBeDefined()
+    const inputRefs = { [textInput!.key]: { resourceId: promptResource!.id, type: 'text' as const } }
+    const firstRun = slice.getState().runFunctionAtPosition(functionId, inputRefs, { x: 360, y: 0 }, 1)
+    const secondRun = slice.getState().runFunctionAtPosition(functionId, inputRefs, { x: 360, y: 160 }, 1)
+
+    const tasksForFunction = (state: ReturnType<ReturnType<typeof createProjectSlice>['getState']>) =>
+      Object.values(state.project.tasks).filter((task) => task.functionId === functionId)
+    const resourceNodeForTask = (state: ReturnType<ReturnType<typeof createProjectSlice>['getState']>, taskId: string) =>
+      state.project.canvas.nodes.find((node) => node.type === 'resource' && node.data.taskId === taskId)
+
+    await waitForState(slice, (state) => queuedPromptIds.length === 1 && tasksForFunction(state).some((task) => task.status === 'running'))
+
+    let state = slice.getState()
+    let tasks = tasksForFunction(state)
+    const runningTask = tasks.find((task) => task.status === 'running')
+    const queuedTask = tasks.find((task) => task.status === 'queued')
+    expect(runningTask).toMatchObject({ endpointId: 'endpoint_local' })
+    expect(queuedTask).toMatchObject({ endpointId: 'endpoint_local' })
+    expect(resourceNodeForTask(state, queuedTask!.id)?.data).toMatchObject({
+      status: 'queued',
+      endpointId: 'endpoint_local',
+    })
+
+    slice.getState().updateEndpoint('endpoint_local', { capabilities: { supportedFunctions: [] } })
+
+    await waitForState(slice, (current) => tasksForFunction(current).some((task) => task.status === 'failed'))
+    state = slice.getState()
+    tasks = tasksForFunction(state)
+    const failedTask = tasks.find((task) => task.status === 'failed')
+    expect(queuedPromptIds).toEqual(['prompt_1'])
+    expect(createComfyClient).toHaveBeenCalledTimes(1)
+    expect(failedTask).toMatchObject({
+      id: queuedTask!.id,
+      endpointId: 'endpoint_local',
+      error: { code: 'endpoint_unavailable', message: 'No eligible ComfyUI endpoint' },
+    })
+    expect(resourceNodeForTask(state, queuedTask!.id)?.data).toMatchObject({
+      status: 'failed',
+      endpointId: 'endpoint_local',
+      error: { code: 'endpoint_unavailable', message: 'No eligible ComfyUI endpoint' },
+    })
+
+    historyResolvers.prompt_1?.({
+      prompt_1: {
+        outputs: {
+          '20': {
+            images: [{ filename: 'first.png', subfolder: 'renders', type: 'output' }],
+          },
+        },
+      },
+    })
+    await Promise.all([firstRun, secondRun])
+  })
+
+  it('fails a temporary ComfyUI draft instead of falling back from an ineligible selected endpoint', async () => {
+    const ids = ['task_draft', 'res_draft']
+    const queuedEndpointIds: string[] = []
+    const createComfyClient = vi.fn((endpoint: { id: string }) => {
+      queuedEndpointIds.push(endpoint.id)
+      return {
+        queuePrompt: async () => ({ prompt_id: 'prompt_draft', number: 1 }),
+        getHistory: async () => ({
+          prompt_draft: {
+            outputs: {
+              '9': {
+                images: [{ filename: 'draft.png', subfolder: '', type: 'output' }],
+              },
+            },
+          },
+        }),
+        viewFile: async () => new Blob(['draft-bytes'], { type: 'image/png' }),
+      }
+    })
+    const now = () => '2026-05-08T09:00:00.000Z'
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now,
+      randomInt: () => 7,
+      createComfyClient,
+      comfyRunOptions: { maxPollAttempts: 1, pollIntervalMs: 1 },
+    })
+    const temporaryComfyFunction: GenerationFunction = {
+      id: 'temp_comfy_draft',
+      name: 'Temporary ComfyUI Draft',
+      description: 'Temporary workflow',
+      category: 'ComfyUI',
+      workflow: {
+        format: 'comfyui_api_json',
+        rawJson: {
+          '9': {
+            class_type: 'SaveImage',
+            _meta: { title: 'Save Image' },
+            inputs: { filename_prefix: 'result' },
+          },
+        },
+        editor: {
+          kind: 'comfyui_embedded',
+          endpointId: 'endpoint_selected',
+          baseUrl: 'http://127.0.0.1:8188',
+          savedAt: now(),
+        },
+      },
+      inputs: [],
+      outputs: [
+        {
+          key: 'image',
+          label: 'Image',
+          type: 'image',
+          bind: { nodeId: '9', nodeTitle: 'Save Image' },
+          extract: { source: 'history', multiple: true },
+        },
+      ],
+      runtimeDefaults: { runCount: 1, seedPolicy: { mode: 'randomize_all_before_submit' } },
+      createdAt: now(),
+      updatedAt: now(),
+    }
+
+    slice.setState((state) => ({
+      project: {
+        ...state.project,
+        comfy: {
+          ...state.project.comfy,
+          endpoints: [
+            {
+              ...state.project.comfy.endpoints[0]!,
+              id: 'endpoint_selected',
+              name: 'Selected Disabled',
+              enabled: false,
+            },
+            {
+              ...state.project.comfy.endpoints[0]!,
+              id: 'endpoint_fallback',
+              name: 'Fallback',
+              enabled: true,
+              health: { status: 'online' },
+            },
+          ],
+        },
+      },
+    }))
+
+    await slice.getState().runTemporaryFunctionAtPosition(temporaryComfyFunction, {}, { x: 100, y: 100 }, 1)
+
+    const task = Object.values(slice.getState().project.tasks).find((item) => item.functionId === temporaryComfyFunction.id)
+    const resource = Object.values(slice.getState().project.resources).find(
+      (item) => item.metadata?.workflowFunctionId === temporaryComfyFunction.id,
+    )
+    expect(task).toMatchObject({
+      status: 'failed',
+      error: { code: 'endpoint_unavailable', message: 'No eligible ComfyUI endpoint' },
+    })
+    expect(resource).toMatchObject({
+      source: { taskId: task!.id },
+      metadata: { endpointId: undefined },
+    })
+    expect(slice.getState().project.canvas.nodes.find((node) => node.type === 'resource' && node.data.taskId === task!.id)?.data).toMatchObject({
+      status: 'failed',
+      error: { code: 'endpoint_unavailable', message: 'No eligible ComfyUI endpoint' },
+    })
+    expect(createComfyClient).not.toHaveBeenCalled()
+    expect(queuedEndpointIds).toEqual([])
+  })
+
+  it('fails a temporary ComfyUI draft when the selected endpoint does not support the draft function', async () => {
+    const ids = ['task_draft', 'res_draft']
+    const queuedEndpointIds: string[] = []
+    const createComfyClient = vi.fn((endpoint: { id: string }) => {
+      queuedEndpointIds.push(endpoint.id)
+      return {
+        queuePrompt: async () => ({ prompt_id: 'prompt_draft', number: 1 }),
+        getHistory: async () => ({
+          prompt_draft: {
+            outputs: {
+              '9': {
+                images: [{ filename: 'draft.png', subfolder: '', type: 'output' }],
+              },
+            },
+          },
+        }),
+        viewFile: async () => new Blob(['draft-bytes'], { type: 'image/png' }),
+      }
+    })
+    const now = () => '2026-05-08T09:00:00.000Z'
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now,
+      randomInt: () => 7,
+      createComfyClient,
+      comfyRunOptions: { maxPollAttempts: 1, pollIntervalMs: 1 },
+    })
+    const temporaryComfyFunction: GenerationFunction = {
+      id: 'temp_comfy_draft',
+      name: 'Temporary ComfyUI Draft',
+      description: 'Temporary workflow',
+      category: 'ComfyUI',
+      workflow: {
+        format: 'comfyui_api_json',
+        rawJson: {
+          '9': {
+            class_type: 'SaveImage',
+            _meta: { title: 'Save Image' },
+            inputs: { filename_prefix: 'result' },
+          },
+        },
+        editor: {
+          kind: 'comfyui_embedded',
+          endpointId: 'endpoint_selected',
+          baseUrl: 'http://127.0.0.1:8188',
+          savedAt: now(),
+        },
+      },
+      inputs: [],
+      outputs: [
+        {
+          key: 'image',
+          label: 'Image',
+          type: 'image',
+          bind: { nodeId: '9', nodeTitle: 'Save Image' },
+          extract: { source: 'history', multiple: true },
+        },
+      ],
+      runtimeDefaults: { runCount: 1, seedPolicy: { mode: 'randomize_all_before_submit' } },
+      createdAt: now(),
+      updatedAt: now(),
+    }
+
+    slice.setState((state) => ({
+      project: {
+        ...state.project,
+        comfy: {
+          ...state.project.comfy,
+          endpoints: [
+            {
+              ...state.project.comfy.endpoints[0]!,
+              id: 'endpoint_selected',
+              name: 'Selected',
+              enabled: true,
+              health: { status: 'online' },
+              capabilities: { supportedFunctions: ['fn_other'] },
+            },
+            {
+              ...state.project.comfy.endpoints[0]!,
+              id: 'endpoint_fallback',
+              name: 'Fallback',
+              enabled: true,
+              health: { status: 'online' },
+              capabilities: { supportedFunctions: [temporaryComfyFunction.id] },
+            },
+          ],
+        },
+      },
+    }))
+
+    await slice.getState().runTemporaryFunctionAtPosition(temporaryComfyFunction, {}, { x: 100, y: 100 }, 1)
+
+    const task = Object.values(slice.getState().project.tasks).find((item) => item.functionId === temporaryComfyFunction.id)
+    const resource = Object.values(slice.getState().project.resources).find(
+      (item) => item.metadata?.workflowFunctionId === temporaryComfyFunction.id,
+    )
+    expect(task).toMatchObject({
+      status: 'failed',
+      endpointId: undefined,
+      error: { code: 'endpoint_unavailable', message: 'No eligible ComfyUI endpoint' },
+    })
+    expect(resource).toMatchObject({
+      source: { taskId: task!.id },
+      metadata: { endpointId: undefined },
+    })
+    expect(slice.getState().project.canvas.nodes.find((node) => node.type === 'resource' && node.data.taskId === task!.id)?.data).toMatchObject({
+      status: 'failed',
+      endpointId: undefined,
+      error: { code: 'endpoint_unavailable', message: 'No eligible ComfyUI endpoint' },
+    })
+    expect(createComfyClient).not.toHaveBeenCalled()
+    expect(queuedEndpointIds).toEqual([])
   })
 
   it('uploads selected image resources before running image-edit ComfyUI workflows', async () => {

@@ -1,5 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
+  Check,
+  Copy,
   Download,
   FileInput,
   History,
@@ -61,7 +63,9 @@ import {
   openWorkflowJsonFileInComfyEditor,
 } from '../domain/comfyEditorBridge'
 import { projectStore, useProjectStore } from '../store/projectStore'
+import { ResourcePreview } from './ResourcePreview'
 import { FullResourcePreviewModal } from './ResourcePreviewModal'
+import { ModalFrame } from './ModalFrame'
 
 const resourceTypes: ResourceType[] = ['text', 'number', 'boolean', 'image', 'video', 'audio']
 const outputSources: FunctionOutputDef['extract']['source'][] = [
@@ -74,7 +78,18 @@ const outputSources: FunctionOutputDef['extract']['source'][] = [
 ]
 const requestInputTargets: NonNullable<FunctionInputDef['bind']['requestTarget']>[] = ['url_param', 'header', 'body']
 
-const activeTaskStatuses = new Set<ExecutionTask['status']>(['pending', 'queued', 'running', 'fetching_outputs'])
+const activeTaskStatuses = new Set<ExecutionTask['status']>([
+  'created',
+  'waiting_endpoint',
+  'validating',
+  'compiling_workflow',
+  'uploading_assets',
+  'randomizing_seeds',
+  'pending',
+  'queued',
+  'running',
+  'fetching_outputs',
+])
 const HISTORY_LIST_IDLE_MS = 5000
 
 const commitActiveTextControl = () => {
@@ -286,11 +301,60 @@ const inputSnapshotDisplayValue = (input: ExecutionInputSnapshot) => {
   return String(input.value)
 }
 
+const padDatePart = (value: number) => String(value).padStart(2, '0')
+
+const formatInspectorTimestamp = (value: string | undefined) => {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime())) return formatHistoryTimestamp(value)
+  return [
+    `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`,
+    `${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}:${padDatePart(date.getSeconds())}`,
+  ].join(' ')
+}
+
 const runFinalWorkflowSnapshot = (task: ExecutionTask) => {
   if (task.compiledWorkflowSnapshot && Object.keys(task.compiledWorkflowSnapshot).length > 0) {
     return task.compiledWorkflowSnapshot
   }
   return task.requestSnapshot
+}
+
+const isMediaInputSnapshot = (input: ExecutionInputSnapshot) =>
+  input.type === 'image' || input.type === 'video' || input.type === 'audio'
+
+const inputPreviewResource = (project: ProjectState, input: ExecutionInputSnapshot): Resource | undefined => {
+  if (!isMediaInputSnapshot(input)) return undefined
+  const linkedResource = input.resourceId ? project.resources[input.resourceId] : undefined
+  if (linkedResource && linkedResource.type === input.type) return linkedResource
+  if (typeof input.value === 'object' && input.value !== null && 'url' in input.value) {
+    return {
+      id: `input-${input.key}`,
+      type: input.type,
+      name: input.resourceName ?? input.label,
+      value: input.value,
+      source: { kind: 'imported' },
+    }
+  }
+  return undefined
+}
+
+const safeInspectorFilePart = (value: string) => {
+  const cleaned = value
+    .replace(/[<>:"/\\|?*#%&\u0000-\u001f]+/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[.\-\s]+|[.\-\s]+$/g, '')
+  return cleaned || 'workflow'
+}
+
+const downloadTextSnapshot = (filename: string, content: string, mimeType = 'application/json') => {
+  const objectUrl = URL.createObjectURL(new Blob([content], { type: `${mimeType};charset=utf-8` }))
+  const anchor = document.createElement('a')
+  anchor.href = objectUrl
+  anchor.download = filename
+  anchor.click()
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
 }
 
 const inputTargetNodeId = (project: ProjectState, task: ExecutionTask, input: ExecutionInputSnapshot) => {
@@ -377,33 +441,61 @@ export function RunInspector({
   task: ExecutionTask
   onFocusNode: (nodeId: string) => void
 }) {
+  const [copiedWorkflow, setCopiedWorkflow] = useState(false)
+  const [previewInputResource, setPreviewInputResource] = useState<Resource>()
   const inputs = Object.values(task.inputValuesSnapshot ?? {})
   const finalWorkflow = runFinalWorkflowSnapshot(task)
   const finalWorkflowJson = finalWorkflow ? JSON.stringify(finalWorkflow, null, 2) : ''
+  const durationLabel = formatDurationMs(runDurationMs(task)) ?? '-'
   const detailRows = [
-    { key: 'status', label: 'Status', value: task.status },
-    { key: 'created', label: 'Created', value: task.createdAt },
-    { key: 'started', label: 'Started', value: task.startedAt ?? '-' },
-    { key: 'completed', label: 'Completed', value: task.completedAt ?? '-' },
+    { key: 'status', label: 'Status', value: task.status, displayValue: task.status },
+    { key: 'duration', label: 'Duration', value: durationLabel, displayValue: durationLabel },
+    { key: 'created', label: 'Created', value: task.createdAt, displayValue: formatInspectorTimestamp(task.createdAt) },
+    { key: 'started', label: 'Started', value: task.startedAt ?? '-', displayValue: formatInspectorTimestamp(task.startedAt) },
+    { key: 'completed', label: 'Completed', value: task.completedAt ?? '-', displayValue: formatInspectorTimestamp(task.completedAt) },
   ]
+  const workflowDownloadName = `${safeInspectorFilePart(task.functionId)}-${safeInspectorFilePart(task.id)}-workflow.json`
+  const copyWorkflow = async () => {
+    if (!finalWorkflowJson) return
+    await navigator.clipboard?.writeText(finalWorkflowJson)
+    setCopiedWorkflow(true)
+    window.setTimeout(() => setCopiedWorkflow(false), 1200)
+  }
 
   return (
     <div className="run-inspector" aria-label="Run execution details">
-      <h3>Run Details</h3>
+      <div className="run-section-heading">
+        <h3>Run Details</h3>
+      </div>
       <div className="run-detail-grid">
         {detailRows.map((row) => (
-          <label key={row.key} className="run-detail-field">
+          <div key={row.key} className="run-detail-field">
             <span>{row.label}</span>
-            <input aria-label={`Run detail ${row.label}`} readOnly value={row.value} />
-          </label>
+            <input
+              aria-label={`Run detail ${row.label}`}
+              className="run-detail-accessible-value"
+              readOnly
+              value={row.value}
+            />
+            <strong
+              className={row.key === 'status' ? `run-detail-status run-detail-status-${task.status}` : undefined}
+              aria-hidden="true"
+            >
+              {row.displayValue}
+            </strong>
+          </div>
         ))}
       </div>
 
-      <h3>Inputs</h3>
+      <div className="run-section-heading">
+        <h3>Inputs</h3>
+        <span>{inputs.length} captured</span>
+      </div>
       {inputs.length > 0 ? (
         <div className="run-input-list">
           {inputs.map((input) => {
             const targetNodeId = inputTargetNodeId(project, task, input)
+            const previewResource = inputPreviewResource(project, input)
             return (
               <div key={input.key} className="run-input-row">
                 <div className="run-input-title-row">
@@ -427,6 +519,16 @@ export function RunInspector({
                     </button>
                   ) : null}
                 </div>
+                {previewResource ? (
+                  <button
+                    type="button"
+                    className="run-input-preview"
+                    onClick={() => setPreviewInputResource(previewResource)}
+                    aria-label={`Open ${input.label} input preview`}
+                  >
+                    <ResourcePreview resource={previewResource} />
+                  </button>
+                ) : null}
                 <textarea
                   aria-label={`Input value ${input.label}`}
                   className="run-input-value"
@@ -442,7 +544,21 @@ export function RunInspector({
         <div className="inspector-empty">No captured inputs</div>
       )}
 
-      <h3>Final Workflow</h3>
+      <div className="run-section-heading">
+        <h3>Final Workflow</h3>
+        {finalWorkflow ? (
+          <div className="run-section-actions">
+            <button type="button" aria-label="Copy final workflow JSON" onClick={() => void copyWorkflow().catch(() => undefined)}>
+              {copiedWorkflow ? <Check aria-hidden="true" size={14} /> : <Copy aria-hidden="true" size={14} />}
+              {copiedWorkflow ? 'Copied' : 'Copy'}
+            </button>
+            <button type="button" aria-label="Download final workflow JSON" onClick={() => downloadTextSnapshot(workflowDownloadName, finalWorkflowJson)}>
+              <Download aria-hidden="true" size={14} />
+              Download
+            </button>
+          </div>
+        ) : null}
+      </div>
       {finalWorkflow ? (
         <pre className="run-workflow-json">
           <code>{highlightedJson(finalWorkflowJson)}</code>
@@ -450,6 +566,11 @@ export function RunInspector({
       ) : (
         <div className="inspector-empty">No workflow snapshot</div>
       )}
+      <FullResourcePreviewModal
+        resource={previewInputResource}
+        resources={previewInputResource ? [previewInputResource] : []}
+        onClose={() => setPreviewInputResource(undefined)}
+      />
     </div>
   )
 }
@@ -479,20 +600,34 @@ const taskTypeName = (project: ProjectState, task: ExecutionTask) => {
   return types.length > 0 ? types.join(', ') : 'unknown'
 }
 
+const taskRunLabel = (task: ExecutionTask) => `Run ${task.runIndex}/${task.runTotal}`
+
+const taskDurationLabel = (task: ExecutionTask) => formatDurationMs(runDurationMs(task))
+
+const taskOutputResources = (project: ProjectState, task: ExecutionTask) =>
+  Object.values(task.outputRefs ?? {})
+    .flat()
+    .map((ref) => project.resources[ref.resourceId])
+    .filter((resource): resource is Resource => Boolean(resource))
+
 function ProjectTaskCard({
   project,
   task,
   expanded,
   onToggle,
   onFocusNode,
+  onPreviewResource,
 }: {
   project: ProjectState
   task: ExecutionTask
   expanded: boolean
   onToggle: () => void
   onFocusNode: (nodeId: string) => void
+  onPreviewResource: (resource: Resource) => void
 }) {
   const detailsId = `job-details-${task.id}`
+  const durationLabel = taskDurationLabel(task)
+  const outputResources = taskOutputResources(project, task)
 
   return (
     <article className={`job-card job-card-${task.status}`}>
@@ -504,7 +639,12 @@ function ProjectTaskCard({
         onClick={onToggle}
       >
         <span className="job-card-title-row">
-          <strong>{taskFunctionName(project, task)}</strong>
+          <span className="job-card-title">
+            <strong>{taskFunctionName(project, task)}</strong>
+            <small>
+              {taskRunLabel(task)} · {formatHistoryTimestamp(task.createdAt)}
+            </small>
+          </span>
           <span className={`job-status job-status-${task.status}`}>{task.status}</span>
         </span>
         <span className="job-card-meta">
@@ -516,14 +656,123 @@ function ProjectTaskCard({
             <small>Type</small>
             <em>{taskTypeName(project, task)}</em>
           </span>
+          <span>
+            <small>Duration</small>
+            <em>{durationLabel ?? '-'}</em>
+          </span>
         </span>
         <code>{task.id}</code>
       </button>
+      {outputResources.length > 0 ? (
+        <div className="run-output-strip" aria-label={`${taskRunLabel(task)} output previews`}>
+          {outputResources.slice(0, 5).map((resource) => (
+            <button
+              key={resource.id}
+              type="button"
+              className="run-output-preview"
+              aria-label={`Preview ${resourceLabel(resource)}`}
+              onClick={() => onPreviewResource(resource)}
+            >
+              <ResourceListPreview resource={resource} />
+            </button>
+          ))}
+          {outputResources.length > 5 ? <span className="run-output-more">+{outputResources.length - 5}</span> : null}
+        </div>
+      ) : null}
       {expanded ? (
         <div id={detailsId} className="job-card-details">
           <RunInspector project={project} task={task} onFocusNode={onFocusNode} />
         </div>
       ) : null}
+    </article>
+  )
+}
+
+function RunRecordCard({
+  project,
+  item,
+  onFocusNode,
+  onOpenHistory,
+  onPreviewResource,
+}: {
+  project: ProjectState
+  item: ReturnType<typeof getProjectRunHistory>[number]
+  onFocusNode: (nodeId: string) => void
+  onOpenHistory: (runLabel: string, endpointId: string | undefined, promptId: string | undefined) => void
+  onPreviewResource: (resource: Resource) => void
+}) {
+  const task = project.tasks[item.taskId]
+  const durationLabel = taskDurationLabel(task)
+  const createdAtLabel = formatHistoryTimestamp(task?.createdAt)
+  const outputResources = task ? taskOutputResources(project, task) : []
+
+  return (
+    <article className={`run-record-card run-record-card-${item.status}`}>
+      <div className="run-record-header">
+        <span className="run-record-title">
+          <strong>{task ? taskFunctionName(project, task) : item.runLabel}</strong>
+          <small>
+            {item.runLabel} · {createdAtLabel}
+          </small>
+        </span>
+        <span className={`job-status job-status-${item.status}`}>{item.status}</span>
+      </div>
+      <div className="run-record-meta">
+        <span>
+          <small>Server</small>
+          <em>{item.endpointName ?? 'endpoint unknown'}</em>
+        </span>
+        <span>
+          <small>Type</small>
+          <em>{task ? taskTypeName(project, task) : 'unknown'}</em>
+        </span>
+        <span>
+          <small>Duration</small>
+          <em>{durationLabel ?? '-'}</em>
+        </span>
+      </div>
+      <code>{item.taskId}</code>
+      {outputResources.length > 0 ? (
+        <div className="run-output-strip" aria-label={`${item.runLabel} output previews`}>
+          {outputResources.slice(0, 5).map((resource) => (
+            <button
+              key={resource.id}
+              type="button"
+              className="run-output-preview"
+              aria-label={`Preview ${resourceLabel(resource)}`}
+              onClick={() => onPreviewResource(resource)}
+            >
+              <ResourceListPreview resource={resource} />
+            </button>
+          ))}
+          {outputResources.length > 5 ? <span className="run-output-more">+{outputResources.length - 5}</span> : null}
+        </div>
+      ) : null}
+      <div className="run-record-actions">
+        {item.resultNodeId ? (
+          <button
+            type="button"
+            onClick={() => onFocusNode(item.resultNodeId!)}
+            aria-label={`Locate ${item.runLabel} result node`}
+          >
+            Locate
+          </button>
+        ) : null}
+        {item.historyPath && item.endpointId && item.comfyPromptId ? (
+          <button
+            type="button"
+            onClick={() => onOpenHistory(item.runLabel, item.endpointId, item.comfyPromptId)}
+            aria-label={`Open ComfyUI history for ${item.runLabel}`}
+          >
+            History
+          </button>
+        ) : item.historyPath ? (
+          <code>{item.historyPath}</code>
+        ) : (
+          <em>No prompt id</em>
+        )}
+      </div>
+      {item.errorMessage ? <p className="job-error">{item.errorMessage}</p> : null}
     </article>
   )
 }
@@ -542,26 +791,12 @@ function ModalShell({
   hidden?: boolean
 }) {
   return (
-    <div
-      className={`modal-backdrop${hidden ? ' modal-backdrop-hidden' : ''}`}
-      aria-hidden={hidden || undefined}
-      onContextMenu={(event) => {
-        event.preventDefault()
-        event.stopPropagation()
-      }}
-      onMouseDown={(event) => event.stopPropagation()}
+    <ModalFrame
+      label={label}
+      onClose={onClose}
+      hidden={hidden}
+      dialogClassName={`manager-modal${modalClassName ? ` ${modalClassName}` : ''}`}
     >
-      <div
-        className={`manager-modal${modalClassName ? ` ${modalClassName}` : ''}`}
-        role={hidden ? undefined : 'dialog'}
-        aria-modal={hidden ? undefined : 'true'}
-        aria-label={hidden ? undefined : label}
-        onContextMenu={(event) => {
-          event.preventDefault()
-          event.stopPropagation()
-        }}
-        onMouseDown={(event) => event.stopPropagation()}
-      >
         <div className="manager-header">
           <h3>{label}</h3>
           <button
@@ -575,8 +810,7 @@ function ModalShell({
           </button>
         </div>
         {children}
-      </div>
-    </div>
+    </ModalFrame>
   )
 }
 
@@ -2570,51 +2804,69 @@ export function FunctionManager({
 }
 
 type EndpointManagerProps = {
-  endpoints: ComfyEndpointConfig[]
+  endpoint?: ComfyEndpointConfig
+  endpointCount: number
   functions: GenerationFunction[]
   queueCounts: Record<string, number>
-  onAddEndpoint: () => void
+  onAddEndpoint: (patch?: Omit<Partial<ComfyEndpointConfig>, 'id' | 'health'>) => void
   onUpdateEndpoint: (endpointId: string, patch: Partial<ComfyEndpointConfig>) => void
   onDeleteEndpoint: (endpointId: string) => void
   onTestEndpoint: (endpoint: ComfyEndpointConfig) => void
   onClose: () => void
 }
 
+type EndpointSavePatch = Omit<Partial<ComfyEndpointConfig>, 'id' | 'health'>
+
 const endpointHeaders = (endpoint: ComfyEndpointConfig) => Object.entries(endpoint.customHeaders ?? {})
 
-function updateEndpointHeader(
-  endpoint: ComfyEndpointConfig,
-  index: number,
-  nextKey: string,
-  nextValue: string,
-  onUpdateEndpoint: EndpointManagerProps['onUpdateEndpoint'],
-) {
-  const entries = endpointHeaders(endpoint)
-  entries[index] = [nextKey, nextValue]
-  onUpdateEndpoint(endpoint.id, {
-    customHeaders: Object.fromEntries(entries),
-  })
-}
+const cloneEndpointDraft = (endpoint: ComfyEndpointConfig): ComfyEndpointConfig => ({
+  ...endpoint,
+  auth: endpoint.auth ? { ...endpoint.auth } : undefined,
+  customHeaders: endpoint.customHeaders ? { ...endpoint.customHeaders } : undefined,
+  capabilities: endpoint.capabilities
+    ? {
+        ...endpoint.capabilities,
+        supportedFunctions: endpoint.capabilities.supportedFunctions
+          ? [...endpoint.capabilities.supportedFunctions]
+          : undefined,
+        requiredModels: endpoint.capabilities.requiredModels ? [...endpoint.capabilities.requiredModels] : undefined,
+        requiredNodes: endpoint.capabilities.requiredNodes ? [...endpoint.capabilities.requiredNodes] : undefined,
+      }
+    : undefined,
+  health: endpoint.health ? { ...endpoint.health } : undefined,
+})
 
-function addEndpointHeader(endpoint: ComfyEndpointConfig, onUpdateEndpoint: EndpointManagerProps['onUpdateEndpoint']) {
-  const entries = endpointHeaders(endpoint)
-  onUpdateEndpoint(endpoint.id, {
-    customHeaders: Object.fromEntries([...entries, ['', '']]),
-  })
-}
+const createEndpointDraft = (endpointCount: number, workflowFunctionIds: string[]): ComfyEndpointConfig => ({
+  id: '__new_comfy_endpoint__',
+  name: `ComfyUI ${endpointCount + 1}`,
+  baseUrl: 'http://127.0.0.1:8188',
+  enabled: true,
+  maxConcurrentJobs: 1,
+  priority: 1,
+  timeoutMs: 600000,
+  auth: { type: 'none' },
+  capabilities: { supportedFunctions: workflowFunctionIds },
+  health: { status: 'unknown' },
+})
 
-function deleteEndpointHeader(
-  endpoint: ComfyEndpointConfig,
-  index: number,
-  onUpdateEndpoint: EndpointManagerProps['onUpdateEndpoint'],
-) {
-  onUpdateEndpoint(endpoint.id, {
-    customHeaders: Object.fromEntries(endpointHeaders(endpoint).filter((_, headerIndex) => headerIndex !== index)),
-  })
-}
+const endpointSavePatch = (endpoint: ComfyEndpointConfig): EndpointSavePatch => ({
+  name: endpoint.name,
+  baseUrl: endpoint.baseUrl,
+  enabled: endpoint.enabled,
+  maxConcurrentJobs: endpoint.maxConcurrentJobs,
+  priority: endpoint.priority,
+  tags: endpoint.tags,
+  timeoutMs: endpoint.timeoutMs,
+  auth: endpoint.auth,
+  customHeaders: endpoint.customHeaders,
+  capabilities: endpoint.capabilities,
+})
+
+const endpointDraftFingerprint = (endpoint: ComfyEndpointConfig) => JSON.stringify(endpointSavePatch(endpoint))
 
 function EndpointManager({
-  endpoints,
+  endpoint,
+  endpointCount,
   functions,
   queueCounts,
   onAddEndpoint,
@@ -2625,184 +2877,230 @@ function EndpointManager({
 }: EndpointManagerProps) {
   const workflowFunctions = functions.filter(isComfyWorkflowFunction)
   const workflowFunctionIds = workflowFunctions.map((fn) => fn.id)
-  const setEndpointAllFunctions = (endpoint: ComfyEndpointConfig, enabled: boolean) => {
-    onUpdateEndpoint(endpoint.id, endpointCapabilitiesPatch(endpoint, enabled ? undefined : workflowFunctionIds))
+  const workflowFunctionKey = workflowFunctionIds.join('\u0000')
+  const [draft, setDraft] = useState<ComfyEndpointConfig>(() =>
+    endpoint ? cloneEndpointDraft(endpoint) : createEndpointDraft(endpointCount, workflowFunctionIds),
+  )
+
+  useEffect(() => {
+    setDraft(endpoint ? cloneEndpointDraft(endpoint) : createEndpointDraft(endpointCount, workflowFunctionIds))
+  }, [endpoint?.id, endpointCount, workflowFunctionKey])
+
+  const updateDraft = (patch: Partial<ComfyEndpointConfig>) => {
+    setDraft((current) => ({ ...current, ...patch }))
   }
-  const setEndpointFunction = (endpoint: ComfyEndpointConfig, functionId: string, enabled: boolean) => {
-    setEndpointFunctionAvailability(endpoint, functionId, enabled, workflowFunctionIds, onUpdateEndpoint)
+  const updateHeader = (index: number, nextKey: string, nextValue: string) => {
+    const entries = endpointHeaders(draft)
+    entries[index] = [nextKey, nextValue]
+    updateDraft({ customHeaders: Object.fromEntries(entries) })
   }
+  const addHeader = () => {
+    updateDraft({ customHeaders: Object.fromEntries([...endpointHeaders(draft), ['', '']]) })
+  }
+  const deleteHeader = (index: number) => {
+    updateDraft({ customHeaders: Object.fromEntries(endpointHeaders(draft).filter((_, headerIndex) => headerIndex !== index)) })
+  }
+  const setEndpointAllFunctions = (enabled: boolean) => {
+    updateDraft(endpointCapabilitiesPatch(draft, enabled ? undefined : workflowFunctionIds))
+  }
+  const setEndpointFunction = (functionId: string, enabled: boolean) => {
+    const supportedFunctions = draft.capabilities?.supportedFunctions
+    const explicitFunctions = supportedFunctions === undefined ? workflowFunctionIds : supportedFunctions
+    const nextFunctions = enabled
+      ? [...explicitFunctions, functionId]
+      : explicitFunctions.filter((id) => id !== functionId)
+    updateDraft(endpointCapabilitiesPatch(draft, nextFunctions))
+  }
+  const saveEndpoint = () => {
+    if (!draft.name.trim() || !draft.baseUrl.trim()) return
+    const patch = endpointSavePatch({
+      ...draft,
+      name: draft.name.trim(),
+      baseUrl: draft.baseUrl.trim(),
+      maxConcurrentJobs: Math.max(1, Number(draft.maxConcurrentJobs) || 1),
+      priority: Number(draft.priority) || 0,
+      timeoutMs: Math.max(1000, Number(draft.timeoutMs) || 1000),
+    })
+    if (endpoint) onUpdateEndpoint(endpoint.id, patch)
+    else onAddEndpoint(patch)
+    onClose()
+  }
+  const deleteEndpoint = () => {
+    if (!endpoint) return
+    onDeleteEndpoint(endpoint.id)
+    onClose()
+  }
+  const status = endpoint?.health?.status ?? draft.health?.status ?? 'unknown'
+  const queueCount = endpoint ? (queueCounts[endpoint.id] ?? 0) : 0
+  const savedDraftChanged = endpoint ? endpointDraftFingerprint(endpoint) !== endpointDraftFingerprint(draft) : true
+  const canTestEndpoint = Boolean(endpoint && !savedDraftChanged)
+  const title = endpoint ? 'Edit ComfyUI Server' : 'New ComfyUI Server'
+  const saveDisabled = !draft.name.trim() || !draft.baseUrl.trim()
 
   return (
-    <ModalShell label="ComfyUI Server Management" onClose={onClose}>
-      <div className="endpoint-manager-toolbar">
-        <button type="button" onClick={onAddEndpoint}>
-          <Plus size={14} />
-          Server
-        </button>
-      </div>
-      <div className="endpoint-manager-list">
-        {endpoints.map((endpoint) => {
-          const status = endpoint.health?.status ?? 'unknown'
-          const queueCount = queueCounts[endpoint.id] ?? 0
-          return (
-            <div className="endpoint-manager-row" key={endpoint.id}>
-              <div className="manager-editor-title">
-                <div>
-                  <strong>{endpoint.name}</strong>
-                  <span>
-                    {status} · queue {queueCount}
-                  </span>
-                </div>
+    <ModalShell label={title} onClose={onClose}>
+      <div className="endpoint-editor">
+        <div className="manager-editor-title">
+          <div>
+            <strong>{draft.name || title}</strong>
+            <span>
+              {status} · queue {queueCount}
+            </span>
+          </div>
+          {endpoint ? (
+            <button
+              type="button"
+              className="danger-button"
+              aria-label="Delete endpoint"
+              onClick={deleteEndpoint}
+            >
+              <Trash2 size={14} />
+              Delete
+            </button>
+          ) : null}
+        </div>
+        <div className="manager-grid endpoint-grid">
+          <label className="field">
+            <span>Name</span>
+            <input
+              aria-label="Endpoint name"
+              value={draft.name}
+              onChange={(event) => updateDraft({ name: event.target.value })}
+            />
+          </label>
+          <label className="field">
+            <span>URL</span>
+            <input
+              aria-label="Endpoint URL"
+              value={draft.baseUrl}
+              onChange={(event) => updateDraft({ baseUrl: event.target.value })}
+            />
+          </label>
+          <label className="field">
+            <span>Max jobs</span>
+            <input
+              aria-label="Max jobs"
+              type="number"
+              min="1"
+              value={draft.maxConcurrentJobs}
+              onChange={(event) => updateDraft({ maxConcurrentJobs: Math.max(1, Number(event.target.value) || 1) })}
+            />
+          </label>
+          <label className="field">
+            <span>Priority</span>
+            <input
+              aria-label="Priority"
+              type="number"
+              value={draft.priority}
+              onChange={(event) => updateDraft({ priority: Number(event.target.value) || 0 })}
+            />
+          </label>
+          <label className="field">
+            <span>Timeout ms</span>
+            <input
+              aria-label="Timeout"
+              type="number"
+              min="1000"
+              value={draft.timeoutMs}
+              onChange={(event) => updateDraft({ timeoutMs: Math.max(1000, Number(event.target.value) || 1000) })}
+            />
+          </label>
+          <label className="inline-check endpoint-enabled">
+            <input
+              aria-label="Endpoint enabled"
+              type="checkbox"
+              checked={draft.enabled}
+              onChange={(event) => updateDraft({ enabled: event.target.checked })}
+            />
+            Enabled
+          </label>
+        </div>
+        <div className="endpoint-actions">
+          <span className={`status-dot ${status}`} />
+          <button type="button" disabled={!canTestEndpoint} onClick={() => endpoint && onTestEndpoint(endpoint)}>
+            <Route size={14} />
+            Test
+          </button>
+          {endpoint?.health?.message ? <span className="endpoint-message">{endpoint.health.message}</span> : null}
+          {!canTestEndpoint ? <span className="endpoint-message">Save before testing</span> : null}
+        </div>
+        <div className="endpoint-function-editor">
+          <div className="binding-header">
+            <h4>Available Functions</h4>
+            <span>{endpointFunctionScopeLabel(draft, workflowFunctionIds)}</span>
+          </div>
+          <label className="inline-check endpoint-all-functions">
+            <input
+              aria-label="Endpoint supports all functions"
+              type="checkbox"
+              checked={draft.capabilities?.supportedFunctions === undefined}
+              onChange={(event) => setEndpointAllFunctions(event.target.checked)}
+            />
+            All workflow functions
+          </label>
+          <div className="endpoint-function-list">
+            {workflowFunctions.length > 0 ? (
+              workflowFunctions.map((fn) => {
+                const allFunctions = draft.capabilities?.supportedFunctions === undefined
+                return (
+                  <label className="endpoint-function-item" key={`${draft.id}_${fn.id}`}>
+                    <input
+                      aria-label={`Endpoint supports ${fn.name}`}
+                      type="checkbox"
+                      disabled={allFunctions}
+                      checked={endpointSupportsWorkflowFunction(draft, fn.id)}
+                      onChange={(event) => setEndpointFunction(fn.id, event.target.checked)}
+                    />
+                    <span>{fn.name}</span>
+                  </label>
+                )
+              })
+            ) : (
+              <div className="empty-list">No ComfyUI workflow functions</div>
+            )}
+          </div>
+        </div>
+        <div className="header-editor">
+          <div className="binding-header">
+            <h4>Headers</h4>
+            <button type="button" onClick={addHeader}>
+              <Plus size={14} />
+              Header
+            </button>
+          </div>
+          <div className="header-list">
+            {endpointHeaders(draft).map(([key, value], index) => (
+              <div className="header-row" key={`${draft.id}_${index}`}>
+                <input
+                  aria-label={`Header name ${index + 1}`}
+                  value={key}
+                  onChange={(event) => updateHeader(index, event.target.value, value)}
+                />
+                <input
+                  aria-label={`Header value ${index + 1}`}
+                  value={value}
+                  onChange={(event) => updateHeader(index, key, event.target.value)}
+                />
                 <button
                   type="button"
-                  className="danger-button"
-                  aria-label={`Delete endpoint ${endpoint.name}`}
-                  onClick={() => onDeleteEndpoint(endpoint.id)}
+                  className="icon-button"
+                  aria-label={`Delete header ${index + 1}`}
+                  onClick={() => deleteHeader(index)}
                 >
                   <Trash2 size={14} />
-                  Delete
                 </button>
               </div>
-              <div className="manager-grid endpoint-grid">
-                <label className="field">
-                  <span>Name</span>
-                  <CommittedTextInput
-                    ariaLabel={`Endpoint name ${endpoint.name}`}
-                    value={endpoint.name}
-                    onCommit={(name) => onUpdateEndpoint(endpoint.id, { name })}
-                  />
-                </label>
-                <label className="field">
-                  <span>URL</span>
-                  <CommittedTextInput
-                    ariaLabel={`Endpoint URL ${endpoint.name}`}
-                    value={endpoint.baseUrl}
-                    onCommit={(baseUrl) => onUpdateEndpoint(endpoint.id, { baseUrl })}
-                  />
-                </label>
-                <label className="field">
-                  <span>Max jobs</span>
-                  <input
-                    aria-label={`Max jobs ${endpoint.name}`}
-                    type="number"
-                    min="1"
-                    value={endpoint.maxConcurrentJobs}
-                    onChange={(event) =>
-                      onUpdateEndpoint(endpoint.id, { maxConcurrentJobs: Math.max(1, Number(event.target.value) || 1) })
-                    }
-                  />
-                </label>
-                <label className="field">
-                  <span>Priority</span>
-                  <input
-                    aria-label={`Priority ${endpoint.name}`}
-                    type="number"
-                    value={endpoint.priority}
-                    onChange={(event) => onUpdateEndpoint(endpoint.id, { priority: Number(event.target.value) || 0 })}
-                  />
-                </label>
-                <label className="field">
-                  <span>Timeout ms</span>
-                  <input
-                    aria-label={`Timeout ${endpoint.name}`}
-                    type="number"
-                    min="1000"
-                    value={endpoint.timeoutMs}
-                    onChange={(event) =>
-                      onUpdateEndpoint(endpoint.id, { timeoutMs: Math.max(1000, Number(event.target.value) || 1000) })
-                    }
-                  />
-                </label>
-                <label className="inline-check endpoint-enabled">
-                  <input
-                    aria-label={`Endpoint enabled ${endpoint.name}`}
-                    type="checkbox"
-                    checked={endpoint.enabled}
-                    onChange={(event) => onUpdateEndpoint(endpoint.id, { enabled: event.target.checked })}
-                  />
-                  Enabled
-                </label>
-              </div>
-              <div className="endpoint-actions">
-                <span className={`status-dot ${status}`} />
-                <button type="button" onClick={() => onTestEndpoint(endpoint)}>
-                  <Route size={14} />
-                  Test
-                </button>
-                {endpoint.health?.message ? <span className="endpoint-message">{endpoint.health.message}</span> : null}
-              </div>
-              <div className="endpoint-function-editor">
-                <div className="binding-header">
-                  <h4>Available Functions</h4>
-                  <span>{endpointFunctionScopeLabel(endpoint, workflowFunctionIds)}</span>
-                </div>
-                <label className="inline-check endpoint-all-functions">
-                  <input
-                    aria-label={`Endpoint supports all functions ${endpoint.name}`}
-                    type="checkbox"
-                    checked={endpoint.capabilities?.supportedFunctions === undefined}
-                    onChange={(event) => setEndpointAllFunctions(endpoint, event.target.checked)}
-                  />
-                  All workflow functions
-                </label>
-                <div className="endpoint-function-list">
-                  {workflowFunctions.length > 0 ? (
-                    workflowFunctions.map((fn) => {
-                      const allFunctions = endpoint.capabilities?.supportedFunctions === undefined
-                      return (
-                        <label className="endpoint-function-item" key={`${endpoint.id}_${fn.id}`}>
-                          <input
-                            aria-label={`Endpoint supports ${fn.name} ${endpoint.name}`}
-                            type="checkbox"
-                            disabled={allFunctions}
-                            checked={endpointSupportsWorkflowFunction(endpoint, fn.id)}
-                            onChange={(event) => setEndpointFunction(endpoint, fn.id, event.target.checked)}
-                          />
-                          <span>{fn.name}</span>
-                        </label>
-                      )
-                    })
-                  ) : (
-                    <div className="empty-list">No ComfyUI workflow functions</div>
-                  )}
-                </div>
-              </div>
-              <div className="header-editor">
-                <div className="binding-header">
-                  <h4>Headers</h4>
-                  <button type="button" onClick={() => addEndpointHeader(endpoint, onUpdateEndpoint)}>
-                    <Plus size={14} />
-                    Header
-                  </button>
-                </div>
-                <div className="header-list">
-                  {endpointHeaders(endpoint).map(([key, value], index) => (
-                    <div className="header-row" key={`${endpoint.id}_${index}_${key}`}>
-                      <CommittedTextInput
-                        ariaLabel={`Header name ${endpoint.name} ${index + 1}`}
-                        value={key}
-                        onCommit={(nextKey) => updateEndpointHeader(endpoint, index, nextKey, value, onUpdateEndpoint)}
-                      />
-                      <CommittedTextInput
-                        ariaLabel={`Header value ${endpoint.name} ${index + 1}`}
-                        value={value}
-                        onCommit={(nextValue) => updateEndpointHeader(endpoint, index, key, nextValue, onUpdateEndpoint)}
-                      />
-                      <button
-                        type="button"
-                        className="icon-button"
-                        aria-label={`Delete header ${endpoint.name} ${index + 1}`}
-                        onClick={() => deleteEndpointHeader(endpoint, index, onUpdateEndpoint)}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )
-        })}
+            ))}
+          </div>
+        </div>
+        <div className="project-info-actions endpoint-editor-actions">
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="button" className="primary-action" disabled={saveDisabled} onClick={saveEndpoint}>
+            Save
+          </button>
+        </div>
       </div>
     </ModalShell>
   )
@@ -2894,7 +3192,7 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
   const importConfig = useProjectStore((state) => state.importConfig)
   const [selectedFunctionId, setSelectedFunctionId] = useState<string>()
   const [functionManagerOpen, setFunctionManagerOpen] = useState(false)
-  const [endpointManagerOpen, setEndpointManagerOpen] = useState(false)
+  const [endpointEditorId, setEndpointEditorId] = useState<'new' | string>()
   const [error, setError] = useState<string>()
 
   const taskCounts = useMemo(() => {
@@ -2909,6 +3207,9 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
   const functions = useMemo(() => Object.values(project.functions), [project.functions])
   const managedFunctions = useMemo(() => functions.filter((fn) => !isBuiltInFunction(fn)), [functions])
   const queueCounts = useMemo(() => endpointQueueCounts(project.tasks), [project.tasks])
+  const endpointEditorEndpoint = endpointEditorId && endpointEditorId !== 'new'
+    ? project.comfy.endpoints.find((endpoint) => endpoint.id === endpointEditorId)
+    : undefined
   const projectOptions = useMemo(() => {
     const projects = {
       ...projectLibrary,
@@ -3066,7 +3367,11 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
             <h3>ComfyUI Servers</h3>
             <p>Edit endpoints, queue capacity, connection status, and custom headers.</p>
           </div>
-          <button type="button" className="section-manage-button" onClick={() => setEndpointManagerOpen(true)}>
+          <button
+            type="button"
+            className="section-manage-button"
+            onClick={() => setEndpointEditorId(project.comfy.endpoints[0]?.id ?? 'new')}
+          >
             <Settings size={15} />
             ComfyUI Server Management
           </button>
@@ -3126,16 +3431,17 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
         />
       ) : null}
 
-      {endpointManagerOpen ? (
+      {endpointEditorId ? (
         <EndpointManager
-          endpoints={project.comfy.endpoints}
+          endpoint={endpointEditorEndpoint}
+          endpointCount={project.comfy.endpoints.length}
           functions={managedFunctions}
           queueCounts={queueCounts}
           onAddEndpoint={addEndpoint}
           onUpdateEndpoint={updateEndpoint}
           onDeleteEndpoint={deleteEndpoint}
           onTestEndpoint={(endpoint) => void checkEndpointStatus(endpoint.id)}
-          onClose={() => setEndpointManagerOpen(false)}
+          onClose={() => setEndpointEditorId(undefined)}
         />
       ) : null}
     </ModalShell>
@@ -3168,7 +3474,7 @@ export function LeftPanel() {
   const [selectedFunctionId, setSelectedFunctionId] = useState<string>()
   const [functionManagerOpen, setFunctionManagerOpen] = useState(false)
   const [createFunctionOpen, setCreateFunctionOpen] = useState(false)
-  const [endpointManagerOpen, setEndpointManagerOpen] = useState(false)
+  const [endpointEditorId, setEndpointEditorId] = useState<'new' | string>()
   const [dockError, setDockError] = useState<string>()
   const [previewResource, setPreviewResource] = useState<Resource | undefined>()
   const [historyDialog, setHistoryDialog] = useState<{
@@ -3190,6 +3496,9 @@ export function LeftPanel() {
   const workflowFunctionIds = useMemo(() => managedFunctions.filter(isComfyWorkflowFunction).map((fn) => fn.id), [managedFunctions])
   const historyCount = (project.history?.undoStack.length ?? 0) + (project.history?.redoStack.length ?? 0)
   const queueCounts = useMemo(() => endpointQueueCounts(project.tasks), [project.tasks])
+  const endpointEditorEndpoint = endpointEditorId && endpointEditorId !== 'new'
+    ? project.comfy.endpoints.find((endpoint) => endpoint.id === endpointEditorId)
+    : undefined
   const projectTasks = useMemo(
     () =>
       Object.values(project.tasks).sort((left, right) => {
@@ -3198,6 +3507,10 @@ export function LeftPanel() {
         return right.id.localeCompare(left.id)
       }),
     [project.tasks],
+  )
+  const activeProjectTasks = useMemo(
+    () => projectTasks.filter((task) => activeTaskStatuses.has(task.status)),
+    [projectTasks],
   )
   const activeSelectedNodeIds = useMemo(
     () => (selectedNodeIds.length > 0 ? selectedNodeIds : selectedNodeId ? [selectedNodeId] : []),
@@ -3417,16 +3730,17 @@ export function LeftPanel() {
           onBindComfyEndpoint={bindNewWorkflowFunctionToEndpoint}
         />
       ) : null}
-      {endpointManagerOpen ? (
+      {endpointEditorId ? (
         <EndpointManager
-          endpoints={project.comfy.endpoints}
+          endpoint={endpointEditorEndpoint}
+          endpointCount={project.comfy.endpoints.length}
           functions={managedFunctions}
           queueCounts={queueCounts}
           onAddEndpoint={addEndpoint}
           onUpdateEndpoint={updateEndpoint}
           onDeleteEndpoint={deleteEndpoint}
           onTestEndpoint={(endpoint) => void checkEndpointStatus(endpoint.id)}
-          onClose={() => setEndpointManagerOpen(false)}
+          onClose={() => setEndpointEditorId(undefined)}
         />
       ) : null}
       <div className="assets-dock-stack">
@@ -3459,9 +3773,6 @@ export function LeftPanel() {
           onClick={() => toggleDock('functions')}
         >
           <Workflow size={20} />
-          <span className="task-dock-badge" aria-hidden="true">
-            {managedFunctions.length}
-          </span>
         </button>
         <button
           type="button"
@@ -3472,9 +3783,6 @@ export function LeftPanel() {
           onClick={() => toggleDock('servers')}
         >
           <Network size={20} />
-          <span className="task-dock-badge" aria-hidden="true">
-            {project.comfy.endpoints.length}
-          </span>
         </button>
         <button
           type="button"
@@ -3485,9 +3793,6 @@ export function LeftPanel() {
           onClick={() => toggleDock('tasks')}
         >
           <Zap size={20} />
-          <span className="task-dock-badge" aria-hidden="true">
-            {projectTasks.length}
-          </span>
         </button>
         <button
           type="button"
@@ -3498,9 +3803,6 @@ export function LeftPanel() {
           onClick={() => toggleDock('runQueue')}
         >
           <Route size={20} />
-          <span className="task-dock-badge" aria-hidden="true">
-            {runQueueHistory.length}
-          </span>
         </button>
       </div>
       {assetsOpen ? (
@@ -3682,10 +3984,7 @@ export function LeftPanel() {
             <button
               type="button"
               className="dock-create-button"
-              onClick={() => {
-                addEndpoint()
-                setEndpointManagerOpen(true)
-              }}
+              onClick={() => setEndpointEditorId('new')}
             >
               <Plus size={15} />
               New server
@@ -3710,7 +4009,7 @@ export function LeftPanel() {
                       <button
                         type="button"
                         aria-label={`Edit server ${endpoint.name}`}
-                        onClick={() => setEndpointManagerOpen(true)}
+                        onClick={() => setEndpointEditorId(endpoint.id)}
                       >
                         <Pencil size={14} />
                       </button>
@@ -3740,11 +4039,11 @@ export function LeftPanel() {
         >
           <div className="panel-title asset-popover-title">
             <Zap size={16} />
-            <h2>Project Tasks</h2>
-            <span>{projectTasks.length}</span>
+            <h2>Active Runs</h2>
+            <span>{activeProjectTasks.length}</span>
           </div>
           <div className="job-list task-popover-list" aria-label="Project task list">
-            {projectTasks.map((task) => (
+            {activeProjectTasks.map((task) => (
               <ProjectTaskCard
                 key={task.id}
                 project={project}
@@ -3752,9 +4051,10 @@ export function LeftPanel() {
                 expanded={expandedTaskId === task.id}
                 onToggle={() => setExpandedTaskId((current) => (current === task.id ? undefined : task.id))}
                 onFocusNode={focusCanvasNode}
+                onPreviewResource={setPreviewResource}
               />
             ))}
-            {projectTasks.length === 0 ? <div className="inspector-empty">No tasks</div> : null}
+            {activeProjectTasks.length === 0 ? <div className="inspector-empty">No active runs</div> : null}
           </div>
         </section>
       ) : null}
@@ -3766,7 +4066,7 @@ export function LeftPanel() {
         >
           <div className="panel-title asset-popover-title">
             <Route size={16} />
-            <h2>Run Queue</h2>
+            <h2>Runs</h2>
             <span>{runQueueHistory.length}</span>
           </div>
           <p className="dock-popover-note">
@@ -3775,41 +4075,16 @@ export function LeftPanel() {
               : 'All nodes'}
           </p>
           {runQueueHistory.length > 0 ? (
-            <div className="history-list run-queue-list" aria-label="Run queue list">
+            <div className="run-record-list run-queue-list" aria-label="Run queue list">
               {runQueueHistory.map((item) => (
-                <div key={item.taskId} className={`history-row history-row-${item.status}`}>
-                  <div>
-                    <strong>{item.runLabel}</strong>
-                    <span>{item.status}</span>
-                  </div>
-                  <code>{item.taskId}</code>
-                  <span>{item.endpointName ?? 'endpoint unknown'}</span>
-                  <div className="history-row-actions">
-                    {item.resultNodeId ? (
-                      <button
-                        type="button"
-                        onClick={() => focusCanvasNode(item.resultNodeId!)}
-                        aria-label={`Locate ${item.runLabel} result node`}
-                      >
-                        Locate node
-                      </button>
-                    ) : null}
-                    {item.historyPath && item.endpointId && item.comfyPromptId ? (
-                      <button
-                        type="button"
-                        onClick={() => openHistory(item.runLabel, item.endpointId, item.comfyPromptId)}
-                        aria-label={`Open ComfyUI history for ${item.runLabel}`}
-                      >
-                        Open history
-                      </button>
-                    ) : item.historyPath ? (
-                      <code>{item.historyPath}</code>
-                    ) : (
-                      <em>No ComfyUI prompt id</em>
-                    )}
-                  </div>
-                  {item.errorMessage ? <p className="job-error">{item.errorMessage}</p> : null}
-                </div>
+                <RunRecordCard
+                  key={item.taskId}
+                  project={project}
+                  item={item}
+                  onFocusNode={focusCanvasNode}
+                  onOpenHistory={openHistory}
+                  onPreviewResource={setPreviewResource}
+                />
               ))}
             </div>
           ) : (

@@ -56,6 +56,7 @@ import { randomizeWorkflowSeeds } from '../domain/seed'
 import { selectEndpoint } from '../domain/scheduler'
 import { createGenerationFunctionFromWorkflow, injectWorkflowInputs, workflowPrimitiveInputValue } from '../domain/workflow'
 import { isBuiltInFunction, withoutBuiltInProjectFunctions } from '../domain/builtInFunctions'
+import { normalizeTextDisplayMode } from '../domain/textDisplay'
 import type { MediaResourcePayload, MediaResourceKind } from '../domain/resourceFiles'
 import type {
   CanvasEdge,
@@ -88,6 +89,7 @@ import type {
   Resource,
   ResourceRef,
   ResourceType,
+  TextDisplayMode,
 } from '../domain/types'
 
 type RuntimeInputValues = Record<string, PrimitiveInputValue | InputResourceRef>
@@ -115,7 +117,8 @@ type RuntimeComfyClient = ComfyPromptClient & {
   viewFile?: (params: ComfyFileRef) => Promise<Blob>
 }
 
-type QueuedComfyRun = {
+type QueuedComfyResultRun = {
+  kind?: 'result'
   taskId: string
   resultNodeId: string
   functionNodeId: string
@@ -130,6 +133,25 @@ type QueuedComfyRun = {
   completion: Promise<void>
   resolveCompletion: () => void
 }
+
+type QueuedComfyCommandRun = {
+  kind: 'command'
+  taskId: string
+  functionNodeId: string
+  functionId: string
+  requiredEndpointId?: string
+  functionDef: GenerationFunction
+  inputValues: ResolvedRuntimeInputValues
+  outputRefs: Record<string, ResourceRef[]>
+  position: { x: number; y: number }
+  runIndex: number
+  runTotal: number
+  createdAt: string
+  completion: Promise<void>
+  resolveCompletion: () => void
+}
+
+type QueuedComfyRun = QueuedComfyResultRun | QueuedComfyCommandRun
 
 type QueuedOpenAiRun = {
   taskId: string
@@ -241,6 +263,7 @@ declare global {
 export type ProjectStoreState = {
   project: ProjectState
   projectLibrary: Record<string, ProjectState>
+  projectPersistenceReady: boolean
   undoStack: ProjectState[]
   selectedNodeId?: string
   selectedNodeIds: string[]
@@ -266,7 +289,9 @@ export type ProjectStoreState = {
     position: { x: number; y: number },
   ) => string
   updateTextResourceValue: (resourceId: string, value: string) => void
+  updateTextResourceDisplayMode: (resourceId: string, displayMode: TextDisplayMode) => void
   updateNumberResourceValue: (resourceId: string, value: number) => void
+  updateBooleanResourceValue: (resourceId: string, value: boolean) => void
   replaceResourceMedia: (resourceId: string, type: MediaResourceKind, media: MediaResourcePayload) => void
   addFunctionFromWorkflow: (
     name: string,
@@ -327,7 +352,7 @@ export type ProjectStoreState = {
   deleteSelectedNode: () => void
   deleteNode: (nodeId: string) => void
   deleteNodes: (nodeIds: string[]) => void
-  groupSelectedNodes: () => string | undefined
+  groupSelectedNodes: (options?: GroupSelectedNodesOptions) => string | undefined
   ungroupNode: (nodeId: string) => void
   saveTemplateFromSelection: (name?: string) => string | undefined
   instantiateTemplate: (templateId: string, position?: { x: number; y: number }) => string | undefined
@@ -335,7 +360,7 @@ export type ProjectStoreState = {
   duplicateNodes: (nodeIds: string[]) => void
   selectNode: (nodeId?: string, mode?: NodeSelectionMode) => void
   selectNodes: (nodeIds: string[], mode?: NodeSelectionMode) => void
-  addEndpoint: () => void
+  addEndpoint: (patch?: Omit<Partial<ComfyEndpointConfig>, 'id' | 'health'>) => string
   updateEndpoint: (endpointId: string, patch: Partial<ComfyEndpointConfig>) => void
   deleteEndpoint: (endpointId: string) => void
   markEndpoint: (endpointId: string, status: NonNullable<ComfyEndpointConfig['health']>['status'], message?: string) => void
@@ -364,6 +389,12 @@ const defaultDeps: ProjectStoreDeps = {
 const PROJECT_HISTORY_SCHEMA_VERSION = '1.0.0'
 const PROJECT_HISTORY_LIMIT = 100
 const PROJECT_PERSIST_IDLE_MS = 5000
+
+type CanvasNodeMeasuredSize = { width: number; height: number }
+type GroupSelectedNodesOptions = {
+  nodeIds?: string[]
+  nodeSizesById?: Record<string, CanvasNodeMeasuredSize | undefined>
+}
 
 const emptyProjectHistory = (): ProjectHistoryState => ({
   schemaVersion: PROJECT_HISTORY_SCHEMA_VERSION,
@@ -693,6 +724,14 @@ const withBuiltInFunctions = (project: ProjectState, now: string): ProjectState 
 
 const withRuntimeHistory = (project: ProjectState): ProjectState => ({
   ...project,
+  resources: Object.fromEntries(
+    Object.entries(project.resources).map(([resourceId, resource]) => [
+      resourceId,
+      resource.type === 'text'
+        ? { ...resource, displayMode: normalizeTextDisplayMode(resource.displayMode) }
+        : resource,
+    ]),
+  ),
   history: emptyProjectHistory(),
 })
 
@@ -1049,10 +1088,20 @@ const markNewCanvasNode = (node: CanvasNode, now: string): CanvasNode => ({
   },
 })
 
-const groupBoundsForNodes = (nodes: CanvasNode[], functions: Record<string, GenerationFunction>) => {
-  const padding = 32
+const measuredNodeSize = (size: CanvasNodeMeasuredSize | undefined) => {
+  const width = Number(size?.width)
+  const height = Number(size?.height)
+  return Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0 ? { width, height } : undefined
+}
+
+const groupBoundsForNodes = (
+  nodes: CanvasNode[],
+  functions: Record<string, GenerationFunction>,
+  nodeSizesById?: Record<string, CanvasNodeMeasuredSize | undefined>,
+) => {
+  const padding = 48
   const boxes = nodes.map((node) => {
-    const size = canvasNodeEstimatedSize(node, functions)
+    const size = measuredNodeSize(nodeSizesById?.[node.id]) ?? canvasNodeEstimatedSize(node, functions)
     return {
       left: node.position.x,
       top: node.position.y,
@@ -1111,6 +1160,26 @@ const resourceIdsForNodes = (nodes: CanvasNode[]) =>
       return []
     }),
   )
+
+const resourceIdsForTask = (task: ExecutionTask) =>
+  uniqueIds([
+    ...Object.values(task.inputRefs ?? {}).flatMap((ref) => (isResourceRef(ref) ? [ref.resourceId] : [])),
+    ...Object.values(task.outputRefs ?? {})
+      .flat()
+      .flatMap((ref) => (isResourceRef(ref) ? [ref.resourceId] : [])),
+    ...Object.values(task.inputValuesSnapshot ?? {}).flatMap((snapshot) =>
+      typeof snapshot.resourceId === 'string' ? [snapshot.resourceId] : [],
+    ),
+  ])
+
+const functionSnapshotForTemplateTask = (
+  project: ProjectState,
+  task: ExecutionTask,
+  resources: Record<string, Resource>,
+): GenerationFunction | undefined =>
+  project.functions[task.functionId] ??
+  task.functionSnapshot ??
+  Object.values(resources).find((resource) => resource.metadata?.workflowFunctionId === task.functionId)?.metadata?.functionSnapshot
 
 const nextResultNodePosition = (nodes: CanvasNode[], functionNode: CanvasNode, functionDef?: GenerationFunction) => {
   const existingResultNodes = nodes.filter(
@@ -1791,13 +1860,361 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       void resolvePendingDependencyTasks()
     }
 
+    const failComfyCommandRunInPlace = (
+      item: QueuedComfyCommandRun,
+      code: string,
+      message: string,
+      raw?: unknown,
+    ) => {
+      const failedAt = runtime.now()
+      set((current) => {
+        const task = current.project.tasks[item.taskId]
+        if (!task) return current
+        return {
+          project: {
+            ...current.project,
+            project: { ...current.project.project, updatedAt: failedAt },
+            tasks: {
+              ...current.project.tasks,
+              [item.taskId]: {
+                ...task,
+                status: 'failed',
+                endpointId: item.requiredEndpointId ? undefined : task.endpointId,
+                error: { code, message, raw },
+                updatedAt: failedAt,
+                completedAt: failedAt,
+              },
+            },
+            canvas: {
+              ...current.project.canvas,
+              nodes: current.project.canvas.nodes.map((node) =>
+                node.data.taskId === item.taskId
+                  ? {
+                      ...node,
+                      data: {
+                        ...node.data,
+                        status: 'failed',
+                        endpointId: item.requiredEndpointId ? undefined : node.data.endpointId,
+                        error: { code, message },
+                        completedAt: failedAt,
+                      },
+                    }
+                  : node,
+              ),
+            },
+          },
+        }
+      })
+      void resolvePendingDependencyTasks()
+    }
+
+    const endpointCanRunQueuedComfyItem = (endpoint: ComfyEndpointConfig, item: QueuedComfyRun) =>
+      item.kind === 'command' && item.requiredEndpointId
+        ? endpoint.id === item.requiredEndpointId && endpointSupportsFunction(endpoint, item.functionId)
+        : endpointSupportsFunction(endpoint, item.functionId)
+
     const takeNextQueuedRun = (endpoint: ComfyEndpointConfig) => {
-      const index = comfyQueue.findIndex((item) => endpointSupportsFunction(endpoint, item.functionId))
+      const index = comfyQueue.findIndex((item) => endpointCanRunQueuedComfyItem(endpoint, item))
       if (index < 0) return undefined
       return comfyQueue.splice(index, 1)[0]
     }
 
+    const executeComfyCommandQueueItem = async (item: QueuedComfyCommandRun, endpoint: ComfyEndpointConfig) => {
+      if (taskWasCanceled(item.taskId)) {
+        item.resolveCompletion()
+        return
+      }
+
+      const startedAt = runtime.now()
+      set((current) => ({
+        project: {
+          ...current.project,
+          project: { ...current.project.project, updatedAt: startedAt },
+          tasks: {
+            ...current.project.tasks,
+            [item.taskId]: {
+              ...current.project.tasks[item.taskId]!,
+              status: 'running',
+              endpointId: endpoint.id,
+              startedAt,
+              updatedAt: startedAt,
+            },
+          },
+          canvas: {
+            ...current.project.canvas,
+            nodes: current.project.canvas.nodes.map((node) =>
+              node.data.taskId === item.taskId
+                ? { ...node, data: { ...node.data, endpointId: endpoint.id, status: 'running', startedAt } }
+                : node,
+            ),
+          },
+        },
+      }))
+
+      try {
+        if (taskWasCanceled(item.taskId)) return
+        const client = runtime.createComfyClient(endpoint)
+        const preparedInputValues = await prepareComfyInputValues(
+          client,
+          item.functionDef.inputs,
+          item.inputValues,
+          get().project.resources,
+          (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
+        )
+        if (taskWasCanceled(item.taskId)) return
+        const compiledWithInputs = injectWorkflowInputs(
+          item.functionDef.workflow.rawJson,
+          item.functionDef.inputs,
+          asResolvedInputValues(preparedInputValues),
+          get().project.resources,
+        )
+        const randomized = randomizeWorkflowSeeds(compiledWithInputs, {
+          now: runtime.now,
+          randomInt: runtime.randomInt,
+        })
+        set((current) => ({
+          project: {
+            ...current.project,
+            tasks: {
+              ...current.project.tasks,
+              [item.taskId]: {
+                ...current.project.tasks[item.taskId]!,
+                compiledWorkflowSnapshot: randomized.workflow,
+                requestSnapshot: randomized.workflow,
+                seedPatchLog: randomized.patchLog,
+                updatedAt: runtime.now(),
+              },
+            },
+          },
+        }))
+
+        if (taskWasCanceled(item.taskId)) return
+        const result = await runComfyPrompt(client, randomized.workflow, runtime.comfyRunOptions)
+        if (taskWasCanceled(item.taskId)) return
+        const outputs = extractComfyOutputs(result.history, randomized.workflow, item.functionDef.outputs)
+        const completedAt = runtime.now()
+        const nextResources: Record<string, Resource> = {}
+        const nextAssets: ProjectState['assets'] = {}
+        const nextOutputRefs: Record<string, ResourceRef[]> = {}
+        const extraNodes: CanvasNode[] = []
+
+        for (const [outputIndex, output] of outputs.entries()) {
+          const refs = item.outputRefs[output.key] ? [...item.outputRefs[output.key]] : []
+          let valueIndex = 0
+
+          for (const file of output.files) {
+            let ref = refs[valueIndex]
+            if (!ref) {
+              const resourceId = runtime.idFactory()
+              ref = { resourceId, type: output.type }
+              refs.push(ref)
+              extraNodes.push(
+                markNewCanvasNode(
+                  {
+                    id: resourceNodeId(resourceId),
+                    type: 'resource',
+                    position: nonOverlappingNodePosition(
+                      [...get().project.canvas.nodes, ...extraNodes],
+                      get().project.functions,
+                      commandOutputPosition(item.position, item.runIndex - 1, outputIndex + valueIndex),
+                      { width: 230, height: 180 },
+                    ),
+                    data: {
+                      resourceId,
+                      resourceType: output.type,
+                      functionId: item.functionId,
+                      taskId: item.taskId,
+                      outputKey: output.key,
+                      endpointId: endpoint.id,
+                      status: 'succeeded',
+                      completedAt,
+                    },
+                  },
+                  completedAt,
+                ),
+              )
+            }
+
+            const assetId = runtime.idFactory()
+            const persisted = await persistedComfyFile(client, endpoint, file, outputMimeType(output.type, file.filename))
+            nextAssets[assetId] = {
+              id: assetId,
+              name: file.filename,
+              mimeType: persisted.mimeType,
+              sizeBytes: persisted.sizeBytes,
+              blobUrl: persisted.url,
+              createdAt: completedAt,
+            }
+            nextResources[ref.resourceId] = {
+              id: ref.resourceId,
+              type: output.type,
+              name: file.filename,
+              value: {
+                assetId,
+                url: persisted.url,
+                filename: file.filename,
+                mimeType: persisted.mimeType,
+                sizeBytes: persisted.sizeBytes,
+                comfy: {
+                  endpointId: endpoint.id,
+                  filename: file.filename,
+                  subfolder: file.subfolder ?? '',
+                  type: file.type,
+                },
+              },
+              source: { kind: 'function_output', functionNodeId: item.taskId, taskId: item.taskId, outputKey: output.key },
+              metadata: {
+                workflowFunctionId: item.functionId,
+                functionSnapshot: structuredClone(item.functionDef),
+                endpointId: endpoint.id,
+                createdAt: completedAt,
+              },
+            }
+            valueIndex += 1
+          }
+
+          for (const text of output.texts ?? []) {
+            let ref = refs[valueIndex]
+            if (!ref) {
+              const resourceId = runtime.idFactory()
+              ref = { resourceId, type: 'text' }
+              refs.push(ref)
+              extraNodes.push(
+                markNewCanvasNode(
+                  {
+                    id: resourceNodeId(resourceId),
+                    type: 'resource',
+                    position: nonOverlappingNodePosition(
+                      [...get().project.canvas.nodes, ...extraNodes],
+                      get().project.functions,
+                      commandOutputPosition(item.position, item.runIndex - 1, outputIndex + valueIndex),
+                      { width: 230, height: 180 },
+                    ),
+                    data: {
+                      resourceId,
+                      resourceType: 'text',
+                      functionId: item.functionId,
+                      taskId: item.taskId,
+                      outputKey: output.key,
+                      endpointId: endpoint.id,
+                      status: 'succeeded',
+                      completedAt,
+                    },
+                  },
+                  completedAt,
+                ),
+              )
+            }
+
+            nextResources[ref.resourceId] = {
+              id: ref.resourceId,
+              type: 'text',
+              name: output.key,
+              value: text,
+              source: { kind: 'function_output', functionNodeId: item.taskId, taskId: item.taskId, outputKey: output.key },
+              metadata: {
+                workflowFunctionId: item.functionId,
+                functionSnapshot: structuredClone(item.functionDef),
+                endpointId: endpoint.id,
+                createdAt: completedAt,
+              },
+            }
+            valueIndex += 1
+          }
+
+          nextOutputRefs[output.key] = refs
+        }
+
+        const completedResourceIds = new Set(Object.keys(nextResources))
+        set((current) => ({
+          project: {
+            ...current.project,
+            project: { ...current.project.project, updatedAt: completedAt },
+            resources: { ...current.project.resources, ...nextResources },
+            assets: { ...current.project.assets, ...nextAssets },
+            tasks: {
+              ...current.project.tasks,
+              [item.taskId]: {
+                ...current.project.tasks[item.taskId]!,
+                status: 'succeeded',
+                comfyPromptId: result.promptId,
+                outputRefs: nextOutputRefs,
+                updatedAt: completedAt,
+                completedAt,
+              },
+            },
+            canvas: {
+              ...current.project.canvas,
+              nodes: [
+                ...current.project.canvas.nodes.map((node) =>
+                  completedResourceIds.has(String(node.data.resourceId))
+                    ? {
+                        ...node,
+                        data: {
+                          ...node.data,
+                          endpointId: endpoint.id,
+                          resourceType:
+                            nextResources[String(node.data.resourceId)]?.type ?? node.data.resourceType,
+                          status: 'succeeded',
+                          completedAt,
+                        },
+                      }
+                    : node,
+                ),
+                ...extraNodes,
+              ],
+            },
+          },
+        }))
+        void resolvePendingDependencyTasks()
+      } catch (err) {
+        if (taskWasCanceled(item.taskId)) return
+        const failedAt = runtime.now()
+        const message = err instanceof Error ? err.message : 'ComfyUI execution failed'
+        set((current) => ({
+          project: {
+            ...current.project,
+            project: { ...current.project.project, updatedAt: failedAt },
+            tasks: {
+              ...current.project.tasks,
+              [item.taskId]: {
+                ...current.project.tasks[item.taskId]!,
+                status: 'failed',
+                error: { code: 'function_command_failed', message, raw: err },
+                updatedAt: failedAt,
+                completedAt: failedAt,
+              },
+            },
+            canvas: {
+              ...current.project.canvas,
+              nodes: current.project.canvas.nodes.map((node) =>
+                node.data.taskId === item.taskId
+                  ? {
+                      ...node,
+                      data: {
+                        ...node.data,
+                        status: 'failed',
+                        error: { code: 'function_command_failed', message },
+                        completedAt: failedAt,
+                      },
+                    }
+                  : node,
+              ),
+            },
+          },
+        }))
+        void resolvePendingDependencyTasks()
+      } finally {
+        item.resolveCompletion()
+      }
+    }
+
     const executeComfyQueueItem = async (item: QueuedComfyRun, endpoint: ComfyEndpointConfig) => {
+      if (item.kind === 'command') {
+        await executeComfyCommandQueueItem(item, endpoint)
+        return
+      }
+
       if (taskWasCanceled(item.taskId)) {
         item.resolveCompletion()
         return
@@ -4527,15 +4944,19 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       const endpoints = get().project.comfy.endpoints.filter(endpointIsWorkerEligible)
       for (let index = comfyQueue.length - 1; index >= 0; index -= 1) {
         const queuedRun = comfyQueue[index]!
-        if (endpoints.some((endpoint) => endpointSupportsFunction(endpoint, queuedRun.functionId))) continue
+        if (endpoints.some((endpoint) => endpointCanRunQueuedComfyItem(endpoint, queuedRun))) continue
         comfyQueue.splice(index, 1)
-        failResultRunInPlace(queuedRun.resultNodeId, queuedRun.taskId, 'endpoint_unavailable', 'No eligible ComfyUI endpoint')
+        if (queuedRun.kind === 'command') {
+          failComfyCommandRunInPlace(queuedRun, 'endpoint_unavailable', 'No eligible ComfyUI endpoint')
+        } else {
+          failResultRunInPlace(queuedRun.resultNodeId, queuedRun.taskId, 'endpoint_unavailable', 'No eligible ComfyUI endpoint')
+        }
         queuedRun.resolveCompletion()
       }
 
       for (const endpoint of endpoints) {
         if (activeComfyWorkerEndpointIds.has(endpoint.id)) continue
-        if (!comfyQueue.some((item) => endpointSupportsFunction(endpoint, item.functionId))) continue
+        if (!comfyQueue.some((item) => endpointCanRunQueuedComfyItem(endpoint, item))) continue
 
         activeComfyWorkerEndpointIds.add(endpoint.id)
         void (async () => {
@@ -4687,6 +5108,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
     return {
       project: defaultProject,
       projectLibrary: { [defaultProject.project.id]: defaultProject },
+      projectPersistenceReady: true,
       undoStack: [],
       selectedNodeIds: [],
 
@@ -4854,6 +5276,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         id: resourceId,
         type: 'text',
         name,
+        displayMode: 'plaintext',
         value,
         source: { kind: 'manual_input' },
         metadata: { createdAt: now },
@@ -5066,20 +5489,69 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       const now = runtime.now()
       set((state) => {
         const resource = state.project.resources[resourceId]
-        if (!resource || resource.type !== 'text') return state
+        if (!resource || resource.type !== 'text' || resource.value === value) return state
+        const nodeId = state.project.canvas.nodes.find(
+          (node) => node.type === 'resource' && node.data.resourceId === resourceId,
+        )?.id
+        const nextProject = {
+          ...ensureProjectHistory(state.project),
+          project: { ...state.project.project, updatedAt: now },
+          resources: {
+            ...state.project.resources,
+            [resourceId]: { ...resource, value },
+          },
+        }
 
         return {
-          project: {
-            ...state.project,
-            project: { ...state.project.project, updatedAt: now },
-            resources: {
-              ...state.project.resources,
-              [resourceId]: {
-                ...resource,
-                value,
-              },
+          project: projectWithRecordedHistory(state.project, nextProject, now, {
+            label: 'Edit text asset',
+            transactionType: 'asset',
+            nodeIds: nodeId ? [nodeId] : [],
+            assetIds: [resourceId],
+            preview: {
+              title: 'Edit text asset',
+              subtitle: resource.name,
+              nodeIds: nodeId ? [nodeId] : [],
+              assetIds: [resourceId],
             },
+          }),
+        }
+      })
+    },
+
+    updateTextResourceDisplayMode: (resourceId, displayMode) => {
+      const normalizedMode = normalizeTextDisplayMode(displayMode)
+      const now = runtime.now()
+      set((state) => {
+        const resource = state.project.resources[resourceId]
+        if (!resource || resource.type !== 'text' || normalizeTextDisplayMode(resource.displayMode) === normalizedMode) {
+          return state
+        }
+        const nodeId = state.project.canvas.nodes.find(
+          (node) => node.type === 'resource' && node.data.resourceId === resourceId,
+        )?.id
+        const nextProject = {
+          ...ensureProjectHistory(state.project),
+          project: { ...state.project.project, updatedAt: now },
+          resources: {
+            ...state.project.resources,
+            [resourceId]: { ...resource, displayMode: normalizedMode },
           },
+        }
+
+        return {
+          project: projectWithRecordedHistory(state.project, nextProject, now, {
+            label: 'Change text display mode',
+            transactionType: 'settings',
+            nodeIds: nodeId ? [nodeId] : [],
+            assetIds: [resourceId],
+            preview: {
+              title: 'Change text display mode',
+              subtitle: normalizedMode,
+              nodeIds: nodeId ? [nodeId] : [],
+              assetIds: [resourceId],
+            },
+          }),
         }
       })
     },
@@ -5103,6 +5575,40 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
               },
             },
           },
+        }
+      })
+    },
+
+    updateBooleanResourceValue: (resourceId, value) => {
+      const now = runtime.now()
+      set((state) => {
+        const resource = state.project.resources[resourceId]
+        if (!resource || resource.type !== 'boolean' || resource.value === value) return state
+        const nodeId = state.project.canvas.nodes.find(
+          (node) => node.type === 'resource' && node.data.resourceId === resourceId,
+        )?.id
+        const nextProject = {
+          ...ensureProjectHistory(state.project),
+          project: { ...state.project.project, updatedAt: now },
+          resources: {
+            ...state.project.resources,
+            [resourceId]: { ...resource, value },
+          },
+        }
+
+        return {
+          project: projectWithRecordedHistory(state.project, nextProject, now, {
+            label: 'Edit boolean asset',
+            transactionType: 'asset',
+            nodeIds: nodeId ? [nodeId] : [],
+            assetIds: [resourceId],
+            preview: {
+              title: 'Edit boolean asset',
+              subtitle: value ? 'true' : 'false',
+              nodeIds: nodeId ? [nodeId] : [],
+              assetIds: [resourceId],
+            },
+          }),
         }
       })
     },
@@ -5479,6 +5985,21 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       }
 
       const hasPendingDependencies = hasPendingInputRefs(runtimeInputValues)
+      const preferredComfyEndpointId =
+        functionDef.workflow.format === 'comfyui_api_json' && !state.project.functions[functionId]
+          ? functionDef.workflow.editor?.endpointId
+          : undefined
+      const queuedComfyEndpointId =
+        !hasPendingDependencies && functionDef.workflow.format === 'comfyui_api_json'
+          ? preferredComfyEndpointId
+            ? preferredComfyEndpointId
+            : (() => {
+                const workerEndpoints = state.project.comfy.endpoints.filter(
+                  (endpoint) => endpointIsWorkerEligible(endpoint) && endpointSupportsFunction(endpoint, functionId),
+                )
+                return workerEndpoints.length === 1 ? workerEndpoints[0]!.id : undefined
+              })()
+          : undefined
       const replaceResourceId =
         options?.replace?.resourceId && state.project.resources[options.replace.resourceId]
           ? options.replace.resourceId
@@ -5501,6 +6022,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           taskId: string
           outputKey: string
           status: ExecutionTask['status']
+          endpointId?: string
         }
       > = {}
       const queuedLocalRuns: Array<{
@@ -5586,6 +6108,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
               taskId,
               outputKey: output.key,
               status: hasPendingDependencies ? 'pending' : 'queued',
+              endpointId: queuedComfyEndpointId,
             }
           } else {
             const nodePosition = nonOverlappingNodePosition(
@@ -5606,6 +6129,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
                     functionId,
                     taskId,
                     outputKey: output.key,
+                    endpointId: queuedComfyEndpointId,
                     status: hasPendingDependencies ? 'pending' : 'queued',
                   },
                 },
@@ -5630,7 +6154,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           workflowTemplateSnapshot: functionDef.workflow.rawJson,
           compiledWorkflowSnapshot: functionDef.workflow.rawJson,
           seedPatchLog: [],
-          endpointId: functionDef.workflow.format === 'local_transform' ? 'local' : undefined,
+          endpointId: functionDef.workflow.format === 'local_transform' ? 'local' : queuedComfyEndpointId,
           outputRefs,
           createdAt: now,
           updatedAt: now,
@@ -6165,222 +6689,35 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         }
       }
 
-      for (const queuedRun of queuedComfyRuns) {
-        const preferredEndpointId = functionDef.workflow.editor?.endpointId
-        const endpoint =
-          preferredEndpointId && !get().project.functions[functionId]
-            ? get().project.comfy.endpoints.find(
-                (item) => item.id === preferredEndpointId && endpointIsWorkerEligible(item),
-              )
-            : selectEndpoint(get().project.comfy.endpoints, activeJobs(get().project.tasks), functionId)
-        if (!endpoint) {
-          failCommandTask(queuedRun.taskId, new Error('No eligible ComfyUI endpoint'))
-          continue
-        }
-
-        markCommandTaskRunning(queuedRun.taskId, endpoint.id)
-        try {
-          const client = runtime.createComfyClient(endpoint)
-          const preparedInputValues = await prepareComfyInputValues(
-            client,
-            functionDef.inputs,
-            queuedRun.inputValues,
-            get().project.resources,
-            (resource) => readProjectResourceBlob(get().project, resource, runtime.createComfyClient),
-          )
-          const compiledWithInputs = injectWorkflowInputs(
-            functionDef.workflow.rawJson,
-            functionDef.inputs,
-            asResolvedInputValues(preparedInputValues),
-            get().project.resources,
-          )
-          const randomized = randomizeWorkflowSeeds(compiledWithInputs, {
-            now: runtime.now,
-            randomInt: runtime.randomInt,
+      if (queuedComfyRuns.length > 0) {
+        const completionPromises: Promise<void>[] = []
+        const queuedItems = queuedComfyRuns.map((queuedRun): QueuedComfyCommandRun => {
+          let resolveCompletion: () => void = () => undefined
+          const completion = new Promise<void>((resolve) => {
+            resolveCompletion = resolve
           })
-          set((current) => ({
-            project: {
-              ...current.project,
-              tasks: {
-                ...current.project.tasks,
-                [queuedRun.taskId]: {
-                  ...current.project.tasks[queuedRun.taskId]!,
-                  compiledWorkflowSnapshot: randomized.workflow,
-                  requestSnapshot: randomized.workflow,
-                  seedPatchLog: randomized.patchLog,
-                  updatedAt: runtime.now(),
-                },
-              },
-            },
-          }))
-
-          const result = await runComfyPrompt(client, randomized.workflow, runtime.comfyRunOptions)
-          const outputs = extractComfyOutputs(result.history, randomized.workflow, functionDef.outputs)
-          const completedAt = runtime.now()
-          const nextResources: Record<string, Resource> = {}
-          const nextAssets: ProjectState['assets'] = {}
-          const nextOutputRefs: Record<string, ResourceRef[]> = {}
-          const extraNodes: CanvasNode[] = []
-
-          for (const [outputIndex, output] of outputs.entries()) {
-            const refs = queuedRun.outputRefs[output.key] ? [...queuedRun.outputRefs[output.key]] : []
-            let valueIndex = 0
-
-            for (const file of output.files) {
-              let ref = refs[valueIndex]
-              if (!ref) {
-                const resourceId = runtime.idFactory()
-                ref = { resourceId, type: output.type }
-                refs.push(ref)
-                extraNodes.push(
-                  markNewCanvasNode(
-                    {
-                      id: resourceNodeId(resourceId),
-                      type: 'resource',
-                      position: nonOverlappingNodePosition(
-                        [...get().project.canvas.nodes, ...extraNodes],
-                        get().project.functions,
-                        commandOutputPosition(position, queuedRun.runIndex - 1, outputIndex + valueIndex),
-                        { width: 230, height: 180 },
-                      ),
-                      data: {
-                        resourceId,
-                        resourceType: output.type,
-                        functionId,
-                        taskId: queuedRun.taskId,
-                        outputKey: output.key,
-                        status: 'succeeded',
-                        completedAt,
-                      },
-                    },
-                    completedAt,
-                  ),
-                )
-              }
-
-              const assetId = runtime.idFactory()
-              const persisted = await persistedComfyFile(client, endpoint, file, outputMimeType(output.type, file.filename))
-              nextAssets[assetId] = {
-                id: assetId,
-                name: file.filename,
-                mimeType: persisted.mimeType,
-                sizeBytes: persisted.sizeBytes,
-                blobUrl: persisted.url,
-                createdAt: completedAt,
-              }
-              nextResources[ref.resourceId] = {
-                id: ref.resourceId,
-                type: output.type,
-                name: file.filename,
-                value: {
-                  assetId,
-                  url: persisted.url,
-                  filename: file.filename,
-                  mimeType: persisted.mimeType,
-                  sizeBytes: persisted.sizeBytes,
-                  comfy: {
-                    endpointId: endpoint.id,
-                    filename: file.filename,
-                    subfolder: file.subfolder ?? '',
-                    type: file.type,
-                  },
-                },
-                source: { kind: 'function_output', functionNodeId: queuedRun.taskId, taskId: queuedRun.taskId, outputKey: output.key },
-                metadata: {
-                  workflowFunctionId: functionId,
-                  functionSnapshot: structuredClone(functionDef),
-                  endpointId: endpoint.id,
-                  createdAt: completedAt,
-                },
-              }
-              valueIndex += 1
-            }
-
-            for (const text of output.texts ?? []) {
-              let ref = refs[valueIndex]
-              if (!ref) {
-                const resourceId = runtime.idFactory()
-                ref = { resourceId, type: 'text' }
-                refs.push(ref)
-                extraNodes.push(
-                  markNewCanvasNode(
-                    {
-                      id: resourceNodeId(resourceId),
-                      type: 'resource',
-                      position: nonOverlappingNodePosition(
-                        [...get().project.canvas.nodes, ...extraNodes],
-                        get().project.functions,
-                        commandOutputPosition(position, queuedRun.runIndex - 1, outputIndex + valueIndex),
-                        { width: 230, height: 180 },
-                      ),
-                      data: {
-                        resourceId,
-                        resourceType: 'text',
-                        functionId,
-                        taskId: queuedRun.taskId,
-                        outputKey: output.key,
-                        status: 'succeeded',
-                        completedAt,
-                      },
-                    },
-                    completedAt,
-                  ),
-                )
-              }
-
-              nextResources[ref.resourceId] = {
-                id: ref.resourceId,
-                type: 'text',
-                name: output.key,
-                value: text,
-                source: { kind: 'function_output', functionNodeId: queuedRun.taskId, taskId: queuedRun.taskId, outputKey: output.key },
-                metadata: {
-                  workflowFunctionId: functionId,
-                  functionSnapshot: structuredClone(functionDef),
-                  endpointId: endpoint.id,
-                  createdAt: completedAt,
-                },
-              }
-              valueIndex += 1
-            }
-
-            nextOutputRefs[output.key] = refs
+          completionPromises.push(completion)
+          return {
+            kind: 'command',
+            taskId: queuedRun.taskId,
+            functionNodeId: queuedRun.taskId,
+            functionId,
+            requiredEndpointId: preferredComfyEndpointId,
+            functionDef,
+            inputValues: queuedRun.inputValues,
+            outputRefs: queuedRun.outputRefs,
+            position,
+            runIndex: queuedRun.runIndex,
+            runTotal: normalizedRuns,
+            createdAt: now,
+            completion,
+            resolveCompletion,
           }
+        })
 
-          const completedResourceIds = new Set(Object.keys(nextResources))
-          set((current) => ({
-            project: {
-              ...current.project,
-              project: { ...current.project.project, updatedAt: completedAt },
-              resources: { ...current.project.resources, ...nextResources },
-              assets: { ...current.project.assets, ...nextAssets },
-              tasks: {
-                ...current.project.tasks,
-                [queuedRun.taskId]: {
-                  ...current.project.tasks[queuedRun.taskId]!,
-                  status: 'succeeded',
-                  comfyPromptId: result.promptId,
-                  outputRefs: nextOutputRefs,
-                  updatedAt: completedAt,
-                  completedAt,
-                },
-              },
-              canvas: {
-                ...current.project.canvas,
-                nodes: [
-                  ...current.project.canvas.nodes.map((node) =>
-                    completedResourceIds.has(String(node.data.resourceId))
-                      ? { ...node, data: { ...node.data, status: 'succeeded', completedAt } }
-                      : node,
-                  ),
-                  ...extraNodes,
-                ],
-              },
-            },
-          }))
-        } catch (err) {
-          failCommandTask(queuedRun.taskId, err)
-        }
+        comfyQueue.push(...queuedItems)
+        ensureComfyWorkers()
+        await Promise.all(completionPromises)
       }
 
       for (const queuedRun of queuedOpenAiRuns) {
@@ -8000,13 +8337,15 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       set((state) => deleteNodesFromState(state, nodeIds, now))
     },
 
-    groupSelectedNodes: () => {
+    groupSelectedNodes: (options) => {
       const state = get()
-      const selectedIds = state.selectedNodeIds.length
-        ? state.selectedNodeIds
-        : state.selectedNodeId
-          ? [state.selectedNodeId]
-          : []
+      const selectedIds = options?.nodeIds?.length
+        ? uniqueIds(options.nodeIds)
+        : state.selectedNodeIds.length
+          ? state.selectedNodeIds
+          : state.selectedNodeId
+            ? [state.selectedNodeId]
+            : []
       const childNodes = selectedIds
         .map((nodeId) => state.project.canvas.nodes.find((node) => node.id === nodeId))
         .filter((node): node is CanvasNode => Boolean(node && node.type !== 'group'))
@@ -8015,7 +8354,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       const groupId = runtime.idFactory()
       const groupNodeId = `node_${groupId}`
       const now = runtime.now()
-      const bounds = groupBoundsForNodes(childNodes, state.project.functions)
+      const bounds = groupBoundsForNodes(childNodes, state.project.functions, options?.nodeSizesById)
       const childNodeIds = childNodes.map((node) => node.id)
       const groupNode: CanvasNode = {
         id: groupNodeId,
@@ -8114,11 +8453,29 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         .filter((edge) => selectedNodeSet.has(edge.source.nodeId) && selectedNodeSet.has(edge.target.nodeId))
         .map((edge) => structuredClone(edge))
       const resourceIds = resourceIdsForNodes(nodes)
+      const selectedResourceIds = new Set(resourceIds)
       const resources = Object.fromEntries(
         resourceIds
           .map((resourceId) => state.project.resources[resourceId])
           .filter((resource): resource is Resource => Boolean(resource))
           .map((resource) => [resource.id, structuredClone(resource)]),
+      )
+      const tasks = Object.fromEntries(
+        Object.entries(state.project.tasks)
+          .filter(([taskId, task]) => {
+            const isDirectResourceTask = Object.values(resources).some((resource) => resource.source.taskId === taskId)
+            return isDirectResourceTask || resourceIdsForTask(task).some((resourceId) => selectedResourceIds.has(resourceId))
+          })
+          .map(([taskId, task]) => [taskId, structuredClone(task)]),
+      )
+      const functions = Object.fromEntries(
+        uniqueIds(Object.values(tasks).map((task) => task.functionId))
+          .map((functionId) => {
+            const task = Object.values(tasks).find((item) => item.functionId === functionId)
+            const functionDef = task ? functionSnapshotForTemplateTask(state.project, task, resources) : undefined
+            return functionDef ? [functionId, structuredClone(functionDef)] : undefined
+          })
+          .filter((entry): entry is [string, GenerationFunction] => Boolean(entry)),
       )
       const assetIds = uniqueIds(Object.values(resources).map(mediaAssetId).filter((assetId): assetId is string => Boolean(assetId)))
       const assets = Object.fromEntries(
@@ -8138,6 +8495,8 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         edges,
         resources,
         assets,
+        functions,
+        tasks,
         inputResourceIds: resourceIds,
         outputResourceIds: resourceIds,
       }
@@ -8184,19 +8543,79 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       const offset = { x: targetPosition.x - minX, y: targetPosition.y - minY }
       const nodeIdMap = new Map<string, string>()
       const resourceIdMap = new Map<string, string>()
+      const taskIdMap = new Map<string, string>()
       const clonedResources: Record<string, Resource> = {}
       const clonedAssets: Record<string, NonNullable<CanvasTemplate['assets'][string]>> = {}
 
       for (const resource of Object.values(template.resources)) {
         const nextResourceId = runtime.idFactory()
         resourceIdMap.set(resource.id, nextResourceId)
+      }
+      for (const taskId of Object.keys(template.tasks ?? {})) taskIdMap.set(taskId, runtime.idFactory())
+      for (const node of template.nodes) {
+        if (node.type === 'resource' && typeof node.data.resourceId === 'string') {
+          const nextResourceId = resourceIdMap.get(node.data.resourceId)
+          nodeIdMap.set(node.id, nextResourceId ? `node_${nextResourceId}` : `node_${runtime.idFactory()}`)
+        } else {
+          nodeIdMap.set(node.id, `node_${runtime.idFactory()}`)
+        }
+      }
+
+      const clonedNodes = template.nodes.map((node) => {
+        const clonedNode = structuredClone(node)
+        if (node.type === 'resource' && typeof node.data.resourceId === 'string') {
+          const nextResourceId = resourceIdMap.get(node.data.resourceId)
+          clonedNode.data = {
+            ...clonedNode.data,
+            resourceId: nextResourceId ?? clonedNode.data.resourceId,
+          }
+        }
+        const nextNodeId = nodeIdMap.get(node.id) ?? `node_${runtime.idFactory()}`
+        clonedNode.id = nextNodeId
+        if (Array.isArray(clonedNode.data.childNodeIds)) {
+          clonedNode.data = {
+            ...clonedNode.data,
+            childNodeIds: clonedNode.data.childNodeIds
+              .map((childNodeId) => (typeof childNodeId === 'string' ? nodeIdMap.get(childNodeId) : undefined))
+              .filter((childNodeId): childNodeId is string => Boolean(childNodeId)),
+          }
+        }
+        if (typeof clonedNode.data.taskId === 'string' && taskIdMap.has(clonedNode.data.taskId)) {
+          clonedNode.data = { ...clonedNode.data, taskId: taskIdMap.get(clonedNode.data.taskId) }
+        }
+        if (typeof clonedNode.data.sourceFunctionNodeId === 'string' && nodeIdMap.has(clonedNode.data.sourceFunctionNodeId)) {
+          clonedNode.data = { ...clonedNode.data, sourceFunctionNodeId: nodeIdMap.get(clonedNode.data.sourceFunctionNodeId) }
+        }
+        if (Array.isArray(clonedNode.data.resources)) {
+          clonedNode.data = {
+            ...clonedNode.data,
+            resources: clonedNode.data.resources.map((resource) =>
+              typeof resource === 'object' && resource !== null && 'resourceId' in resource
+                ? {
+                    ...resource,
+                    resourceId: resourceIdMap.get(String((resource as { resourceId: unknown }).resourceId)) ?? String((resource as { resourceId: unknown }).resourceId),
+                  }
+                : resource,
+            ),
+          }
+        }
+        clonedNode.position = {
+          x: node.position.x + offset.x,
+          y: node.position.y + offset.y,
+        }
+        return clonedNode
+      })
+
+      for (const resource of Object.values(template.resources)) {
+        const nextResourceId = resourceIdMap.get(resource.id)
+        if (!nextResourceId) continue
         const originalAssetId = mediaAssetId(resource)
         const value = structuredClone(resource.value)
         if (originalAssetId && typeof value === 'object' && value !== null && 'assetId' in value) {
           const sourceAsset = template.assets[originalAssetId]
-          const nextAssetId = runtime.idFactory()
-          ;(value as { assetId: string }).assetId = nextAssetId
           if (sourceAsset) {
+            const nextAssetId = runtime.idFactory()
+            ;(value as { assetId: string }).assetId = nextAssetId
             clonedAssets[nextAssetId] = {
               ...structuredClone(sourceAsset),
               id: nextAssetId,
@@ -8204,43 +8623,92 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             }
           }
         }
+        const taskId = resource.source.taskId ? taskIdMap.get(resource.source.taskId) : undefined
+        const source =
+          resource.source.kind === 'function_output' && taskId
+            ? {
+                ...resource.source,
+                taskId,
+                functionNodeId: resource.source.functionNodeId
+                  ? nodeIdMap.get(resource.source.functionNodeId) ?? resource.source.functionNodeId
+                  : undefined,
+                resultGroupNodeId: resource.source.resultGroupNodeId
+                  ? nodeIdMap.get(resource.source.resultGroupNodeId) ?? resource.source.resultGroupNodeId
+                  : undefined,
+              }
+            : {
+                kind: 'duplicated' as const,
+                parentResourceId: resource.id,
+              }
         clonedResources[nextResourceId] = {
           ...structuredClone(resource),
           id: nextResourceId,
           name: `${resource.name ?? 'Resource'} Copy`,
           value,
-          source: {
-            kind: 'duplicated',
-            parentResourceId: resource.id,
-          },
+          source,
           metadata: {
             ...resource.metadata,
+            functionSnapshot: resource.metadata?.functionSnapshot
+              ? structuredClone(resource.metadata.functionSnapshot)
+              : resource.metadata?.workflowFunctionId
+                ? structuredClone(template.functions?.[resource.metadata.workflowFunctionId])
+                : undefined,
             createdAt: now,
           },
         }
       }
 
-      const clonedNodes = template.nodes.map((node) => {
-        const clonedNode = structuredClone(node)
-        let nextNodeId: string
-        if (node.type === 'resource' && typeof node.data.resourceId === 'string') {
-          const nextResourceId = resourceIdMap.get(node.data.resourceId)
-          nextNodeId = nextResourceId ? `node_${nextResourceId}` : `node_${runtime.idFactory()}`
-          clonedNode.data = {
-            ...clonedNode.data,
-            resourceId: nextResourceId ?? clonedNode.data.resourceId,
-          }
-        } else {
-          nextNodeId = `node_${runtime.idFactory()}`
-        }
-        nodeIdMap.set(node.id, nextNodeId)
-        clonedNode.id = nextNodeId
-        clonedNode.position = {
-          x: node.position.x + offset.x,
-          y: node.position.y + offset.y,
-        }
-        return clonedNode
+      const remapResourceRef = (ref: ResourceRef): ResourceRef => ({
+        ...ref,
+        resourceId: resourceIdMap.get(ref.resourceId) ?? ref.resourceId,
       })
+      const remapInputRef = (ref: InputResourceRef): InputResourceRef => {
+        if (isResourceRef(ref)) return remapResourceRef(ref)
+        if (isPendingResourceRef(ref)) {
+          return {
+            ...ref,
+            pendingTaskId: taskIdMap.get(ref.pendingTaskId) ?? ref.pendingTaskId,
+          }
+        }
+        return ref
+      }
+      const remapInputSnapshot = (snapshot: ExecutionInputSnapshot): ExecutionInputSnapshot => ({
+        ...structuredClone(snapshot),
+        ...(snapshot.resourceId ? { resourceId: resourceIdMap.get(snapshot.resourceId) ?? snapshot.resourceId } : {}),
+        ...(snapshot.pendingTaskId ? { pendingTaskId: taskIdMap.get(snapshot.pendingTaskId) ?? snapshot.pendingTaskId } : {}),
+      })
+      const remapTaskResourceSnapshot = (resource: Resource) => {
+        const nextResourceId = resourceIdMap.get(resource.id)
+        return nextResourceId && clonedResources[nextResourceId] ? structuredClone(clonedResources[nextResourceId]) : structuredClone(resource)
+      }
+      const clonedTasks: Record<string, ExecutionTask> = Object.fromEntries(
+        Object.entries(template.tasks ?? {}).map(([taskId, task]) => {
+          const nextTaskId = taskIdMap.get(taskId) ?? runtime.idFactory()
+          return [
+            nextTaskId,
+            {
+              ...structuredClone(task),
+              id: nextTaskId,
+              functionNodeId: nodeIdMap.get(task.functionNodeId) ?? task.functionNodeId,
+              inputRefs: Object.fromEntries(Object.entries(task.inputRefs ?? {}).map(([key, ref]) => [key, remapInputRef(ref)])),
+              inputSnapshot: Object.fromEntries(
+                Object.entries(task.inputSnapshot ?? {}).map(([key, resource]) => [key, remapTaskResourceSnapshot(resource)]),
+              ),
+              inputValuesSnapshot: task.inputValuesSnapshot
+                ? Object.fromEntries(Object.entries(task.inputValuesSnapshot).map(([key, snapshot]) => [key, remapInputSnapshot(snapshot)]))
+                : undefined,
+              functionSnapshot: task.functionSnapshot
+                ? structuredClone(task.functionSnapshot)
+                : task.functionId
+                  ? structuredClone(template.functions?.[task.functionId])
+                  : undefined,
+              outputRefs: Object.fromEntries(
+                Object.entries(task.outputRefs ?? {}).map(([key, refs]) => [key, refs.map((ref) => remapResourceRef(ref))]),
+              ),
+            },
+          ]
+        }),
+      )
 
       const clonedEdges: CanvasEdge[] = template.edges
         .flatMap((edge): CanvasEdge[] => {
@@ -8317,6 +8785,8 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           project: { ...current.project.project, updatedAt: now },
           assets: { ...current.project.assets, ...clonedAssets },
           resources: { ...current.project.resources, ...clonedResources },
+          functions: { ...(template.functions ?? {}), ...current.project.functions },
+          tasks: { ...current.project.tasks, ...clonedTasks },
           canvas: {
             ...current.project.canvas,
             nodes: [...current.project.canvas.nodes, ...placedClonedNodes, groupNode],
@@ -8530,10 +9000,10 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         return selectedState(nextNodeIds)
       }),
 
-    addEndpoint: () => {
+    addEndpoint: (patch) => {
       const endpointId = runtime.idFactory()
       const now = runtime.now()
-      const endpoint: ComfyEndpointConfig = {
+      const baseEndpoint: ComfyEndpointConfig = {
         id: endpointId,
         name: `ComfyUI ${get().project.comfy.endpoints.length + 1}`,
         baseUrl: 'http://127.0.0.1:8188',
@@ -8545,6 +9015,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         capabilities: { supportedFunctions: comfyWorkflowFunctionIds(get().project.functions) },
         health: { status: 'unknown' },
       }
+      const endpoint: ComfyEndpointConfig = { ...baseEndpoint, ...patch, id: endpointId, health: { status: 'unknown' } }
 
       set((state) => ({
         project: {
@@ -8556,6 +9027,8 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           },
         },
       }))
+      ensureComfyWorkers()
+      return endpointId
     },
 
     updateEndpoint: (endpointId, patch) => {
@@ -8684,7 +9157,11 @@ const serializeProjectLibrary = (state: ProjectStoreState): ProjectLibraryPackag
 
 const serializedProjectLibraryKey = (state: ProjectStoreState) => JSON.stringify(serializeProjectLibrary(state))
 
-const loadProjectLibrary = (payload: ProjectLibraryPackage | undefined, now: string) => {
+const loadProjectLibrary = (
+  payload: ProjectLibraryPackage | undefined,
+  now: string,
+  applyState: (state: Partial<ProjectStoreState>) => void = (state) => projectStore.setState(state),
+) => {
   const projectEntries = Object.entries(payload?.projects ?? {})
   if (projectEntries.length === 0) return false
 
@@ -8694,7 +9171,7 @@ const loadProjectLibrary = (payload: ProjectLibraryPackage | undefined, now: str
   const activeProject = projects[payload?.currentProjectId ?? ''] ?? Object.values(projects)[0]
   if (!activeProject) return false
 
-  projectStore.setState({
+  applyState({
     project: activeProject,
     projectLibrary: projects,
     ...selectedState([]),
@@ -8702,16 +9179,18 @@ const loadProjectLibrary = (payload: ProjectLibraryPackage | undefined, now: str
   return true
 }
 
-const loadIndexedDbProjectLibrary = () =>
+const loadIndexedDbProjectLibrary = (
+  applyState: (state: Partial<ProjectStoreState>) => void = (state) => projectStore.setState(state),
+) =>
   getIdb<ProjectLibraryPackage>(PROJECT_LIBRARY_STORAGE_KEY)
     .then(async (savedLibrary) => {
       const now = new Date().toISOString()
-      if (loadProjectLibrary(savedLibrary, now)) return
+      if (loadProjectLibrary(savedLibrary, now, applyState)) return
 
       const savedProject = await getIdb<ProjectState>(PROJECT_STORAGE_KEY)
       if (!savedProject) return
       const project = withRuntimeHistory(withBuiltInFunctions(savedProject, now))
-      projectStore.setState({
+      applyState({
         project,
         projectLibrary: { [project.project.id]: project },
         ...selectedState([]),
@@ -8722,15 +9201,36 @@ const loadIndexedDbProjectLibrary = () =>
 const startIndexedDbProjectPersistence = () => {
   let saveTimer: number | undefined
   let loadSettled = false
+  let suppressSaveScheduling = false
   let lastSavedLibraryKey: string | undefined
+  let scheduledLibraryKey: string | undefined
   let saveInFlight = false
 
+  projectStore.setState({ projectPersistenceReady: false })
+
+  const applyWithoutSchedulingSave = (state: Partial<ProjectStoreState>) => {
+    suppressSaveScheduling = true
+    projectStore.setState(state)
+    suppressSaveScheduling = false
+  }
+
+  const applyLoadedState = (state: Partial<ProjectStoreState>) => {
+    applyWithoutSchedulingSave(state)
+  }
+
   const scheduleSaveProjectLibrary = (state: ProjectStoreState) => {
+    if (suppressSaveScheduling) return
     if (!loadSettled) return
 
+    const nextLibraryKey = serializedProjectLibraryKey(state)
+    if (nextLibraryKey === lastSavedLibraryKey) return
+    if (saveTimer !== undefined && nextLibraryKey === scheduledLibraryKey) return
+
     if (saveTimer !== undefined) window.clearTimeout(saveTimer)
+    scheduledLibraryKey = nextLibraryKey
     saveTimer = window.setTimeout(() => {
       saveTimer = undefined
+      scheduledLibraryKey = undefined
       runProjectLibrarySave(state)
     }, PROJECT_PERSIST_IDLE_MS)
   }
@@ -8760,9 +9260,10 @@ const startIndexedDbProjectPersistence = () => {
     })
   }
 
-  void loadIndexedDbProjectLibrary().finally(() => {
+  void loadIndexedDbProjectLibrary(applyLoadedState).finally(() => {
     loadSettled = true
     lastSavedLibraryKey = serializedProjectLibraryKey(projectStore.getState())
+    applyWithoutSchedulingSave({ projectPersistenceReady: true })
   })
 
   projectStore.subscribe((state) => scheduleSaveProjectLibrary(state))
@@ -8777,15 +9278,36 @@ const startIndexedDbProjectPersistence = () => {
 const startDesktopProjectPersistence = (storage: DesktopProjectStorage) => {
   let saveTimer: number | undefined
   let loadSettled = false
+  let suppressSaveScheduling = false
   let lastSavedLibraryKey: string | undefined
+  let scheduledLibraryKey: string | undefined
   let saveInFlight = false
 
+  projectStore.setState({ projectPersistenceReady: false })
+
+  const applyWithoutSchedulingSave = (state: Partial<ProjectStoreState>) => {
+    suppressSaveScheduling = true
+    projectStore.setState(state)
+    suppressSaveScheduling = false
+  }
+
+  const applyLoadedState = (state: Partial<ProjectStoreState>) => {
+    applyWithoutSchedulingSave(state)
+  }
+
   const scheduleSaveProjectLibrary = (state: ProjectStoreState) => {
+    if (suppressSaveScheduling) return
     if (!loadSettled) return
 
+    const nextLibraryKey = serializedProjectLibraryKey(state)
+    if (nextLibraryKey === lastSavedLibraryKey) return
+    if (saveTimer !== undefined && nextLibraryKey === scheduledLibraryKey) return
+
     if (saveTimer !== undefined) window.clearTimeout(saveTimer)
+    scheduledLibraryKey = nextLibraryKey
     saveTimer = window.setTimeout(() => {
       saveTimer = undefined
+      scheduledLibraryKey = undefined
       runProjectLibrarySave(state)
     }, PROJECT_PERSIST_IDLE_MS)
   }
@@ -8820,13 +9342,15 @@ const startDesktopProjectPersistence = (storage: DesktopProjectStorage) => {
     .loadProjectLibrary()
     .then((savedLibrary) => {
       const now = new Date().toISOString()
-      loadProjectLibrary(savedLibrary, now)
+      loadProjectLibrary(savedLibrary, now, applyLoadedState)
       loadSettled = true
       lastSavedLibraryKey = serializedProjectLibraryKey(projectStore.getState())
+      applyWithoutSchedulingSave({ projectPersistenceReady: true })
     })
     .catch(() => {
       loadSettled = true
       lastSavedLibraryKey = serializedProjectLibraryKey(projectStore.getState())
+      applyWithoutSchedulingSave({ projectPersistenceReady: true })
     })
 
   projectStore.subscribe((state) => scheduleSaveProjectLibrary(state))

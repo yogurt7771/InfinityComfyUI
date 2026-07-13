@@ -16,12 +16,21 @@ import {
   ReactFlow,
   ReactFlowProvider,
   SelectionMode,
+  applyNodeChanges,
   type Connection,
+  type EdgeMouseHandler,
   type FinalConnectionState,
   type Edge,
+  type EdgeChange,
   type Node,
   type NodeChange,
+  type NodeMouseHandler,
   type NodeTypes,
+  type OnConnect,
+  type OnConnectEnd,
+  type OnConnectStart,
+  type OnNodeDrag,
+  type OnSelectionChangeFunc,
   useEdgesState,
   useNodesState,
   useReactFlow,
@@ -45,9 +54,10 @@ import {
   X,
 } from 'lucide-react'
 import { EmptyNodeView, FunctionNodeView, GroupNodeView, ResourceNodeView, ResultGroupNodeView } from './NodeViews'
-import { ComfyWorkflowEditorDialog, FunctionManager, RunInspector, type EmbeddedComfySave } from './WorkbenchPanels'
+import { ComfyWorkflowEditorDialog, FunctionManager, RunInspector, highlightedJson, type EmbeddedComfySave } from './WorkbenchPanels'
 import { ResourcePreview } from './ResourcePreview'
 import { FullResourcePreviewModal } from './ResourcePreviewModal'
+import { hasActiveModal, ModalFrame } from './ModalFrame'
 import { buildCanvasFlowEdges } from '../domain/canvasEdges'
 import { targetInputInitialResourceValue } from '../domain/inputInitialValue'
 import { buildNodeReferenceMap } from '../domain/nodeReferences'
@@ -379,6 +389,40 @@ const addMenuItemMatches = (label: string, query: string) => {
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
 
+type ClientSelectionRect = {
+  startX: number
+  startY: number
+  endX: number
+  endY: number
+}
+
+const clientPointFromEvent = (event: { clientX?: number; clientY?: number } | undefined) => {
+  if (typeof event?.clientX !== 'number' || typeof event.clientY !== 'number') return undefined
+  return { x: event.clientX, y: event.clientY }
+}
+
+const normalizedClientSelectionRect = (rect: ClientSelectionRect) => ({
+  left: Math.min(rect.startX, rect.endX),
+  right: Math.max(rect.startX, rect.endX),
+  top: Math.min(rect.startY, rect.endY),
+  bottom: Math.max(rect.startY, rect.endY),
+})
+
+const clientRectsIntersect = (
+  first: { left: number; right: number; top: number; bottom: number },
+  second: { left: number; right: number; top: number; bottom: number },
+) => first.left <= second.right && first.right >= second.left && first.top <= second.bottom && first.bottom >= second.top
+
+const selectedNodeIdsFromClientSelectionRect = (rect: ClientSelectionRect) => {
+  const normalizedRect = normalizedClientSelectionRect(rect)
+  if (normalizedRect.right - normalizedRect.left < 4 || normalizedRect.bottom - normalizedRect.top < 4) return []
+
+  return [...document.querySelectorAll<HTMLElement>('.workspace-canvas .react-flow__node')]
+    .filter((node) => clientRectsIntersect(normalizedRect, node.getBoundingClientRect()))
+    .map((node) => node.getAttribute('data-id'))
+    .filter((nodeId): nodeId is string => Boolean(nodeId))
+}
+
 const markerKey = (marker: Edge['markerEnd']) =>
   marker && typeof marker === 'object'
     ? `${marker.type ?? ''}|${marker.width ?? ''}|${marker.height ?? ''}|${marker.color ?? ''}`
@@ -402,10 +446,15 @@ export const sameFlowEdgesForSync = (left: Edge[], right: Edge[]) => {
       edge.label === next.label &&
       edge.type === next.type &&
       edge.className === next.className &&
-      edge.selected === next.selected &&
       markerKey(edge.markerEnd) === markerKey(next.markerEnd)
     )
   })
+}
+
+const sameFlowEdgesForRenderSync = (left: Edge[], right: Edge[]) => {
+  if (!sameFlowEdgesForSync(left, right)) return false
+  const rightById = new Map(right.map((edge) => [edge.id, edge]))
+  return left.every((edge) => edge.selected === rightById.get(edge.id)?.selected)
 }
 
 export const selectedEdgeIdsFromSelectionChange = (current: string[], changedEdgeIds: string[]) => {
@@ -415,11 +464,57 @@ export const selectedEdgeIdsFromSelectionChange = (current: string[], changedEdg
     : changedEdgeIds
 }
 
-type SelectionHighlightNodeLike = Pick<Node, 'id'>
+type SelectionHighlightNodeLike = Pick<Node, 'id'> & { data?: Record<string, unknown> }
 type SelectionHighlightEdgeLike = Pick<Edge, 'id' | 'source' | 'target'>
 
 const mergeClassNames = (...classNames: Array<string | undefined | false>) =>
   classNames.filter(Boolean).join(' ') || undefined
+
+const uniqueIds = (ids: string[]) => [...new Set(ids.filter(Boolean))]
+
+const sameNodeIdSet = (left: string[], right: string[]) => {
+  if (left.length !== right.length) return false
+  const rightIds = new Set(right)
+  return left.every((nodeId) => rightIds.has(nodeId))
+}
+
+const locallyApplicableNodeChangeTypes = new Set<NodeChange['type']>(['position', 'dimensions', 'select'])
+
+const locallyApplicableNodeChanges = (changes: NodeChange[]) =>
+  changes.filter((change) => locallyApplicableNodeChangeTypes.has(change.type))
+
+const sameLocalFlowNodeState = (left: Node[], right: Node[]) => {
+  if (left === right) return true
+  if (left.length !== right.length) return false
+
+  const rightById = new Map(right.map((node) => [node.id, node]))
+  return left.every((node) => {
+    const next = rightById.get(node.id)
+    return (
+      next &&
+      node.id === next.id &&
+      node.selected === next.selected &&
+      node.dragging === next.dragging &&
+      node.position.x === next.position.x &&
+      node.position.y === next.position.y &&
+      node.width === next.width &&
+      node.height === next.height &&
+      node.measured?.width === next.measured?.width &&
+      node.measured?.height === next.measured?.height
+    )
+  })
+}
+
+const applyStableNodeChanges = (changes: NodeChange[], current: Node[]) => {
+  if (changes.length === 0) return current
+  const next = applyNodeChanges(changes, current)
+  return sameLocalFlowNodeState(current, next) ? current : next
+}
+
+const selectionGroupChildNodeIds = (node: SelectionHighlightNodeLike, nodeIds: Set<string>) =>
+  Array.isArray(node.data?.childNodeIds)
+    ? node.data.childNodeIds.filter((childNodeId): childNodeId is string => typeof childNodeId === 'string' && nodeIds.has(childNodeId))
+    : []
 
 export function buildCanvasSelectionHighlights(
   nodes: SelectionHighlightNodeLike[],
@@ -431,7 +526,20 @@ export function buildCanvasSelectionHighlights(
   const nodeIds = new Set(nodes.map((node) => node.id))
   const selectedNodes = new Set(selectedNodeIds.filter((nodeId) => nodeIds.has(nodeId)))
   const selectedEdges = new Set(selectedEdgeIds)
-  const traceStarts = traceNodeIds.filter((nodeId) => nodeIds.has(nodeId))
+  const groupChildrenById = new Map(
+    nodes
+      .map((node) => [node.id, selectionGroupChildNodeIds(node, nodeIds)] as const)
+      .filter(([, childNodeIds]) => childNodeIds.length > 0),
+  )
+  const selectedGroupChildIds = new Set<string>()
+  for (const nodeId of selectedNodes) {
+    for (const childNodeId of groupChildrenById.get(nodeId) ?? []) selectedGroupChildIds.add(childNodeId)
+  }
+  const traceStarts = uniqueIds(
+    traceNodeIds
+      .filter((nodeId) => nodeIds.has(nodeId))
+      .flatMap((nodeId) => [nodeId, ...(groupChildrenById.get(nodeId) ?? [])]),
+  )
   const relatedNodes = new Set<string>()
   const relatedEdges = new Set<string>()
   const hasSelection = selectedNodes.size > 0 || selectedEdges.size > 0 || traceStarts.length > 0
@@ -461,8 +569,13 @@ export function buildCanvasSelectionHighlights(
       if (relatedNodes.has(edge.source) && relatedNodes.has(edge.target)) relatedEdges.add(edge.id)
     }
   } else {
+    for (const childNodeId of selectedGroupChildIds) relatedNodes.add(childNodeId)
     for (const edge of edges) {
       if (selectedNodes.has(edge.source) || selectedNodes.has(edge.target)) {
+        relatedEdges.add(edge.id)
+        relatedNodes.add(edge.source)
+        relatedNodes.add(edge.target)
+      } else if (selectedGroupChildIds.has(edge.source) && selectedGroupChildIds.has(edge.target)) {
         relatedEdges.add(edge.id)
         relatedNodes.add(edge.source)
         relatedNodes.add(edge.target)
@@ -723,6 +836,8 @@ const defaultFunctionHeight = (functionDef: GenerationFunction | undefined) => {
 
 const MENU_NODE_GAP = 96
 const DEFAULT_ASSET_NODE_WIDTH = resourceNodeMinSize({ resourceType: 'image', title: 'Resource', referenceCount: 0 }).width
+const CANVAS_SNAP_GRID: [number, number] = [24, 24]
+const CANVAS_MULTI_SELECTION_KEYS = ['Shift', 'Control', 'Meta']
 
 const defaultNodeSize = (node: CanvasNode, functionsById: Record<string, GenerationFunction>) => {
   if (node.type === 'function') {
@@ -777,43 +892,25 @@ function CompareRunResultsModal({ pair, onClose }: { pair: CompareImagePair; onC
     sliderRef.current?.focus()
   }, [])
 
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        onClose()
-      }
-      if (event.key === 'ArrowLeft') {
-        event.preventDefault()
-        adjustSplit(-2)
-      }
-      if (event.key === 'ArrowRight') {
-        event.preventDefault()
-        adjustSplit(2)
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [adjustSplit, onClose])
-
   if (!leftMedia?.url || !rightMedia?.url) return null
 
   return (
-    <div
-      className="compare-backdrop nodrag nopan"
-      onMouseDown={(event) => {
-        event.stopPropagation()
-        if (event.target === event.currentTarget) onClose()
+    <ModalFrame
+      label="Compare run results"
+      onClose={onClose}
+      backdropClassName="compare-backdrop nodrag nopan"
+      dialogClassName="compare-modal"
+      onGlobalKeyDown={(event) => {
+        if (event.key === 'ArrowLeft') {
+          event.preventDefault()
+          adjustSplit(-2)
+        }
+        if (event.key === 'ArrowRight') {
+          event.preventDefault()
+          adjustSplit(2)
+        }
       }}
     >
-      <section
-        aria-label="Compare run results"
-        aria-modal="true"
-        className="compare-modal"
-        role="dialog"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
         <div className="compare-header">
           <div>
             <h2>Compare</h2>
@@ -846,8 +943,7 @@ function CompareRunResultsModal({ pair, onClose }: { pair: CompareImagePair; onC
             <span />
           </div>
         </div>
-      </section>
-    </div>
+    </ModalFrame>
   )
 }
 
@@ -1086,11 +1182,6 @@ const providerImageContentParts = (functionDef: GenerationFunction) =>
     .filter((input) => input.type === 'image')
     .map((input) => ({ type: 'image_url' as const, content: input.key, detail: 'auto' as const }))
 
-const blockModalContextMenu = (event: ReactMouseEvent) => {
-  event.preventDefault()
-  event.stopPropagation()
-}
-
 export function FunctionRunDialog({
   functionDef,
   values,
@@ -1263,22 +1354,12 @@ export function FunctionRunDialog({
     : undefined
 
   return (
-    <div
-      className="local-action-backdrop nodrag nopan"
-      onContextMenu={blockModalContextMenu}
-      onMouseDown={(event) => {
-        event.stopPropagation()
-        if (event.target === event.currentTarget) onClose()
-      }}
+    <ModalFrame
+      label={`Run ${functionDef.name}`}
+      onClose={onClose}
+      backdropClassName="local-action-backdrop nodrag nopan"
+      dialogClassName="local-action-dialog function-run-dialog"
     >
-      <section
-        aria-label={`Run ${functionDef.name}`}
-        aria-modal="true"
-        className="local-action-dialog function-run-dialog"
-        role="dialog"
-        onContextMenu={blockModalContextMenu}
-        onMouseDown={(event) => event.stopPropagation()}
-      >
         <header>
           <div>
             <h2>{functionDef.name}</h2>
@@ -1694,8 +1775,7 @@ export function FunctionRunDialog({
           resources={previewResource ? [previewResource] : []}
           onClose={() => setPreviewResource(undefined)}
         />
-      </section>
-    </div>
+    </ModalFrame>
   )
 }
 
@@ -1716,22 +1796,12 @@ function TemporaryComfyWorkflowDialog({
   const selectedEndpoint = enabledEndpoints.find((endpoint) => endpoint.id === endpointId) ?? enabledEndpoints[0]
 
   return (
-    <div
-      className="local-action-backdrop nodrag nopan"
-      onContextMenu={blockModalContextMenu}
-      onMouseDown={(event) => {
-        event.stopPropagation()
-        if (event.target === event.currentTarget) onClose()
-      }}
+    <ModalFrame
+      label="ComfyUI workflow runner"
+      onClose={onClose}
+      backdropClassName="local-action-backdrop nodrag nopan"
+      dialogClassName="local-action-dialog temporary-comfy-runner"
     >
-      <section
-        aria-label="ComfyUI workflow runner"
-        aria-modal="true"
-        className="local-action-dialog temporary-comfy-runner"
-        role="dialog"
-        onContextMenu={blockModalContextMenu}
-        onMouseDown={(event) => event.stopPropagation()}
-      >
         <header>
           <div>
             <h2>ComfyUI Workflow</h2>
@@ -1771,8 +1841,7 @@ function TemporaryComfyWorkflowDialog({
             Edit in ComfyUI
           </button>
         </div>
-      </section>
-    </div>
+    </ModalFrame>
   )
 }
 
@@ -1822,29 +1891,15 @@ export function AssetInspectorDialog({
   onClose: () => void
   onFocusNode: (nodeId: string) => void
 }) {
+  const inspectedNodeJson = JSON.stringify({ id: inspectedNode.id, type: inspectedNode.type, data: inspectedNode.data }, null, 2)
+  const inspectedResourcesJson = JSON.stringify(inspectedResources, null, 2)
   return (
-    <div
-      className="local-action-backdrop asset-inspector-backdrop nodrag nopan"
-      onContextMenu={(event) => {
-        event.preventDefault()
-        event.stopPropagation()
-      }}
-      onMouseDown={(event) => {
-        event.stopPropagation()
-        if (event.target === event.currentTarget) onClose()
-      }}
+    <ModalFrame
+      label="Asset Inspector"
+      onClose={onClose}
+      backdropClassName="local-action-backdrop asset-inspector-backdrop nodrag nopan"
+      dialogClassName="local-action-dialog asset-inspector-dialog"
     >
-      <section
-        className="local-action-dialog asset-inspector-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Asset Inspector"
-        onContextMenu={(event) => {
-          event.preventDefault()
-          event.stopPropagation()
-        }}
-        onMouseDown={(event) => event.stopPropagation()}
-      >
         <header>
           <div>
             <h2>Asset Inspector</h2>
@@ -1854,45 +1909,71 @@ export function AssetInspectorDialog({
             <X aria-hidden="true" size={16} />
           </button>
         </header>
-        <div className="inspector-block asset-inspector-body">
-          <strong>{inspectedNode.type}</strong>
-          <code>{inspectedNode.id}</code>
-          {inspectedResources.length > 0 ? (
-            <div className="asset-inspector-resources" aria-label="Inspected resources">
-              {inspectedResources.map((resource) => (
-                <article key={resource.id} className="asset-inspector-resource">
-                  <div className="asset-inspector-resource-title">
-                    <strong>{resource.name ?? resource.id}</strong>
-                    <em>{resource.type}</em>
-                  </div>
-                  <code>{resource.id}</code>
-                  <div
-                    className="asset-inspector-preview"
-                    role="button"
-                    tabIndex={0}
-                    aria-label={`Open ${resource.name ?? resource.id} preview`}
-                    onClick={() => onPreviewResourceChange(resource)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault()
-                        onPreviewResourceChange(resource)
-                      }
-                    }}
-                  >
-                    <ResourcePreview resource={resource} />
-                  </div>
-                </article>
-              ))}
+        <div className="asset-inspector-body">
+          <section className="asset-inspector-section asset-inspector-summary" aria-label="Selection summary">
+            <div className="asset-inspector-section-heading">
+              <h3>Selection</h3>
+              <span>{inspectedResources.length} resources</span>
             </div>
+            <div className="asset-inspector-summary-grid">
+              <div>
+                <span>Type</span>
+                <strong>{inspectedNode.type}</strong>
+              </div>
+              <div>
+                <span>Node ID</span>
+                <code>{inspectedNode.id}</code>
+              </div>
+            </div>
+          </section>
+          {inspectedResources.length > 0 ? (
+            <section className="asset-inspector-section" aria-label="Inspected resources">
+              <div className="asset-inspector-section-heading">
+                <h3>Resources</h3>
+                <span>Types: {Array.from(new Set(inspectedResources.map((resource) => resource.type))).join(' / ')}</span>
+              </div>
+              <div className="asset-inspector-resources">
+                {inspectedResources.map((resource) => (
+                  <article key={resource.id} className="asset-inspector-resource">
+                    <div className="asset-inspector-resource-title">
+                      <strong>{resource.name ?? resource.id}</strong>
+                      <em>{resource.type}</em>
+                    </div>
+                    <code>{resource.id}</code>
+                    <div
+                      className="asset-inspector-preview"
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Open ${resource.name ?? resource.id} preview`}
+                      onClick={() => onPreviewResourceChange(resource)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault()
+                          onPreviewResourceChange(resource)
+                        }
+                      }}
+                    >
+                      <ResourcePreview resource={resource} />
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
           ) : null}
           {inspectedTask ? <RunInspector project={project} task={inspectedTask} onFocusNode={onFocusNode} /> : null}
-          <h3>Node</h3>
-          <pre>{JSON.stringify({ id: inspectedNode.id, type: inspectedNode.type, data: inspectedNode.data }, null, 2)}</pre>
+          <details className="asset-inspector-debug">
+            <summary>Raw node data</summary>
+            <pre className="asset-inspector-json">
+              <code>{highlightedJson(inspectedNodeJson)}</code>
+            </pre>
+          </details>
           {inspectedResources.length > 0 ? (
-            <>
-              <h3>Resources</h3>
-              <pre>{JSON.stringify(inspectedResources, null, 2)}</pre>
-            </>
+            <details className="asset-inspector-debug">
+              <summary>Raw resource data</summary>
+              <pre className="asset-inspector-json">
+                <code>{highlightedJson(inspectedResourcesJson)}</code>
+              </pre>
+            </details>
           ) : null}
         </div>
         <FullResourcePreviewModal
@@ -1902,8 +1983,7 @@ export function AssetInspectorDialog({
           }
           onClose={() => onPreviewResourceChange(undefined)}
         />
-      </section>
-    </div>
+    </ModalFrame>
   )
 }
 
@@ -1922,7 +2002,9 @@ function CanvasSurface() {
   const addEmptyResourceAtPosition = useProjectStore((state) => state.addEmptyResourceAtPosition)
   const addMediaResourceAtPosition = useProjectStore((state) => state.addMediaResourceAtPosition)
   const updateTextResourceValue = useProjectStore((state) => state.updateTextResourceValue)
+  const updateTextResourceDisplayMode = useProjectStore((state) => state.updateTextResourceDisplayMode)
   const updateNumberResourceValue = useProjectStore((state) => state.updateNumberResourceValue)
+  const updateBooleanResourceValue = useProjectStore((state) => state.updateBooleanResourceValue)
   const replaceResourceMedia = useProjectStore((state) => state.replaceResourceMedia)
   const updateFunctionNodeRunCount = useProjectStore((state) => state.updateFunctionNodeRunCount)
   const updateFunctionNodeInputValue = useProjectStore((state) => state.updateFunctionNodeInputValue)
@@ -1955,7 +2037,7 @@ function CanvasSurface() {
   const instantiateTemplate = useProjectStore((state) => state.instantiateTemplate)
   const duplicateSelectedNode = useProjectStore((state) => state.duplicateSelectedNode)
   const duplicateNodes = useProjectStore((state) => state.duplicateNodes)
-  const { screenToFlowPosition, setCenter } = useReactFlow()
+  const { screenToFlowPosition, setCenter, getNode, getZoom } = useReactFlow()
   const [addMenu, setAddMenu] = useState<AddNodeMenuState | null>(null)
   const [quickToolbar, setQuickToolbar] = useState<QuickToolbarState>()
   const [inspectorNodeId, setInspectorNodeId] = useState<string>()
@@ -1983,8 +2065,13 @@ function CanvasSurface() {
   const modifierKeys = useRef({ alt: false, ctrl: false, shift: false })
   const selectionBoxActive = useRef(false)
   const selectionBoxNodeIds = useRef<string[]>([])
+  const selectionBoxRect = useRef<ClientSelectionRect | null>(null)
+  const selectionBoxMoveCleanup = useRef<(() => void) | undefined>(undefined)
   const selectionRecencyCounter = useRef(0)
   const ignoreSelectionSyncUntil = useRef(0)
+  const forcedFlowSelectionNodeIds = useRef<string[] | undefined>(undefined)
+  const lastNodeClick = useRef<{ nodeId: string; clickedAt: number } | undefined>(undefined)
+  const canvasPointerDown = useRef<{ x: number; y: number } | undefined>(undefined)
   const recordNodeSelectionRecency = useCallback((nodeIds: string[]) => {
     const ids = nodeIds.filter(Boolean)
     if (ids.length === 0) return
@@ -1997,6 +2084,13 @@ function CanvasSurface() {
       return next
     })
   }, [])
+  useEffect(
+    () => () => {
+      selectionBoxMoveCleanup.current?.()
+      selectionBoxMoveCleanup.current = undefined
+    },
+    [],
+  )
   const activeSelectedNodeIds = useMemo(
     () => (selectedNodeIds.length ? selectedNodeIds : selectedNodeId ? [selectedNodeId] : []),
     [selectedNodeId, selectedNodeIds],
@@ -2030,17 +2124,6 @@ function CanvasSurface() {
     setInputPickMode(reset.inputPickMode)
   }, [])
 
-  const clearCanvasSelection = useCallback(() => {
-    ignoreSelectionSyncUntil.current = Date.now() + 200
-    selectNode(undefined)
-    setSelectedEdgeIds([])
-    setTraceHighlightNodeIds([])
-    setAddMenu(null)
-    setQuickToolbar(undefined)
-    setFunctionNodeMenu(undefined)
-    setGroupNodeMenu(undefined)
-  }, [selectNode])
-
   const openFunctionRunDialog = useCallback(
     (dialog: FunctionRunDialogState) => {
       closeFunctionRunFloatingMenus()
@@ -2067,6 +2150,15 @@ function CanvasSurface() {
     () => buildCanvasNodeZIndexMap(visibleNodes, project.resources, selectedNodeRecencyById),
     [project.resources, selectedNodeRecencyById, visibleNodes],
   )
+  const groupChildNodeIdsById = useMemo(() => {
+    const visibleNodeIds = new Set(visibleNodes.map((node) => node.id))
+    return new Map(
+      visibleNodes
+        .filter((node) => node.type === 'group')
+        .map((node) => [node.id, selectionGroupChildNodeIds(node, visibleNodeIds)] as const)
+        .filter(([, childNodeIds]) => childNodeIds.length > 0),
+    )
+  }, [visibleNodes])
 
   const openFunctionRunForResource = useCallback(
     (resourceId: string) => {
@@ -2167,7 +2259,9 @@ function CanvasSurface() {
           onDeleteNode: deleteNode,
           onRenameNode: renameNode,
           onUpdateTextResourceValue: updateTextResourceValue,
+          onUpdateTextResourceDisplayMode: updateTextResourceDisplayMode,
           onUpdateNumberResourceValue: updateNumberResourceValue,
+          onUpdateBooleanResourceValue: updateBooleanResourceValue,
           onReplaceResourceMedia: replaceResourceMedia,
           onOpenFunctionRunForResource: openFunctionRunForResource,
           onResizeNode: updateNodeSize,
@@ -2200,7 +2294,9 @@ function CanvasSurface() {
       updateFunctionNodeRequestConfig,
       updateFunctionNodeRequestOutputs,
       updateNodeSize,
+      updateBooleanResourceValue,
       updateNumberResourceValue,
+      updateTextResourceDisplayMode,
       updateTextResourceValue,
       selectionHighlights.nodeClassNamesById,
       visibleNodes,
@@ -2225,8 +2321,8 @@ function CanvasSurface() {
     return left && right ? { left, right } : undefined
   }, [activeSelectedNodeIds, project.canvas.nodes, project.resources])
 
-  const [nodes, setNodes, onNodesChange] = useNodesState(flowNodes)
-  const [edges, setEdges, onEdgesChange] = useEdgesState(flowEdges)
+  const [nodes, setNodes] = useNodesState(flowNodes)
+  const [edges, setEdges] = useEdgesState(flowEdges)
 
   useEffect(() => {
     if (selectionBoxActive.current) return
@@ -2234,8 +2330,34 @@ function CanvasSurface() {
   }, [flowNodes, setNodes])
 
   useEffect(() => {
-    setEdges((current) => (sameFlowEdgesForSync(current, flowEdges) ? current : flowEdges))
+    setEdges((current) => (sameFlowEdgesForRenderSync(current, flowEdges) ? current : flowEdges))
   }, [flowEdges, setEdges])
+
+  const handleEdgesChange = useCallback((changes: EdgeChange[]) => {
+    if (selectionBoxActive.current || Date.now() < ignoreSelectionSyncUntil.current) return
+    const selectChanges = changes.filter((change) => change.type === 'select')
+    if (selectChanges.length === 0) return
+
+    setSelectedEdgeIds((current) => {
+      const next = new Set(current)
+      for (const change of selectChanges) {
+        if ('selected' in change && change.selected) {
+          next.add(change.id)
+        } else {
+          next.delete(change.id)
+        }
+      }
+      return selectedEdgeIdsFromSelectionChange(current, [...next])
+    })
+  }, [])
+
+  const clearSelectedEdgeIds = useCallback(() => {
+    setSelectedEdgeIds((current) => (current.length > 0 ? [] : current))
+  }, [])
+
+  const clearTraceHighlightNodeIds = useCallback(() => {
+    setTraceHighlightNodeIds((current) => (current.length > 0 ? [] : current))
+  }, [])
 
   const clipboardPastePosition = useCallback(() => {
     const rect = canvasRef.current?.getBoundingClientRect()
@@ -2283,24 +2405,120 @@ function CanvasSurface() {
       .map((node) => node.getAttribute('data-id'))
       .filter((nodeId): nodeId is string => Boolean(nodeId)), [])
 
+  const measuredSelectedNodeSizes = useCallback(
+    (nodeIds: string[]) => {
+      const sizesById: Record<string, { width: number; height: number }> = {}
+      const zoom = Math.max(0.0001, Number(getZoom()))
+      const nodeElements = [...document.querySelectorAll<HTMLElement>('.workspace-canvas .react-flow__node')]
+
+      for (const nodeId of uniqueIds(nodeIds)) {
+        const flowNode = getNode(nodeId) as
+          | (Node & {
+              measured?: { width?: number; height?: number }
+              width?: number
+              height?: number
+            })
+          | undefined
+        const measuredWidth = Number(flowNode?.measured?.width ?? flowNode?.width)
+        const measuredHeight = Number(flowNode?.measured?.height ?? flowNode?.height)
+        if (Number.isFinite(measuredWidth) && Number.isFinite(measuredHeight) && measuredWidth > 0 && measuredHeight > 0) {
+          sizesById[nodeId] = { width: measuredWidth, height: measuredHeight }
+          continue
+        }
+
+        const element = nodeElements.find((item) => item.getAttribute('data-id') === nodeId)
+        const rect = element?.getBoundingClientRect()
+        if (rect && rect.width > 0 && rect.height > 0) {
+          sizesById[nodeId] = { width: rect.width / zoom, height: rect.height / zoom }
+        }
+      }
+
+      return sizesById
+    },
+    [getNode, getZoom],
+  )
+
+  const syncFlowNodeSelection = useCallback(
+    (nodeIds: string[]) => {
+      const selectedIds = new Set(nodeIds)
+      setNodes((current) => {
+        let changed = false
+        const nextNodes = current.map((node) => {
+          const selected = selectedIds.has(node.id)
+          if (node.selected === selected) return node
+          changed = true
+          return { ...node, selected }
+        })
+        return changed ? nextNodes : current
+      })
+    },
+    [setNodes],
+  )
+
+  const groupActiveSelection = useCallback(() => {
+    const domNodeIds = selectedDomNodeIds()
+    const nodeIds = activeSelectedNodeIds.length >= 2 ? activeSelectedNodeIds : domNodeIds.length >= 2 ? domNodeIds : activeSelectedNodeIds
+    const nodesById = new Map(project.canvas.nodes.map((node) => [node.id, node]))
+    const groupableNodeIds = uniqueIds(nodeIds).filter((nodeId) => {
+      const node = nodesById.get(nodeId)
+      return Boolean(node && node.type !== 'group')
+    })
+    if (groupableNodeIds.length < 2) return undefined
+
+    modifierKeys.current = { alt: false, ctrl: false, shift: false }
+    ignoreSelectionSyncUntil.current = Date.now() + 1000
+    syncFlowNodeSelection([])
+    const groupNodeId = groupSelectedNodes({
+      nodeIds: groupableNodeIds,
+      nodeSizesById: measuredSelectedNodeSizes(groupableNodeIds),
+    })
+    if (!groupNodeId) return undefined
+    forcedFlowSelectionNodeIds.current = [groupNodeId]
+
+    setAddMenu(null)
+    setQuickToolbar(undefined)
+    setFunctionNodeMenu(undefined)
+    setGroupNodeMenu(undefined)
+    clearSelectedEdgeIds()
+    clearTraceHighlightNodeIds()
+    recordNodeSelectionRecency([groupNodeId])
+    syncFlowNodeSelection([groupNodeId])
+    window.requestAnimationFrame(() => {
+      ignoreSelectionSyncUntil.current = Date.now() + 1000
+      syncFlowNodeSelection([groupNodeId])
+    })
+    return groupNodeId
+  }, [
+    activeSelectedNodeIds,
+    clearSelectedEdgeIds,
+    clearTraceHighlightNodeIds,
+    groupSelectedNodes,
+    measuredSelectedNodeSizes,
+    project.canvas.nodes,
+    recordNodeSelectionRecency,
+    selectedDomNodeIds,
+    syncFlowNodeSelection,
+  ])
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       modifierKeys.current = { alt: event.altKey, ctrl: event.ctrlKey || event.metaKey, shift: event.shiftKey }
+      if (hasActiveModal()) return
       if (shouldIgnoreCanvasShortcut(event)) return
 
       if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === 'z') {
         event.preventDefault()
         undoLastProjectChange()
-        setSelectedEdgeIds([])
-        setTraceHighlightNodeIds([])
+        clearSelectedEdgeIds()
+        clearTraceHighlightNodeIds()
         return
       }
 
       if (((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'z') || ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'y')) {
         event.preventDefault()
         redoProjectChange()
-        setSelectedEdgeIds([])
-        setTraceHighlightNodeIds([])
+        clearSelectedEdgeIds()
+        clearTraceHighlightNodeIds()
         return
       }
 
@@ -2311,8 +2529,8 @@ function CanvasSurface() {
           deleteNodes(domNodeIds)
         } else if (selectedEdgeIds.length > 0) {
           deleteEdges(selectedEdgeIds)
-          setSelectedEdgeIds([])
-          setTraceHighlightNodeIds([])
+          clearSelectedEdgeIds()
+          clearTraceHighlightNodeIds()
         } else {
           deleteSelectedNode()
         }
@@ -2329,8 +2547,8 @@ function CanvasSurface() {
         setGroupNodeMenu(undefined)
         setFunctionRunDialog(undefined)
         selectNode(undefined)
-        setSelectedEdgeIds([])
-        setTraceHighlightNodeIds([])
+        clearSelectedEdgeIds()
+        clearTraceHighlightNodeIds()
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'c') {
         const nodeIds = activeSelectedNodeIds.length > 0 ? activeSelectedNodeIds : selectedDomNodeIds()
@@ -2351,6 +2569,10 @@ function CanvasSurface() {
         event.preventDefault()
         duplicateSelectedNode()
       }
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === 'g') {
+        const groupedNodeId = groupActiveSelection()
+        if (groupedNodeId) event.preventDefault()
+      }
     }
 
     const handleKeyUp = (event: KeyboardEvent) => {
@@ -2365,12 +2587,15 @@ function CanvasSurface() {
     }
   }, [
     activeSelectedNodeIds,
+    clearSelectedEdgeIds,
+    clearTraceHighlightNodeIds,
     deleteEdges,
     deleteNode,
     deleteNodes,
     deleteSelectedNode,
     duplicateNodes,
     duplicateSelectedNode,
+    groupActiveSelection,
     inputPickMode,
     pasteClipboardContent,
     selectNode,
@@ -2380,13 +2605,13 @@ function CanvasSurface() {
     undoLastProjectChange,
   ])
 
-  const handleConnect = (connection: Connection) => {
+  const handleConnect = useCallback<OnConnect>((connection: Connection) => {
     if (!connection.source || !connection.target) return
     connectNodes(connection.source, connection.target, {
       sourceHandleId: connection.sourceHandle,
       targetInputKey: inputKeyFromHandle(connection.targetHandle),
     })
-  }
+  }, [connectNodes])
 
   const selectionModeFromEvent = (event: MouseEvent | ReactMouseEvent) => {
     if (event.altKey) return 'remove' as const
@@ -2403,29 +2628,80 @@ function CanvasSurface() {
     [activeSelectedNodeIds],
   )
 
-  const syncFlowNodeSelection = useCallback(
-    (nodeIds: string[]) => {
-      const selectedIds = new Set(nodeIds)
-      setNodes((current) =>
-        current.map((node) => {
-          const selected = selectedIds.has(node.id)
-          return node.selected === selected ? node : { ...node, selected }
-        }),
-      )
+  const clearCanvasSelection = useCallback(() => {
+    ignoreSelectionSyncUntil.current = Date.now() + 250
+    forcedFlowSelectionNodeIds.current = undefined
+    lastNodeClick.current = undefined
+    selectNode(undefined)
+    syncFlowNodeSelection([])
+    clearSelectedEdgeIds()
+    clearTraceHighlightNodeIds()
+    setAddMenu(null)
+    setQuickToolbar(undefined)
+    setFunctionNodeMenu(undefined)
+    setGroupNodeMenu(undefined)
+  }, [clearSelectedEdgeIds, clearTraceHighlightNodeIds, selectNode, syncFlowNodeSelection])
+
+  const clearCanvasSelectionNextFrame = useCallback(() => {
+    window.requestAnimationFrame(() => clearCanvasSelection())
+  }, [clearCanvasSelection])
+
+  const expandTraceHighlightForNode = useCallback(
+    (nodeId: string) => {
+      ignoreSelectionSyncUntil.current = Date.now() + 250
+      forcedFlowSelectionNodeIds.current = undefined
+      clearSelectedEdgeIds()
+      setQuickToolbar(undefined)
+      setFunctionNodeMenu(undefined)
+      setGroupNodeMenu(undefined)
+      recordNodeSelectionRecency([nodeId])
+      selectNode(nodeId)
+      syncFlowNodeSelection([nodeId])
+      setTraceHighlightNodeIds([nodeId])
+      window.setTimeout(() => {
+        selectNode(nodeId)
+        syncFlowNodeSelection([nodeId])
+        setTraceHighlightNodeIds([nodeId])
+      }, 0)
     },
-    [setNodes],
+    [clearSelectedEdgeIds, recordNodeSelectionRecency, selectNode, syncFlowNodeSelection],
   )
 
-  const handleSelectionChange = ({ nodes: changedNodes, edges: changedEdges }: { nodes: Node[]; edges: Edge[] }) => {
-    const changedEdgeIds = changedEdges.map((edge) => edge.id)
-    setSelectedEdgeIds((current) => selectedEdgeIdsFromSelectionChange(current, changedEdgeIds))
-    if (changedEdgeIds.length > 0) {
-      selectNode(undefined)
-      setTraceHighlightNodeIds([])
+  useEffect(() => {
+    const handleTraceNode = (event: Event) => {
+      const nodeId = (event as CustomEvent<{ nodeId?: string }>).detail?.nodeId
+      if (nodeId) expandTraceHighlightForNode(nodeId)
     }
-    if (!selectionBoxActive.current) {
-      if (Date.now() < ignoreSelectionSyncUntil.current) return
+
+    window.addEventListener('infinity-trace-node', handleTraceNode)
+    return () => window.removeEventListener('infinity-trace-node', handleTraceNode)
+  }, [expandTraceHighlightForNode])
+
+  const handleSelectionChange = useCallback<OnSelectionChangeFunc>(
+    ({ nodes: changedNodes, edges: changedEdges }) => {
+      if (selectionBoxActive.current) {
+        selectionBoxNodeIds.current = changedNodes.map((node) => node.id)
+        return
+      }
       const changedNodeIds = changedNodes.map((node) => node.id)
+      const forcedNodeIds = forcedFlowSelectionNodeIds.current
+      if (forcedNodeIds) {
+        if (sameNodeIdSet(changedNodeIds, forcedNodeIds)) {
+          forcedFlowSelectionNodeIds.current = undefined
+        } else {
+          ignoreSelectionSyncUntil.current = Date.now() + 1000
+          syncFlowNodeSelection(forcedNodeIds)
+          return
+        }
+      }
+      if (Date.now() < ignoreSelectionSyncUntil.current) return
+
+      const changedEdgeIds = changedEdges.map((edge) => edge.id)
+      if (changedEdgeIds.length > 0) {
+        setSelectedEdgeIds((current) => selectedEdgeIdsFromSelectionChange(current, changedEdgeIds))
+        selectNode(undefined)
+        clearTraceHighlightNodeIds()
+      }
       if (changedNodeIds.length > 0) {
         const mode = modifierKeys.current.alt
           ? 'remove'
@@ -2443,30 +2719,88 @@ function CanvasSurface() {
           activeSelectedNodeIds.every((selectedId, index) => selectedId === nextSelectedNodeIds[index])
         if (selectionUnchanged) return
 
-        setSelectedEdgeIds((current) => (current.length > 0 ? [] : current))
-        setTraceHighlightNodeIds((current) => (current.length > 0 ? [] : current))
+        clearSelectedEdgeIds()
+        clearTraceHighlightNodeIds()
         selectNodes(changedNodeIds, mode)
         recordNodeSelectionRecency(changedNodeIds)
       }
-      return
-    }
-    selectionBoxNodeIds.current = changedNodes.map((node) => node.id)
-  }
+    },
+    [
+      activeSelectedNodeIds,
+      clearSelectedEdgeIds,
+      clearTraceHighlightNodeIds,
+      recordNodeSelectionRecency,
+      selectNode,
+      selectNodes,
+      syncFlowNodeSelection,
+    ],
+  )
 
   const handleNodesChange = useCallback(
     (changes: NodeChange[]) => {
+      const localChanges = locallyApplicableNodeChanges(changes)
       const shouldPreservePreviousSelection =
         !selectionBoxActive.current &&
         (modifierKeys.current.ctrl || modifierKeys.current.shift) &&
-        changes.some((change) => change.type === 'select' && change.selected)
+        localChanges.some((change) => change.type === 'select' && change.selected)
 
-      onNodesChange(
-        shouldPreservePreviousSelection
-          ? changes.filter((change) => !(change.type === 'select' && !change.selected))
-          : changes,
+      const filteredChanges = selectionBoxActive.current
+        ? localChanges.filter((change) => change.type !== 'select')
+        : shouldPreservePreviousSelection
+          ? localChanges.filter((change) => !(change.type === 'select' && !change.selected))
+          : localChanges
+      if (filteredChanges.length === 0) return
+      const groupPositionChanges = filteredChanges.filter(
+        (change): change is NodeChange & { type: 'position'; position?: { x: number; y: number }; dragging?: boolean } =>
+          change.type === 'position' && Boolean(groupChildNodeIdsById.get(change.id)?.length),
       )
+
+      if (groupPositionChanges.length === 0) {
+        setNodes((current) => applyStableNodeChanges(filteredChanges, current))
+        return
+      }
+
+      setNodes((current) => {
+        const currentById = new Map(current.map((node) => [node.id, node]))
+        const explicitPositionChangeIds = new Set(groupPositionChanges.map((change) => change.id))
+        const childDeltaById = new Map<string, { x: number; y: number }>()
+
+        for (const change of groupPositionChanges) {
+          const currentGroup = currentById.get(change.id)
+          if (!currentGroup || !change.position) continue
+          const delta = {
+            x: change.position.x - currentGroup.position.x,
+            y: change.position.y - currentGroup.position.y,
+          }
+          if (delta.x === 0 && delta.y === 0) continue
+          for (const childNodeId of groupChildNodeIdsById.get(change.id) ?? []) {
+            if (explicitPositionChangeIds.has(childNodeId)) continue
+            const previousDelta = childDeltaById.get(childNodeId) ?? { x: 0, y: 0 }
+            childDeltaById.set(childNodeId, {
+              x: previousDelta.x + delta.x,
+              y: previousDelta.y + delta.y,
+            })
+          }
+        }
+
+        const childPositionChanges: NodeChange[] = []
+        for (const [childNodeId, delta] of childDeltaById) {
+          const childNode = currentById.get(childNodeId)
+          if (!childNode) continue
+          childPositionChanges.push({
+            id: childNodeId,
+            type: 'position',
+            position: {
+              x: childNode.position.x + delta.x,
+              y: childNode.position.y + delta.y,
+            },
+          })
+        }
+
+        return applyStableNodeChanges([...filteredChanges, ...childPositionChanges], current)
+      })
     },
-    [onNodesChange],
+    [groupChildNodeIdsById, setNodes],
   )
 
   const sourceResourceRefs = useCallback((sourceNodeId: string | undefined, sourceHandleId?: string | null): ResourceRef[] => {
@@ -2614,7 +2948,7 @@ function CanvasSurface() {
     menu.style.top = `${top}px`
   }, [groupNodeMenu])
 
-  const connectionResourceType = (sourceNodeId: string | undefined, sourceHandleId?: string | null) => {
+  const connectionResourceType = useCallback((sourceNodeId: string | undefined, sourceHandleId?: string | null) => {
     const existingResourceType = sourceResourceRefs(sourceNodeId, sourceHandleId)[0]?.type
     if (existingResourceType || !sourceNodeId) return existingResourceType
 
@@ -2624,15 +2958,15 @@ function CanvasSurface() {
     const functionId = typeof node?.data.functionId === 'string' ? node.data.functionId : undefined
     const functionDef = functionId ? project.functions[functionId] : undefined
     return functionDef?.outputs.find((output) => output.key === pendingOutputKey)?.type
-  }
+  }, [project.canvas.nodes, project.functions, sourceResourceRefs])
 
-  const inputTypeForFunctionInput = (nodeId: string | undefined, inputKey: string | undefined) => {
+  const inputTypeForFunctionInput = useCallback((nodeId: string | undefined, inputKey: string | undefined) => {
     if (!nodeId || !inputKey) return undefined
     const node = project.canvas.nodes.find((item) => item.id === nodeId && item.type === 'function')
     const functionId = typeof node?.data.functionId === 'string' ? node.data.functionId : undefined
     const functionDef = functionId ? project.functions[functionId] : undefined
     return functionDef?.inputs.find((input) => input.key === inputKey)?.type
-  }
+  }, [project.canvas.nodes, project.functions])
 
   const outputTypeForFunctionOutput = (nodeId: string | undefined, outputKey: string | undefined) => {
     if (!nodeId || !outputKey) return undefined
@@ -2642,41 +2976,44 @@ function CanvasSurface() {
     return functionDef?.outputs.find((output) => output.key === outputKey)?.type
   }
 
-  const connectByNodeRoles = (
-    firstNodeId: string | undefined,
-    secondNodeId: string | undefined,
-    options: {
-      sourceHandleId?: string | null
-      targetHandleId?: string | null
-      targetInputKey?: string | null
-      startedInputKey?: string | null
-    } = {},
-  ) => {
-    if (!firstNodeId || !secondNodeId || firstNodeId === secondNodeId) return false
+  const connectByNodeRoles = useCallback(
+    (
+      firstNodeId: string | undefined,
+      secondNodeId: string | undefined,
+      options: {
+        sourceHandleId?: string | null
+        targetHandleId?: string | null
+        targetInputKey?: string | null
+        startedInputKey?: string | null
+      } = {},
+    ) => {
+      if (!firstNodeId || !secondNodeId || firstNodeId === secondNodeId) return false
 
-    const firstNode = project.canvas.nodes.find((node) => node.id === firstNodeId)
-    const secondNode = project.canvas.nodes.find((node) => node.id === secondNodeId)
+      const firstNode = project.canvas.nodes.find((node) => node.id === firstNodeId)
+      const secondNode = project.canvas.nodes.find((node) => node.id === secondNodeId)
 
-    if ((firstNode?.type === 'resource' || firstNode?.type === 'result_group') && secondNode?.type === 'function') {
-      connectNodes(firstNodeId, secondNodeId, {
-        sourceHandleId: options.sourceHandleId,
-        targetInputKey: options.targetInputKey,
-      })
-      return true
-    }
+      if ((firstNode?.type === 'resource' || firstNode?.type === 'result_group') && secondNode?.type === 'function') {
+        connectNodes(firstNodeId, secondNodeId, {
+          sourceHandleId: options.sourceHandleId,
+          targetInputKey: options.targetInputKey,
+        })
+        return true
+      }
 
-    if ((secondNode?.type === 'resource' || secondNode?.type === 'result_group') && firstNode?.type === 'function') {
-      connectNodes(secondNodeId, firstNodeId, {
-        sourceHandleId: options.targetHandleId,
-        targetInputKey: options.startedInputKey ?? options.targetInputKey,
-      })
-      return true
-    }
+      if ((secondNode?.type === 'resource' || secondNode?.type === 'result_group') && firstNode?.type === 'function') {
+        connectNodes(secondNodeId, firstNodeId, {
+          sourceHandleId: options.targetHandleId,
+          targetInputKey: options.startedInputKey ?? options.targetInputKey,
+        })
+        return true
+      }
 
-    return false
-  }
+      return false
+    },
+    [connectNodes, project.canvas.nodes],
+  )
 
-  const openAddMenu = (
+  const openAddMenu = useCallback((
     clientX: number,
     clientY: number,
     connection?: AddNodeMenuState['connection'],
@@ -2692,7 +3029,7 @@ function CanvasSurface() {
       placement,
       connection,
     })
-  }
+  }, [screenToFlowPosition])
 
   const applyInputPickFromNode = useCallback(
     (nodeId: string) => {
@@ -2719,77 +3056,92 @@ function CanvasSurface() {
     [inputPickMode, project.canvas.nodes, project.resources],
   )
 
-  const handleNodeContextMenu = (event: ReactMouseEvent, node: Node) => {
-    event.preventDefault()
-    event.stopPropagation()
-    if (inputPickMode) {
-      applyInputPickFromNode(node.id)
-      return
-    }
-    setAddMenu(null)
-    setFunctionNodeMenu(undefined)
-    setGroupNodeMenu(undefined)
+  const handleNodeContextMenu = useCallback<NodeMouseHandler>(
+    (event, node) => {
+      event.preventDefault()
+      event.stopPropagation()
+      if (inputPickMode) {
+        applyInputPickFromNode(node.id)
+        return
+      }
+      setAddMenu(null)
+      setFunctionNodeMenu(undefined)
+      setGroupNodeMenu(undefined)
 
-    const canvasNode = project.canvas.nodes.find((item) => item.id === node.id)
-    if (canvasNode?.type === 'group') {
-      recordNodeSelectionRecency([node.id])
-      selectNode(node.id)
-      setSelectedEdgeIds([])
-      setQuickToolbar(undefined)
-      setGroupNodeMenu({
-        kind: 'group',
-        nodeId: node.id,
+      const canvasNode = project.canvas.nodes.find((item) => item.id === node.id)
+      if (canvasNode?.type === 'group') {
+        recordNodeSelectionRecency([node.id])
+        selectNode(node.id)
+        clearSelectedEdgeIds()
+        setQuickToolbar(undefined)
+        setGroupNodeMenu({
+          kind: 'group',
+          nodeId: node.id,
+          left: event.clientX,
+          top: event.clientY,
+        })
+        return
+      }
+
+      const selectedIds = activeSelectedNodeIds.includes(node.id) ? activeSelectedNodeIds : [node.id]
+      if (selectedIds.length > 1) {
+        recordNodeSelectionRecency(selectedIds)
+        if (!activeSelectedNodeIds.includes(node.id)) selectNodes(selectedIds)
+        clearSelectedEdgeIds()
+        setQuickToolbar(undefined)
+        setGroupNodeMenu({
+          kind: 'selection',
+          left: event.clientX,
+          top: event.clientY,
+        })
+        return
+      }
+
+      if (canvasNode?.type === 'function') {
+        recordNodeSelectionRecency([node.id])
+        selectNode(node.id)
+        clearSelectedEdgeIds()
+        setQuickToolbar(undefined)
+        const functionId = typeof canvasNode.data.functionId === 'string' ? canvasNode.data.functionId : undefined
+        if (!functionId || !project.functions[functionId]) return
+        setFunctionNodeMenu({
+          nodeId: node.id,
+          left: event.clientX,
+          top: event.clientY,
+        })
+        return
+      }
+
+      if (selectedQuickSourceNodeId !== node.id) {
+        recordNodeSelectionRecency([node.id])
+        selectNode(node.id)
+      }
+
+      if (sourceResourceRefs(node.id).length === 0) {
+        setQuickToolbar(undefined)
+        return
+      }
+
+      setQuickToolbar({
+        sourceNodeId: node.id,
         left: event.clientX,
         top: event.clientY,
       })
-      return
-    }
-
-    const selectedIds = activeSelectedNodeIds.includes(node.id) ? activeSelectedNodeIds : [node.id]
-    if (selectedIds.length > 1) {
-      recordNodeSelectionRecency(selectedIds)
-      if (!activeSelectedNodeIds.includes(node.id)) selectNodes(selectedIds)
-      setSelectedEdgeIds([])
-      setQuickToolbar(undefined)
-      setGroupNodeMenu({
-        kind: 'selection',
-        left: event.clientX,
-        top: event.clientY,
-      })
-      return
-    }
-
-    if (canvasNode?.type === 'function') {
-      recordNodeSelectionRecency([node.id])
-      selectNode(node.id)
-      setSelectedEdgeIds([])
-      setQuickToolbar(undefined)
-      const functionId = typeof canvasNode.data.functionId === 'string' ? canvasNode.data.functionId : undefined
-      if (!functionId || !project.functions[functionId]) return
-      setFunctionNodeMenu({
-        nodeId: node.id,
-        left: event.clientX,
-        top: event.clientY,
-      })
-      return
-    }
-
-    if (selectedQuickSourceNodeId !== node.id) {
-      recordNodeSelectionRecency([node.id])
-      selectNode(node.id)
-    }
-
-    if (sourceResourceRefs(node.id).length === 0) {
-      setQuickToolbar(undefined)
-      return
-    }
-
-    setQuickToolbar({
-      sourceNodeId: node.id,
-      left: event.clientX,
-      top: event.clientY,
-    })
-  }
+    },
+    [
+      activeSelectedNodeIds,
+      applyInputPickFromNode,
+      clearSelectedEdgeIds,
+      inputPickMode,
+      project.canvas.nodes,
+      project.functions,
+      recordNodeSelectionRecency,
+      selectNode,
+      selectNodes,
+      selectedQuickSourceNodeId,
+      sourceResourceRefs,
+    ],
+  )
 
   const openAssetInspector = (nodeId: string) => {
     setQuickToolbar(undefined)
@@ -2802,20 +3154,6 @@ function CanvasSurface() {
     setInspectorNodeId(undefined)
     setInspectorPreviewResource(undefined)
   }
-
-  useEffect(() => {
-    if (!inspectorNodeId) return undefined
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (inspectorPreviewResource) return
-      if (event.key === 'Escape') {
-        setInspectorNodeId(undefined)
-        setInspectorPreviewResource(undefined)
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [inspectorNodeId, inspectorPreviewResource])
 
   useEffect(() => {
     if (inspectorNodeId && !inspectedNode) {
@@ -3149,6 +3487,56 @@ function CanvasSurface() {
     return undefined
   }
 
+  const pointInsideCanvasNode = (clientX: number, clientY: number) => {
+    for (const node of document.querySelectorAll<HTMLElement>('.workspace-canvas .react-flow__node')) {
+      const rect = node.getBoundingClientRect()
+      if (rect.width <= 0 || rect.height <= 0) continue
+      if (clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom) {
+        return true
+      }
+    }
+    return false
+  }
+
+  const pointInsideSelectedGroupNode = (clientX: number, clientY: number) => {
+    for (const node of document.querySelectorAll<HTMLElement>('.workspace-canvas .react-flow__node-group.selected')) {
+      const rect = node.getBoundingClientRect()
+      if (rect.width <= 0 || rect.height <= 0) continue
+      if (clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom) {
+        return true
+      }
+    }
+    return false
+  }
+
+  const eventHitsCanvasNode = (event: ReactMouseEvent, target: HTMLElement | null) =>
+    Boolean(target?.closest('.react-flow__node')) || pointInsideCanvasNode(event.clientX, event.clientY)
+
+  const eventTargetsSelectedGroupBlank = (event: ReactMouseEvent, target: HTMLElement | null) => {
+    const targetNode = target?.closest('.react-flow__node') as HTMLElement | null
+    const targetSelectedGroupNode = target?.closest('.react-flow__node-group.selected') as HTMLElement | null
+    const targetIsSelectedGroupNode =
+      targetNode?.classList.contains('react-flow__node-group') && targetNode.classList.contains('selected')
+    return (
+      event.button === 0 &&
+      !event.shiftKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      (Boolean(targetSelectedGroupNode) || pointInsideSelectedGroupNode(event.clientX, event.clientY)) &&
+      (!targetNode || targetIsSelectedGroupNode) &&
+      !target?.closest(
+        '.node-title, .node-resize-handle, .react-flow__resize-control, button, input, select, textarea, .react-flow__controls, .comfy-minimap, .add-node-menu, .resource-quick-actions, .function-node-actions, .group-node-actions',
+      )
+    )
+  }
+
+  const pointerMovedSinceCanvasMouseDown = (event: ReactMouseEvent) => {
+    const start = canvasPointerDown.current
+    if (!start) return false
+    return Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4
+  }
+
   const handleClickAddMenuConnection = (nodeId: string | undefined, handleId: string | undefined) => {
     if (!nodeId || !handleId) return undefined
     const node = project.canvas.nodes.find((item) => item.id === nodeId)
@@ -3213,15 +3601,271 @@ function CanvasSurface() {
     openAddMenu(rect.left + rect.width / 2, rect.top + rect.height / 2, menuState.connection, menuState.placement)
   }
 
+  const handleSelectionStart = useCallback((event?: { clientX?: number; clientY?: number }) => {
+    const startPoint = clientPointFromEvent(event)
+    if (startPoint || !selectionBoxRect.current) {
+      selectionBoxMoveCleanup.current?.()
+      selectionBoxMoveCleanup.current = undefined
+
+      selectionBoxRect.current = startPoint
+        ? { startX: startPoint.x, startY: startPoint.y, endX: startPoint.x, endY: startPoint.y }
+        : null
+
+      if (startPoint) {
+        const updateSelectionRectEnd = (moveEvent: MouseEvent) => {
+          const nextPoint = clientPointFromEvent(moveEvent)
+          if (!nextPoint || !selectionBoxRect.current) return
+          selectionBoxRect.current.endX = nextPoint.x
+          selectionBoxRect.current.endY = nextPoint.y
+        }
+        window.addEventListener('pointermove', updateSelectionRectEnd)
+        window.addEventListener('mousemove', updateSelectionRectEnd)
+        selectionBoxMoveCleanup.current = () => {
+          window.removeEventListener('pointermove', updateSelectionRectEnd)
+          window.removeEventListener('mousemove', updateSelectionRectEnd)
+        }
+      }
+    }
+
+    selectionBoxActive.current = true
+    selectionBoxNodeIds.current = []
+    clearSelectedEdgeIds()
+    clearTraceHighlightNodeIds()
+    setQuickToolbar(undefined)
+    setFunctionNodeMenu(undefined)
+    setGroupNodeMenu(undefined)
+  }, [clearSelectedEdgeIds, clearTraceHighlightNodeIds])
+
+  const handleSelectionEnd = useCallback((event?: { clientX?: number; clientY?: number }) => {
+    const endPoint = clientPointFromEvent(event)
+    if (endPoint && selectionBoxRect.current) {
+      selectionBoxRect.current.endX = endPoint.x
+      selectionBoxRect.current.endY = endPoint.y
+    }
+
+    selectionBoxMoveCleanup.current?.()
+    selectionBoxMoveCleanup.current = undefined
+    selectionBoxActive.current = false
+    window.requestAnimationFrame(() => {
+      const selectedIds = [
+        ...document.querySelectorAll<HTMLElement>('.workspace-canvas .react-flow__node.selected'),
+      ]
+        .map((node) => node.getAttribute('data-id'))
+        .filter((nodeId): nodeId is string => Boolean(nodeId))
+
+      const rectSelectedIds = selectionBoxRect.current ? selectedNodeIdsFromClientSelectionRect(selectionBoxRect.current) : []
+      const nextSelectedIds = uniqueIds(
+        selectedIds.length > 0 ? selectedIds : rectSelectedIds.length > 0 ? rectSelectedIds : selectionBoxNodeIds.current,
+      )
+      ignoreSelectionSyncUntil.current = Date.now() + 250
+      clearSelectedEdgeIds()
+      selectNodes(nextSelectedIds)
+      recordNodeSelectionRecency(nextSelectedIds)
+      selectionBoxNodeIds.current = []
+      selectionBoxRect.current = null
+    })
+  }, [clearSelectedEdgeIds, recordNodeSelectionRecency, selectNodes])
+
+  const handleEdgeClick = useCallback<EdgeMouseHandler>(
+    (event, edge) => {
+      event.stopPropagation()
+      setSelectedEdgeIds((current) => (current.length === 1 && current[0] === edge.id ? current : [edge.id]))
+      clearTraceHighlightNodeIds()
+      setQuickToolbar(undefined)
+      setFunctionNodeMenu(undefined)
+      setGroupNodeMenu(undefined)
+      selectNode(undefined)
+    },
+    [clearTraceHighlightNodeIds, selectNode],
+  )
+
+  const handleConnectStart = useCallback<OnConnectStart>((_, params) => {
+    connectionStart.current = { nodeId: params.nodeId, handleId: params.handleId }
+  }, [])
+
+  const handleConnectEnd = useCallback<OnConnectEnd>(
+    (event, connectionState: FinalConnectionState) => {
+      const point = eventPoint(event)
+      const targetHandle = handleInfoNearPoint(point.x, point.y)
+      const startedConnection = connectionStart.current
+      const sourceNodeId =
+        connectionState.fromHandle?.nodeId ?? startedConnection?.nodeId ?? connectionState.fromNode?.id ?? undefined
+      const sourceHandleId = connectionState.fromHandle?.id ?? startedConnection?.handleId ?? undefined
+      const targetHandleId = connectionState.toHandle?.id ?? targetHandle?.handleId
+      const targetNodeId = connectionState.toNode?.id ?? connectionState.toHandle?.nodeId ?? targetHandle?.nodeId
+
+      connectionStart.current = null
+      if (!sourceNodeId || !sourceHandleId) return
+
+      if (
+        connectByNodeRoles(sourceNodeId, targetNodeId, {
+          sourceHandleId,
+          targetHandleId,
+          targetInputKey: inputKeyFromHandle(targetHandleId),
+          startedInputKey: inputKeyFromHandle(sourceHandleId),
+        })
+      ) {
+        return
+      }
+      if (connectionState.isValid) return
+
+      const sourceNode = project.canvas.nodes.find((node) => node.id === sourceNodeId)
+      const startedInputKey = inputKeyFromHandle(sourceHandleId)
+      const resourceType = inputTypeForFunctionInput(sourceNodeId, startedInputKey)
+      const menuConnection =
+        sourceNode?.type === 'function' && startedInputKey && resourceType
+          ? {
+              kind: 'target' as const,
+              targetNodeId: sourceNode.id,
+              targetInputKey: startedInputKey,
+              resourceType,
+            }
+          : sourceNode?.type === 'resource' || sourceNode?.type === 'result_group'
+            ? {
+                kind: 'source' as const,
+                sourceNodeId: sourceNode.id,
+                sourceHandleId,
+                resourceType: connectionResourceType(sourceNode.id, sourceHandleId),
+              }
+            : undefined
+
+      window.requestAnimationFrame(() => openAddMenu(point.x, point.y, menuConnection))
+    },
+    [
+      connectByNodeRoles,
+      connectionResourceType,
+      inputTypeForFunctionInput,
+      openAddMenu,
+      project.canvas.nodes,
+    ],
+  )
+
+  const handleNodeClick = useCallback<NodeMouseHandler>(
+    (event, node) => {
+      if (inputPickMode) {
+        event.preventDefault()
+        event.stopPropagation()
+        applyInputPickFromNode(node.id)
+        return
+      }
+      const clickTarget = event.target instanceof HTMLElement ? event.target : null
+      const clickedGroupNode = clickTarget?.closest('.react-flow__node-group') as HTMLElement | null
+      const clickedSelectedGroupBody =
+        node.type === 'group' &&
+        activeSelectedNodeIds.includes(node.id) &&
+        Boolean(clickedGroupNode?.classList.contains('selected')) &&
+        !event.shiftKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !pointerMovedSinceCanvasMouseDown(event) &&
+        Boolean(clickTarget?.closest('.group-node')) &&
+        !clickTarget?.closest(
+          '.node-title, .node-resize-handle, .react-flow__resize-control, button, input, select, textarea',
+        )
+      if (clickedSelectedGroupBody) {
+        event.preventDefault()
+        event.stopPropagation()
+        clearCanvasSelectionNextFrame()
+        return
+      }
+      const clickedAt = Date.now()
+      const isRepeatedNodeClick =
+        lastNodeClick.current?.nodeId === node.id && clickedAt - lastNodeClick.current.clickedAt <= 420
+      lastNodeClick.current = { nodeId: node.id, clickedAt }
+      if (event.detail >= 2 || isRepeatedNodeClick) {
+        event.preventDefault()
+        event.stopPropagation()
+        expandTraceHighlightForNode(node.id)
+        return
+      }
+      clearSelectedEdgeIds()
+      setQuickToolbar(undefined)
+      setFunctionNodeMenu(undefined)
+      setGroupNodeMenu(undefined)
+      if (suppressNextNodeClick.current) {
+        suppressNextNodeClick.current = false
+        return
+      }
+      if (!event.shiftKey && !event.altKey && activeSelectedNodeIds.length > 1 && activeSelectedNodeIds.includes(node.id)) {
+        recordNodeSelectionRecency([node.id])
+        return
+      }
+      const selectionMode = selectionModeFromEvent(event)
+      const nextSelectedNodeIds = selectionIdsForNodeClick(node.id, selectionMode)
+      recordNodeSelectionRecency([node.id])
+      selectNode(node.id, selectionMode)
+      syncFlowNodeSelection(nextSelectedNodeIds)
+    },
+    [
+      activeSelectedNodeIds,
+      applyInputPickFromNode,
+      clearCanvasSelectionNextFrame,
+      clearSelectedEdgeIds,
+      expandTraceHighlightForNode,
+      inputPickMode,
+      recordNodeSelectionRecency,
+      selectNode,
+      selectionIdsForNodeClick,
+      syncFlowNodeSelection,
+    ],
+  )
+
+  const handleNodeDoubleClick = useCallback<NodeMouseHandler>(
+    (event, node) => {
+      if (inputPickMode) return
+      event.preventDefault()
+      event.stopPropagation()
+      expandTraceHighlightForNode(node.id)
+    },
+    [expandTraceHighlightForNode, inputPickMode],
+  )
+
+  const handleNodeDragStop = useCallback<OnNodeDrag>(
+    (_, node, draggedNodes) => {
+      suppressNextNodeClick.current = true
+      window.setTimeout(() => {
+        suppressNextNodeClick.current = false
+      }, 0)
+      if (draggedNodes.length > 0) {
+        updateNodePositions(Object.fromEntries(draggedNodes.map((draggedNode) => [draggedNode.id, draggedNode.position])))
+        return
+      }
+      updateNodePosition(node.id, node.position)
+    },
+    [updateNodePosition, updateNodePositions],
+  )
+
+  const handlePaneClick = useCallback(() => {
+    if (inputPickMode) return
+    clearCanvasSelection()
+  }, [clearCanvasSelection, inputPickMode])
+
   return (
     <section
       ref={canvasRef}
       className={`workspace-canvas${inputPickMode ? ' asset-pick-mode' : ''}`}
       aria-label="Canvas"
-      onClickCapture={handleHandleClick}
+      onClickCapture={(event) => {
+        handleHandleClick(event)
+        if (event.defaultPrevented || inputPickMode) return
+        const target = event.target instanceof HTMLElement ? event.target : null
+        if (pointerMovedSinceCanvasMouseDown(event)) return
+        if (!eventTargetsSelectedGroupBlank(event, target)) return
+        event.preventDefault()
+        event.stopPropagation()
+        suppressNextNodeClick.current = true
+        window.setTimeout(() => {
+          suppressNextNodeClick.current = false
+        }, 0)
+        clearCanvasSelectionNextFrame()
+      }}
       onMouseDownCapture={(event) => {
         if (inputPickMode) return
+        canvasPointerDown.current =
+          event.button === 0 ? { x: event.clientX, y: event.clientY } : undefined
         const target = event.target instanceof HTMLElement ? event.target : null
+        if (eventHitsCanvasNode(event, target)) return
         if (
           target?.closest(
             '.react-flow__node, .react-flow__edge, button, input, select, textarea, .react-flow__controls, .comfy-minimap, .add-node-menu, .resource-quick-actions, .function-node-actions',
@@ -3229,11 +3873,18 @@ function CanvasSurface() {
         ) {
           return
         }
+        if (event.button === 0 && (event.ctrlKey || event.metaKey)) {
+          handleSelectionStart(event)
+          return
+        }
         clearCanvasSelection()
       }}
       onDoubleClick={(event) => {
         const target = event.target as HTMLElement
-        if (target.closest('.react-flow__node, button, input, textarea, .react-flow__controls, .comfy-minimap, .add-node-menu')) {
+        if (
+          eventHitsCanvasNode(event, target) ||
+          target.closest('button, input, textarea, .react-flow__controls, .comfy-minimap, .add-node-menu')
+        ) {
           return
         }
         event.preventDefault()
@@ -3242,8 +3893,9 @@ function CanvasSurface() {
       onContextMenu={(event) => {
         const target = event.target as HTMLElement
         if (
+          eventHitsCanvasNode(event, target) ||
           target.closest(
-            '.react-flow__node, button, input, textarea, .react-flow__controls, .comfy-minimap, .add-node-menu, .resource-quick-actions, .function-node-actions',
+            'button, input, textarea, .react-flow__controls, .comfy-minimap, .add-node-menu, .resource-quick-actions, .function-node-actions',
           )
         ) {
           return
@@ -3259,153 +3911,26 @@ function CanvasSurface() {
         edges={edges}
         nodeTypes={nodeTypes}
         onNodesChange={handleNodesChange}
-        onEdgesChange={onEdgesChange}
-        onSelectionStart={() => {
-          selectionBoxActive.current = true
-          selectionBoxNodeIds.current = []
-          setSelectedEdgeIds((current) => (current.length > 0 ? [] : current))
-          setTraceHighlightNodeIds((current) => (current.length > 0 ? [] : current))
-          setQuickToolbar(undefined)
-          setFunctionNodeMenu(undefined)
-          setGroupNodeMenu(undefined)
-        }}
-        onSelectionEnd={() => {
-          selectionBoxActive.current = false
-          window.requestAnimationFrame(() => {
-            const selectedIds = [
-              ...document.querySelectorAll<HTMLElement>('.workspace-canvas .react-flow__node.selected'),
-            ]
-              .map((node) => node.getAttribute('data-id'))
-              .filter((nodeId): nodeId is string => Boolean(nodeId))
-
-            selectNodes(selectedIds.length > 0 ? selectedIds : selectionBoxNodeIds.current)
-            recordNodeSelectionRecency(selectedIds.length > 0 ? selectedIds : selectionBoxNodeIds.current)
-            selectionBoxNodeIds.current = []
-          })
-        }}
+        onEdgesChange={handleEdgesChange}
+        onSelectionStart={handleSelectionStart}
+        onSelectionEnd={handleSelectionEnd}
         onSelectionChange={handleSelectionChange}
         onConnect={handleConnect}
-        onEdgeClick={(event, edge) => {
-          event.stopPropagation()
-          setSelectedEdgeIds([edge.id])
-          setTraceHighlightNodeIds([])
-          setQuickToolbar(undefined)
-          setFunctionNodeMenu(undefined)
-          setGroupNodeMenu(undefined)
-          selectNode(undefined)
-        }}
-        onConnectStart={(_, params) => {
-          connectionStart.current = { nodeId: params.nodeId, handleId: params.handleId }
-        }}
-        onConnectEnd={(event: MouseEvent | TouchEvent, connectionState: FinalConnectionState) => {
-          const point = eventPoint(event)
-          const targetHandle = handleInfoNearPoint(point.x, point.y)
-          const sourceNodeId =
-            connectionState.fromNode?.id ?? connectionState.fromHandle?.nodeId ?? connectionStart.current?.nodeId ?? undefined
-          const sourceHandleId = connectionState.fromHandle?.id ?? connectionStart.current?.handleId ?? undefined
-          const targetHandleId = connectionState.toHandle?.id ?? targetHandle?.handleId
-          const targetNodeId = connectionState.toNode?.id ?? connectionState.toHandle?.nodeId ?? targetHandle?.nodeId
-
-          connectionStart.current = null
-
-          if (
-            connectByNodeRoles(sourceNodeId, targetNodeId, {
-              sourceHandleId,
-              targetHandleId,
-              targetInputKey: inputKeyFromHandle(targetHandleId),
-              startedInputKey: inputKeyFromHandle(sourceHandleId),
-            })
-          ) {
-            return
-          }
-          if (connectionState.isValid) return
-
-          const sourceNode = project.canvas.nodes.find((node) => node.id === sourceNodeId)
-          const startedInputKey = inputKeyFromHandle(sourceHandleId)
-          const resourceType = inputTypeForFunctionInput(sourceNodeId, startedInputKey)
-          const menuConnection =
-            sourceNode?.type === 'function' && startedInputKey && resourceType
-              ? {
-                  kind: 'target' as const,
-                  targetNodeId: sourceNode.id,
-                  targetInputKey: startedInputKey,
-                  resourceType,
-                }
-              : sourceNode?.type === 'resource' || sourceNode?.type === 'result_group'
-                ? {
-                    kind: 'source' as const,
-                    sourceNodeId: sourceNode.id,
-                    sourceHandleId,
-                    resourceType: connectionResourceType(sourceNode.id, sourceHandleId),
-                  }
-                : undefined
-
-          window.requestAnimationFrame(() =>
-            openAddMenu(point.x, point.y, menuConnection),
-          )
-        }}
-        onNodeClick={(event, node) => {
-          if (inputPickMode) {
-            event.preventDefault()
-            event.stopPropagation()
-            applyInputPickFromNode(node.id)
-            return
-          }
-          setSelectedEdgeIds([])
-          setQuickToolbar(undefined)
-          setFunctionNodeMenu(undefined)
-          setGroupNodeMenu(undefined)
-          if (suppressNextNodeClick.current) {
-            suppressNextNodeClick.current = false
-            return
-          }
-          if (!event.shiftKey && !event.altKey && activeSelectedNodeIds.length > 1 && activeSelectedNodeIds.includes(node.id)) {
-            recordNodeSelectionRecency([node.id])
-            return
-          }
-          const selectionMode = selectionModeFromEvent(event)
-          const nextSelectedNodeIds = selectionIdsForNodeClick(node.id, selectionMode)
-          recordNodeSelectionRecency([node.id])
-          selectNode(node.id, selectionMode)
-          syncFlowNodeSelection(nextSelectedNodeIds)
-        }}
-        onNodeDoubleClick={(event, node) => {
-          if (inputPickMode) return
-          event.preventDefault()
-          event.stopPropagation()
-          setSelectedEdgeIds([])
-          setQuickToolbar(undefined)
-          setFunctionNodeMenu(undefined)
-          setGroupNodeMenu(undefined)
-          recordNodeSelectionRecency([node.id])
-          if (!activeSelectedNodeIds.includes(node.id)) {
-            selectNode(node.id)
-          }
-          setTraceHighlightNodeIds([node.id])
-        }}
+        onEdgeClick={handleEdgeClick}
+        onConnectStart={handleConnectStart}
+        onConnectEnd={handleConnectEnd}
+        onNodeClick={handleNodeClick}
+        onNodeDoubleClick={handleNodeDoubleClick}
         onNodeContextMenu={handleNodeContextMenu}
-        onNodeDragStop={(_, node, draggedNodes) => {
-          suppressNextNodeClick.current = true
-          window.setTimeout(() => {
-            suppressNextNodeClick.current = false
-          }, 0)
-          if (draggedNodes.length > 0) {
-            updateNodePositions(Object.fromEntries(draggedNodes.map((draggedNode) => [draggedNode.id, draggedNode.position])))
-            return
-          }
-          updateNodePosition(node.id, node.position)
-        }}
-        onPaneClick={() => {
-          if (inputPickMode) return
-          clearCanvasSelection()
-        }}
+        onNodeDragStop={handleNodeDragStop}
+        onPaneClick={handlePaneClick}
         zoomOnDoubleClick={false}
         deleteKeyCode={null}
         selectionKeyCode="Control"
-        multiSelectionKeyCode={['Shift', 'Control', 'Meta']}
+        multiSelectionKeyCode={CANVAS_MULTI_SELECTION_KEYS}
         selectionMode={SelectionMode.Partial}
         snapToGrid
-        snapGrid={[24, 24]}
+        snapGrid={CANVAS_SNAP_GRID}
       >
         <Background gap={24} size={1} />
         <ComfyMinimap nodes={nodes} edges={edges} canvasRef={canvasRef} />
@@ -3574,8 +4099,7 @@ function CanvasSurface() {
               aria-label="Group Selection"
               title="Group selection"
               onClick={() => {
-                groupSelectedNodes()
-                setGroupNodeMenu(undefined)
+                groupActiveSelection()
               }}
             >
               <Layers size={16} />
@@ -3599,7 +4123,10 @@ function CanvasSurface() {
               aria-label="Ungroup"
               title="Ungroup"
               onClick={() => {
-                if (groupNodeMenu.nodeId) ungroupNode(groupNodeMenu.nodeId)
+                if (groupNodeMenu.nodeId) {
+                  ignoreSelectionSyncUntil.current = Date.now() + 250
+                  ungroupNode(groupNodeMenu.nodeId)
+                }
                 setGroupNodeMenu(undefined)
               }}
             >

@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { projectStore } from './store/projectStore'
@@ -52,6 +52,25 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: 'Switch to light theme' })).toBeInTheDocument()
   })
 
+  it('keeps portaled function runner dialogs under the active theme scope', () => {
+    render(<App />)
+
+    const workbench = screen.getByLabelText('Infinity ComfyUI workbench')
+    expect(workbench).toHaveAttribute('data-theme', 'light')
+
+    fireEvent.contextMenu(screen.getByLabelText('Canvas'), { clientX: 180, clientY: 160 })
+    fireEvent.click(within(screen.getByRole('menu', { name: 'Add node' })).getByRole('menuitem', { name: 'OpenAI LLM' }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Run OpenAI LLM' })
+    expect(dialog).toHaveClass('function-run-dialog')
+    expect(dialog.closest('[data-theme="light"]')).not.toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to dark theme' }))
+
+    expect(workbench).toHaveAttribute('data-theme', 'dark')
+    expect(dialog.closest('[data-theme="dark"]')).not.toBeNull()
+  })
+
   it('checks ComfyUI server statuses every five seconds', () => {
     vi.useFakeTimers()
     const checkComfyEndpointStatuses = vi.fn().mockResolvedValue(undefined)
@@ -78,36 +97,68 @@ describe('App', () => {
 
     render(<App />)
 
-    const projectSelector = screen.getByRole('combobox', { name: 'Current project' })
-    expect(projectSelector).toHaveValue(firstProjectId)
-    expect(screen.getByRole('option', { name: 'Kitchen Board' })).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: 'Mood Board' })).toBeInTheDocument()
+    const projectSelector = screen.getByRole('button', { name: 'Current project' })
+    expect(projectSelector).toHaveTextContent('Kitchen Board')
+    expect(projectSelector).toHaveAttribute('aria-haspopup', 'listbox')
+    expect(projectSelector).toHaveAttribute('aria-expanded', 'false')
 
-    fireEvent.change(projectSelector, { target: { value: secondProjectId } })
+    fireEvent.click(projectSelector)
 
-    expect(projectSelector).toHaveValue(secondProjectId)
-    expect(projectSelector).toHaveDisplayValue('Mood Board')
+    expect(projectSelector).toHaveAttribute('aria-expanded', 'true')
+    const projectList = screen.getByRole('listbox', { name: 'Project list' })
+    expect(within(projectList).getByRole('option', { name: /Kitchen Board/ })).toHaveAttribute('aria-selected', 'true')
+    const moodBoardOption = within(projectList).getByRole('option', { name: /Mood Board/ })
+    expect(moodBoardOption).toHaveAttribute('aria-selected', 'false')
+
+    fireEvent.click(moodBoardOption)
+
+    expect(projectStore.getState().project.project.id).toBe(secondProjectId)
+    expect(projectSelector).toHaveTextContent('Mood Board')
+    expect(projectSelector).toHaveAttribute('aria-expanded', 'false')
   })
 
-  it('moves project import, export, and metadata editing into the topbar', () => {
+  it('moves project import, export, and metadata editing into the topbar', async () => {
     projectStore.getState().updateProjectMetadata({
       name: 'Kitchen Board',
       description: 'Original project brief',
     })
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:project-download')
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined)
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
 
     render(<App />)
 
     const topbar = screen.getByRole('banner')
     expect(within(topbar).queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument()
-    expect(within(topbar).getByRole('button', { name: /export project/i })).toBeVisible()
-    expect(within(topbar).getByRole('button', { name: /import project/i })).toBeVisible()
+    expect(within(topbar).getByRole('button', { name: 'New project' })).toBeVisible()
+    expect(within(topbar).getByRole('button', { name: 'Edit project information' })).toBeVisible()
+    const exportProjectButton = within(topbar).getByRole('button', { name: 'Export Project' })
+    const exportConfigButton = within(topbar).getByRole('button', { name: 'Export Config' })
+    const importProjectButton = within(topbar).getByRole('button', { name: 'Import Project' })
+    expect(exportProjectButton).toBeVisible()
+    expect(exportConfigButton).toBeVisible()
+    expect(importProjectButton).toBeVisible()
 
-    const projectSelector = within(topbar).getByRole('combobox', { name: 'Current project' })
-    expect(projectSelector).toHaveDisplayValue('Kitchen Board')
+    fireEvent.click(exportProjectButton)
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1))
+    expect(anchorClick).toHaveBeenCalledTimes(1)
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:project-download')
 
-    fireEvent.click(within(topbar).getByRole('button', { name: /edit project (information|details|metadata)/i }))
+    fireEvent.click(exportConfigButton)
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(2))
+    expect(anchorClick).toHaveBeenCalledTimes(2)
 
-    const dialog = screen.getByRole('dialog', { name: /project (information|details|metadata)/i })
+    const importInput = topbar.querySelector('input[type="file"]') as HTMLInputElement
+    const importInputClick = vi.spyOn(importInput, 'click').mockImplementation(() => undefined)
+    fireEvent.click(importProjectButton)
+    expect(importInputClick).toHaveBeenCalledTimes(1)
+
+    const projectSelector = within(topbar).getByRole('button', { name: 'Current project' })
+    expect(projectSelector).toHaveTextContent('Kitchen Board')
+
+    fireEvent.click(within(topbar).getByRole('button', { name: 'Edit project information' }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Project information' })
     fireEvent.change(within(dialog).getByLabelText('Project name'), { target: { value: 'Renamed Kitchen Board' } })
     fireEvent.change(within(dialog).getByLabelText('Project description'), {
       target: { value: 'Updated project brief' },
@@ -118,7 +169,7 @@ describe('App', () => {
       name: 'Renamed Kitchen Board',
       description: 'Updated project brief',
     })
-    expect(projectSelector).toHaveDisplayValue('Renamed Kitchen Board')
-    expect(screen.queryByRole('dialog', { name: /project (information|details|metadata)/i })).not.toBeInTheDocument()
+    expect(projectSelector).toHaveTextContent('Renamed Kitchen Board')
+    expect(screen.queryByRole('dialog', { name: 'Project information' })).not.toBeInTheDocument()
   })
 })

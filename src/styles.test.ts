@@ -120,17 +120,42 @@ const colorContrast = (selector: string, background: RgbColor) => {
 
 const darkDialogBackdrop: RgbColor = { r: 15, g: 23, b: 42 }
 
+const expectLightThemeTextToken = (value: string) => {
+  const color = parseCssColor(value)
+  expect(color).toBeDefined()
+  if (!color) return
+
+  expect(relativeLuminance(color)).toBeLessThan(0.2)
+}
+
 const cssBlocksForSelector = (selector: string) =>
   Array.from(styles.matchAll(/(?<selectors>[^{}]+)\{(?<body>[^}]*)\}/g))
     .filter((match) => {
       const selectors = match.groups?.selectors
-      return selectors
-        ?.split(',')
-        .map((value) => value.trim())
-        .includes(selector)
+      return selectors ? splitCssSelectorList(selectors).includes(selector) : false
     })
     .map((match) => match.groups?.body ?? '')
     .join('\n')
+
+const splitCssSelectorList = (selectors: string) => {
+  const result: string[] = []
+  let depth = 0
+  let current = ''
+
+  for (const char of selectors) {
+    if (char === '(') depth += 1
+    if (char === ')') depth = Math.max(0, depth - 1)
+    if (char === ',' && depth === 0) {
+      result.push(current.trim())
+      current = ''
+      continue
+    }
+    current += char
+  }
+
+  if (current.trim()) result.push(current.trim())
+  return result
+}
 
 const cssDeclarationValueForSelector = (selector: string, property: string) => {
   const block = cssBlocksForSelector(selector)
@@ -166,6 +191,28 @@ const expectDarkDialogSurface = (selector: string) => {
   if (!surfaceColor) return
 
   expect(relativeLuminance(surfaceColor)).toBeLessThan(0.32)
+}
+
+const lightDialogBackdrop: RgbColor = { r: 255, g: 255, b: 255 }
+
+const expectLightDialogSurface = (selector: string) => {
+  const surfaceValue = cssSurfaceValueForSelector(selector)
+  expect(surfaceValue).toBeDefined()
+
+  const surfaceColor = parseCssSurfaceColor(surfaceValue, lightDialogBackdrop)
+  expect(surfaceColor).toBeDefined()
+  if (!surfaceColor) return
+
+  expect(relativeLuminance(surfaceColor)).toBeGreaterThan(0.78)
+}
+
+const expectLightDialogControl = (selector: string) => {
+  expect(cssBlocksForSelector(selector)).not.toBe('')
+  expectLightDialogSurface(selector)
+  expect(cssDeclarationValueForSelector(selector, 'color')).toBeDefined()
+  expect(
+    cssDeclarationValueForSelector(selector, 'border') ?? cssDeclarationValueForSelector(selector, 'border-color'),
+  ).toBeDefined()
 }
 
 const expectScopedFunctionRunControl = (selector: string) => {
@@ -266,6 +313,28 @@ describe('canvas resource UI CSS', () => {
 })
 
 describe('function run dialog CSS', () => {
+  it('applies light theme text tokens to portaled function run dialogs', () => {
+    const style = document.createElement('style')
+    style.textContent = styles
+    document.head.append(style)
+
+    const dialog = document.createElement('section')
+    dialog.className = 'local-action-dialog function-run-dialog'
+    document.body.setAttribute('data-theme', 'light')
+    document.body.append(dialog)
+
+    try {
+      const computed = getComputedStyle(dialog)
+
+      expectLightThemeTextToken(computed.getPropertyValue('--ink').trim())
+      expectLightThemeTextToken(computed.getPropertyValue('--ink-soft').trim())
+    } finally {
+      dialog.remove()
+      style.remove()
+      document.body.removeAttribute('data-theme')
+    }
+  })
+
   it('keeps resource input labels and pick controls readable on the dialog field surface', () => {
     const fieldSurface = parseCssSurfaceColor(cssSurfaceValueForSelector('.function-run-field')) ?? darkDialogBackdrop
     const pickButtonSurface =
@@ -291,5 +360,30 @@ describe('function run dialog CSS', () => {
     expectScopedFunctionRunControl('.function-run-field select')
     expectScopedFunctionRunControl('.function-run-field input')
     expectScopedFunctionRunControl('.function-run-field textarea')
+  })
+
+  it('scopes portaled light theme footer controls to the function run dialog skin', () => {
+    expectLightDialogControl("body[data-theme='light'] .function-run-dialog .function-run-count input")
+    expectLightDialogControl("body[data-theme='light'] .function-run-dialog .local-action-footer button:not(.primary)")
+  })
+})
+
+describe('light theme CSS scope', () => {
+  const lightThemeBridge = ":is(body[data-theme='light'], .app-shell[data-theme='light'])"
+
+  it('bridges app and body theme scopes for portaled surfaces and floating controls', () => {
+    const selectors = [
+      `${lightThemeBridge} .manager-modal`,
+      `${lightThemeBridge} .full-preview-modal`,
+      `${lightThemeBridge} .openai-message-modal`,
+      `${lightThemeBridge} .local-action-dialog`,
+      `${lightThemeBridge} .compare-modal`,
+      `${lightThemeBridge} .add-node-menu`,
+      `${lightThemeBridge} .resource-quick-actions`,
+      `${lightThemeBridge} .node-reference-popover`,
+      `${lightThemeBridge} .searchable-options`,
+    ]
+
+    for (const selector of selectors) expect(cssBlocksForSelector(selector)).not.toBe('')
   })
 })

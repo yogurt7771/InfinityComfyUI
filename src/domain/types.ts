@@ -1,5 +1,14 @@
 export type ResourceType = 'text' | 'number' | 'boolean' | 'image' | 'video' | 'audio'
 
+export type TextDisplayMode =
+  | 'plaintext'
+  | 'markdown'
+  | 'html'
+  | 'json'
+  | 'yaml'
+  | 'render markdown'
+  | 'render html'
+
 export type ResourceSourceKind =
   | 'user_upload'
   | 'manual_input'
@@ -42,6 +51,7 @@ export type Resource = {
   id: string
   type: ResourceType
   name?: string
+  displayMode?: TextDisplayMode
   value: string | number | boolean | MediaResourceValue
   source: {
     kind: ResourceSourceKind
@@ -394,6 +404,8 @@ export type CanvasTemplate = {
   edges: CanvasEdge[]
   resources: Record<string, Resource>
   assets: Record<string, AssetRecord>
+  functions?: Record<string, GenerationFunction>
+  tasks?: Record<string, ExecutionTask>
   inputResourceIds: string[]
   outputResourceIds: string[]
 }

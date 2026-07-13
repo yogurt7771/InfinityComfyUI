@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 import type { Resource } from '../domain/types'
 import { projectStore } from '../store/projectStore'
+import { ModalFrame } from './ModalFrame'
 
 const mediaValue = (resource: Resource) =>
   typeof resource.value === 'object' && resource.value !== null && 'url' in resource.value ? resource.value : undefined
@@ -143,57 +143,28 @@ export function FullResourcePreviewModal({
     setCurrentResourceId(resources[(currentIndex + 1) % resources.length]?.id)
   }
 
-  useEffect(() => {
-    if (!resource) return undefined
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        onClose()
-        return
-      }
-      if (event.key === 'ArrowLeft') {
-        if (!canNavigate) return
-        event.preventDefault()
-        goToPrevious()
-      }
-      if (event.key === 'ArrowRight') {
-        if (!canNavigate) return
-        event.preventDefault()
-        goToNext()
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  })
-
   if (!resource || !currentResource) return null
 
   const label = resourceDownloadName(currentResource)
-  const dialog = (
-    <div
-      className="full-preview-backdrop nodrag nopan"
-      onContextMenu={(event) => {
-        event.preventDefault()
-        event.stopPropagation()
-      }}
-      onMouseDown={(event) => {
-        event.stopPropagation()
-        if (event.target === event.currentTarget) onClose()
+  return (
+    <ModalFrame
+      label={`Preview ${label}`}
+      onClose={onClose}
+      backdropClassName="full-preview-backdrop nodrag nopan"
+      dialogClassName="full-preview-modal"
+      onGlobalKeyDown={(event) => {
+        if (event.key === 'ArrowLeft') {
+          if (!canNavigate) return
+          event.preventDefault()
+          goToPrevious()
+        }
+        if (event.key === 'ArrowRight') {
+          if (!canNavigate) return
+          event.preventDefault()
+          goToNext()
+        }
       }}
     >
-      <section
-        aria-label={`Preview ${label}`}
-        aria-modal="true"
-        className="full-preview-modal"
-        role="dialog"
-        onContextMenu={(event) => {
-          event.preventDefault()
-          event.stopPropagation()
-        }}
-        onMouseDown={(event) => event.stopPropagation()}
-      >
         <div className="full-preview-header">
           <div>
             <h2>{label}</h2>
@@ -221,9 +192,6 @@ export function FullResourcePreviewModal({
         <div className="full-preview-body">
           <FullResourcePreview resource={currentResource} />
         </div>
-      </section>
-    </div>
+    </ModalFrame>
   )
-
-  return createPortal(dialog, document.body)
 }

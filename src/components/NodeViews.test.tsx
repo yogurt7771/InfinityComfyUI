@@ -1191,6 +1191,73 @@ describe('NodeViews', () => {
     expect(container.querySelector('.openai-node-editor')).not.toBeNull()
   })
 
+  it('closes message editor dialogs from the backdrop and Escape without leaking mouse or context events', () => {
+    const openAiConfig: OpenAILlmConfig = {
+      baseUrl: 'https://api.openai.com/v1',
+      apiKey: '',
+      model: 'gpt-4.1-mini',
+      messages: [{ role: 'user', content: [{ type: 'text', content: 'Describe the image.' }] }],
+    }
+    const openAiFunction: GenerationFunction = {
+      id: 'fn_openai_llm',
+      name: 'OpenAI LLM',
+      category: 'LLM',
+      workflow: { format: 'openai_chat_completions', rawJson: {} },
+      openai: openAiConfig,
+      inputs: [],
+      outputs: [{ key: 'text', label: 'Text', type: 'text', bind: { path: 'output_text' }, extract: { source: 'node_output' } }],
+      createdAt: '2026-05-09T00:00:00.000Z',
+      updatedAt: '2026-05-09T00:00:00.000Z',
+    }
+    const onShellMouseDown = vi.fn()
+    const onShellContextMenu = vi.fn()
+    const onShellPointerDown = vi.fn()
+    const props = {
+      id: 'node_openai',
+      selected: false,
+      data: {
+        ...baseNodeData,
+        functionsById: { fn_openai_llm: openAiFunction },
+        functionId: 'fn_openai_llm',
+        title: 'OpenAI LLM',
+        openaiConfig: openAiConfig,
+        onUpdateOpenAiConfig: vi.fn(),
+      },
+    } as unknown as ComponentProps<typeof FunctionNodeView>
+
+    render(
+      <div onMouseDown={onShellMouseDown} onContextMenu={onShellContextMenu} onPointerDown={onShellPointerDown}>
+        <ReactFlowProvider>
+          <FunctionNodeView {...props} />
+        </ReactFlowProvider>
+      </div>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit messages' }))
+    expect(screen.getByRole('dialog', { name: 'OpenAI Messages' })).toBeVisible()
+
+    const backdrop = document.querySelector('.node-modal-backdrop') as HTMLElement
+    fireEvent.contextMenu(backdrop, { clientX: 80, clientY: 90 })
+    expect(onShellContextMenu).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: 'OpenAI Messages' })).toBeVisible()
+
+    fireEvent.pointerDown(backdrop, { clientX: 80, clientY: 90 })
+    expect(onShellPointerDown).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: 'OpenAI Messages' })).toBeVisible()
+
+    fireEvent.mouseDown(backdrop, { clientX: 80, clientY: 90 })
+    expect(onShellMouseDown).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: 'OpenAI Messages' })).toBeVisible()
+
+    fireEvent.click(backdrop)
+    expect(screen.queryByRole('dialog', { name: 'OpenAI Messages' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit messages' }))
+    expect(screen.getByRole('dialog', { name: 'OpenAI Messages' })).toBeVisible()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'OpenAI Messages' })).not.toBeInTheDocument()
+  })
+
   it('renders an editable one-off binary request node with media output type choices', () => {
     const requestFunction = createRequestFunction(REQUEST_FUNCTION_ID, 'Request', '2026-05-13T00:00:00.000Z')
     const requestConfig: RequestFunctionConfig = {

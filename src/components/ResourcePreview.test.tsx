@@ -1,6 +1,7 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ResourcePreview } from './ResourcePreview'
+import { FullResourcePreviewModal } from './ResourcePreviewModal'
 import type { Resource } from '../domain/types'
 import { projectStore } from '../store/projectStore'
 
@@ -118,5 +119,50 @@ describe('ResourcePreview', () => {
       'src',
       'http://127.0.0.1:27707/view?filename=a.wav',
     )
+  })
+
+  it('closes the full preview from the backdrop click and Escape without leaking press or context events', () => {
+    const onClose = vi.fn()
+    const windowPointerDown = vi.fn()
+    const windowMouseDown = vi.fn()
+    const windowContextMenu = vi.fn()
+    window.addEventListener('pointerdown', windowPointerDown)
+    window.addEventListener('mousedown', windowMouseDown)
+    window.addEventListener('contextmenu', windowContextMenu)
+
+    try {
+      render(
+        <FullResourcePreviewModal
+          resource={mediaResource('image', 'http://127.0.0.1:27707/view?filename=preview.png')}
+          onClose={onClose}
+        />,
+      )
+
+      const backdrop = document.querySelector('.full-preview-backdrop') as HTMLElement
+      expect(screen.getByRole('dialog', { name: 'Preview image.png' })).toBeVisible()
+
+      fireEvent.contextMenu(backdrop, { clientX: 100, clientY: 120 })
+      expect(windowContextMenu).not.toHaveBeenCalled()
+      expect(onClose).not.toHaveBeenCalled()
+
+      fireEvent.pointerDown(backdrop, { clientX: 100, clientY: 120 })
+      expect(windowPointerDown).not.toHaveBeenCalled()
+      expect(onClose).not.toHaveBeenCalled()
+
+      fireEvent.mouseDown(backdrop, { clientX: 100, clientY: 120 })
+      expect(windowMouseDown).not.toHaveBeenCalled()
+      expect(onClose).not.toHaveBeenCalled()
+
+      fireEvent.click(backdrop, { clientX: 100, clientY: 120 })
+      expect(onClose).toHaveBeenCalledTimes(1)
+
+      onClose.mockClear()
+      fireEvent.keyDown(window, { key: 'Escape' })
+      expect(onClose).toHaveBeenCalledTimes(1)
+    } finally {
+      window.removeEventListener('pointerdown', windowPointerDown)
+      window.removeEventListener('mousedown', windowMouseDown)
+      window.removeEventListener('contextmenu', windowContextMenu)
+    }
   })
 })

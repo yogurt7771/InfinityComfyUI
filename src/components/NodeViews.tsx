@@ -1,6 +1,5 @@
-import { memo, useEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react'
+import { memo, useEffect, useId, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react'
 import { flushSync } from 'react-dom'
-import { createPortal } from 'react-dom'
 import { Handle, NodeResizeControl, Position, type NodeProps } from '@xyflow/react'
 import {
   Box,
@@ -36,6 +35,7 @@ import {
 import { readFileAsMediaResource, type MediaResourceKind, type MediaResourcePayload } from '../domain/resourceFiles'
 import { resourceNodeMinSize } from '../domain/resourceNodeLayout'
 import { formatDurationMs, runDurationMs } from '../domain/runTiming'
+import { normalizeTextDisplayMode, renderedTextHtml, textDisplayModes } from '../domain/textDisplay'
 import { projectStore } from '../store/projectStore'
 import type {
   FunctionInputDef,
@@ -55,9 +55,11 @@ import type {
   Resource,
   ResourceRef,
   ResourceType,
+  TextDisplayMode,
 } from '../domain/types'
 import { ResourcePreview } from './ResourcePreview'
 import { FullResourcePreviewModal, sameTypePreviewResources } from './ResourcePreviewModal'
+import { ModalFrame } from './ModalFrame'
 
 type WorkbenchNodeData = {
   resourceId?: string
@@ -119,7 +121,9 @@ type WorkbenchNodeData = {
   onRenameNode: (nodeId: string, title: string) => void
   onUpdateFunctionInputValue: (nodeId: string, inputKey: string, value: PrimitiveInputValue) => void
   onUpdateTextResourceValue: (resourceId: string, value: string) => void
+  onUpdateTextResourceDisplayMode: (resourceId: string, displayMode: TextDisplayMode) => void
   onUpdateNumberResourceValue: (resourceId: string, value: number) => void
+  onUpdateBooleanResourceValue: (resourceId: string, value: boolean) => void
   onReplaceResourceMedia: (resourceId: string, type: MediaResourceKind, media: MediaResourcePayload) => void
   onOpenFunctionRunForResource?: (resourceId: string) => void
 }
@@ -333,6 +337,7 @@ function OptionalPrimitiveInput({
           checked={Boolean(value)}
           type="checkbox"
           onChange={(event) => onUpdate(nodeId, input.key, event.target.checked)}
+          onClick={(event) => event.stopPropagation()}
           onDoubleClick={(event) => event.stopPropagation()}
         />
         <span>{Boolean(value) ? 'true' : 'false'}</span>
@@ -866,6 +871,226 @@ function NumberResourceEditor({
   )
 }
 
+type SourceHighlightRule = {
+  className: string
+  pattern: RegExp
+}
+
+const sourceHighlightRules: Record<Exclude<TextDisplayMode, 'render markdown' | 'render html'>, SourceHighlightRule[]> = {
+  plaintext: [],
+  markdown: [
+    { className: 'syntax-comment', pattern: /<!--[\s\S]*?-->/g },
+    { className: 'syntax-code', pattern: /```[\s\S]*?```|`[^`\n]+`/g },
+    { className: 'syntax-heading', pattern: /^#{1,6}\s+.*$/gm },
+    { className: 'syntax-link', pattern: /!?\[[^\]\n]*\]\([^\)\n]*\)/g },
+    { className: 'syntax-emphasis', pattern: /(?:\*\*|__)[^\n]+?(?:\*\*|__)|(?:\*|_)[^\n]+?(?:\*|_)/g },
+    { className: 'syntax-punctuation', pattern: /^\s*(?:>|[-+*]|\d+\.)\s+/gm },
+  ],
+  html: [
+    { className: 'syntax-comment', pattern: /<!--[\s\S]*?-->/g },
+    { className: 'syntax-tag', pattern: /<\/?[A-Za-z][^>]*>/g },
+    { className: 'syntax-entity', pattern: /&(?:#\d+|#x[\da-f]+|[a-z][\da-z]+);/gi },
+  ],
+  json: [
+    { className: 'syntax-key', pattern: /"(?:\\.|[^"\\])*"(?=\s*:)/g },
+    { className: 'syntax-string', pattern: /"(?:\\.|[^"\\])*"/g },
+    { className: 'syntax-number', pattern: /-?\b\d+(?:\.\d+)?(?:e[+-]?\d+)?\b/gi },
+    { className: 'syntax-literal', pattern: /\b(?:true|false|null)\b/g },
+  ],
+  yaml: [
+    { className: 'syntax-comment', pattern: /#[^\n]*/g },
+    { className: 'syntax-key', pattern: /^[ \t-]*[A-Za-z0-9_.-]+(?=\s*:)/gm },
+    { className: 'syntax-string', pattern: /"(?:\\.|[^"\\])*"|'(?:''|[^'])*'/g },
+    { className: 'syntax-number', pattern: /-?\b\d+(?:\.\d+)?\b/g },
+    { className: 'syntax-literal', pattern: /\b(?:true|false|null|yes|no|on|off)\b/gi },
+  ],
+}
+
+function highlightedTextSource(value: string, mode: Exclude<TextDisplayMode, 'render markdown' | 'render html'>) {
+  const rules = sourceHighlightRules[mode]
+  if (rules.length === 0) return <span className="syntax-token syntax-plain">{value}</span>
+
+  const matches = rules
+    .flatMap((rule, priority) =>
+      [...value.matchAll(rule.pattern)].map((match) => ({
+        className: rule.className,
+        index: match.index ?? 0,
+        priority,
+        value: match[0],
+      })),
+    )
+    .filter((match) => match.value.length > 0)
+    .sort((left, right) => left.index - right.index || left.priority - right.priority || right.value.length - left.value.length)
+
+  const result: ReactNode[] = []
+  let cursor = 0
+  for (const match of matches) {
+    if (match.index < cursor) continue
+    if (match.index > cursor) result.push(value.slice(cursor, match.index))
+    result.push(
+      <span className={`syntax-token ${match.className}`} key={`${match.index}-${match.value.length}-${match.priority}`}>
+        {match.value}
+      </span>,
+    )
+    cursor = match.index + match.value.length
+  }
+  if (cursor < value.length) result.push(value.slice(cursor))
+  return result
+}
+
+function TextSourceEditor({
+  mode,
+  title,
+  value,
+  onCommit,
+}: {
+  mode: Exclude<TextDisplayMode, 'render markdown' | 'render html'>
+  title: string
+  value: string
+  onCommit: (value: string) => void
+}) {
+  const draft = useCommittedTextDraft(value, onCommit)
+  const editorId = useId()
+  const highlightRef = useRef<HTMLPreElement | null>(null)
+
+  return (
+    <div
+      className="text-source-editor nodrag nopan"
+      data-language={mode}
+      onClick={(event) => event.stopPropagation()}
+      onDoubleClick={(event) => event.stopPropagation()}
+    >
+      <label className="visually-hidden" htmlFor={editorId}>
+        {title} text
+      </label>
+      <pre
+        aria-hidden="true"
+        aria-label={`${title} ${mode} syntax highlight`}
+        className="text-source-highlight"
+        ref={highlightRef}
+      >
+        <code>{highlightedTextSource(draft.value, mode)}</code>
+      </pre>
+      <textarea
+        id={editorId}
+        aria-label={`${title} source`}
+        className="resource-text-editor text-source-input nodrag nopan"
+        spellCheck={false}
+        value={draft.value}
+        onBlur={(event) => draft.commit(event.currentTarget.value)}
+        onChange={(event) => draft.change(event.target.value)}
+        onCompositionEnd={(event) => draft.compositionEnd(event.currentTarget.value)}
+        onCompositionStart={draft.compositionStart}
+        onDoubleClick={(event) => event.stopPropagation()}
+        onFocus={draft.begin}
+        onScroll={(event) => {
+          if (!highlightRef.current) return
+          highlightRef.current.scrollLeft = event.currentTarget.scrollLeft
+          highlightRef.current.scrollTop = event.currentTarget.scrollTop
+        }}
+      />
+    </div>
+  )
+}
+
+function TextResourceEditor({
+  resource,
+  title,
+  onUpdateDisplayMode,
+  onUpdateValue,
+}: {
+  resource: Resource
+  title: string
+  onUpdateDisplayMode: (resourceId: string, displayMode: TextDisplayMode) => void
+  onUpdateValue: (resourceId: string, value: string) => void
+}) {
+  const mode = normalizeTextDisplayMode(resource.displayMode)
+  const value = String(resource.value ?? '')
+  const renderedLanguage = mode === 'render markdown' ? 'markdown' : mode === 'render html' ? 'html' : undefined
+  const sourceMode = mode === 'render markdown' || mode === 'render html' ? undefined : mode
+
+  return (
+    <>
+      <label
+        className="text-display-mode-control nodrag nopan"
+        onClick={(event) => event.stopPropagation()}
+        onDoubleClick={(event) => event.stopPropagation()}
+      >
+        <span>Display</span>
+        <select
+          aria-label={`${title} display mode`}
+          value={mode}
+          onChange={(event) => onUpdateDisplayMode(resource.id, event.target.value as TextDisplayMode)}
+          onDoubleClick={(event) => event.stopPropagation()}
+        >
+          {textDisplayModes.map((displayMode) => (
+            <option key={displayMode} value={displayMode}>
+              {displayMode}
+            </option>
+          ))}
+        </select>
+      </label>
+      {sourceMode ? (
+        <TextSourceEditor
+          mode={sourceMode}
+          title={title}
+          value={value}
+          onCommit={(nextValue) => onUpdateValue(resource.id, nextValue)}
+        />
+      ) : renderedLanguage ? (
+        <>
+          <div
+            aria-label={`${title} rendered ${renderedLanguage}`}
+            className="text-rendered-preview nodrag nopan"
+            role="region"
+            onClick={(event) => event.stopPropagation()}
+            onDoubleClick={(event) => event.stopPropagation()}
+            dangerouslySetInnerHTML={{ __html: renderedTextHtml(value, mode) }}
+          />
+          <button
+            type="button"
+            className="text-render-edit-source nodrag nopan"
+            onClick={(event) => {
+              event.stopPropagation()
+              onUpdateDisplayMode(resource.id, renderedLanguage)
+            }}
+            onDoubleClick={(event) => event.stopPropagation()}
+          >
+            Edit source
+          </button>
+        </>
+      ) : (
+        <p className="resource-preview-text">Unsupported display mode</p>
+      )}
+    </>
+  )
+}
+
+function BooleanResourceEditor({
+  resource,
+  title,
+  onUpdate,
+}: {
+  resource: Resource
+  title: string
+  onUpdate: (resourceId: string, value: boolean) => void
+}) {
+  const checked = Boolean(resource.value)
+  return (
+    <label className="resource-boolean-editor nodrag nopan">
+      <input
+        aria-label={`${title} value`}
+        checked={checked}
+        type="checkbox"
+        onChange={(event) => onUpdate(resource.id, event.target.checked)}
+        onClick={(event) => event.stopPropagation()}
+        onDoubleClick={(event) => event.stopPropagation()}
+      />
+      <span>{checked ? 'true' : 'false'}</span>
+    </label>
+  )
+}
+
 const normalizedRunCount = (value: unknown) => {
   const numberValue = Number(value)
   if (!Number.isFinite(numberValue)) return 1
@@ -940,21 +1165,13 @@ function LlmMessagesModal({
     })
   }
 
-  const dialog = (
-    <div
-      className="node-modal-backdrop nodrag nopan"
-      onMouseDown={(event) => {
-        event.stopPropagation()
-        if (event.target === event.currentTarget) onClose()
-      }}
+  return (
+    <ModalFrame
+      label={`${providerLabel} Messages`}
+      onClose={onClose}
+      backdropClassName="node-modal-backdrop nodrag nopan"
+      dialogClassName="openai-message-modal"
     >
-      <section
-        aria-label={`${providerLabel} Messages`}
-        aria-modal="true"
-        className="openai-message-modal"
-        role="dialog"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
         <div className="openai-message-modal-header">
           <div>
             <h2>{providerLabel} Messages</h2>
@@ -1062,11 +1279,8 @@ function LlmMessagesModal({
             </article>
           ))}
         </div>
-      </section>
-    </div>
+    </ModalFrame>
   )
-
-  return createPortal(dialog, document.body)
 }
 
 function OpenAiLlmEditor({
@@ -2010,17 +2224,22 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
       {resource?.type === 'text' ? (
         <>
           <ResourceActions canUpload={false} resource={resource} />
-          <CommittedTextarea
-            ariaLabel={`${title} text`}
-            className="resource-text-editor nodrag nopan"
-            value={String(resource.value)}
-            onCommit={(value) => nodeData.onUpdateTextResourceValue(resource.id, value)}
+          <TextResourceEditor
+            resource={resource}
+            title={title}
+            onUpdateDisplayMode={nodeData.onUpdateTextResourceDisplayMode}
+            onUpdateValue={nodeData.onUpdateTextResourceValue}
           />
         </>
       ) : resource?.type === 'number' ? (
         <>
           <ResourceActions canUpload={false} resource={resource} />
           <NumberResourceEditor resource={resource} onUpdate={nodeData.onUpdateNumberResourceValue} />
+        </>
+      ) : resource?.type === 'boolean' ? (
+        <>
+          <ResourceActions canUpload={false} resource={resource} />
+          <BooleanResourceEditor resource={resource} title={title} onUpdate={nodeData.onUpdateBooleanResourceValue} />
         </>
       ) : resource && isMediaResource(resource) ? (
         <>
@@ -2395,7 +2614,14 @@ export const GroupNodeView = memo(({ id, data, selected }: NodeProps) => {
   const title = typeof nodeData.title === 'string' ? nodeData.title : 'Group'
 
   return (
-    <div className={['canvas-node', 'group-node', newNodeHighlightClass(nodeData)].filter(Boolean).join(' ')}>
+    <div
+      className={['canvas-node', 'group-node', newNodeHighlightClass(nodeData)].filter(Boolean).join(' ')}
+      onDoubleClick={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        window.dispatchEvent(new CustomEvent('infinity-trace-node', { detail: { nodeId: id } }))
+      }}
+    >
       <SelectedResizeControl id={id} minHeight={90} minWidth={180} nodeData={nodeData} selected={Boolean(selected)} />
       <div className="node-title">
         <Layers size={16} />
