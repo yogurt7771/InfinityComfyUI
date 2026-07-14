@@ -420,7 +420,7 @@ export type ComfyEndpointConfig = {
   tags?: string[]
   timeoutMs: number
   auth?: {
-    type: 'none' | 'token' | 'basic'
+    type: 'none' | 'token' | 'basic' | 'password'
     token?: string
     username?: string
     password?: string

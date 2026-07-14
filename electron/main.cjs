@@ -1,17 +1,27 @@
 const { app, BrowserWindow, ipcMain, shell } = require('electron')
+const { createHash, randomBytes } = require('node:crypto')
 const http = require('node:http')
 const net = require('node:net')
 const fs = require('node:fs/promises')
 const path = require('node:path')
 const tls = require('node:tls')
 const { hydrateProjectAssets } = require('./projectAssetStorage.cjs')
+const comfyProxyBridgeModule = require('../server/comfyProxyBridge.cjs')
 
 const PROJECTS_FOLDER = 'projects'
 const CONFIG_FOLDER = 'config'
 const ASSETS_FOLDER = 'assets'
 const COMFY_PROXY_SEGMENT = '__comfy_proxy'
 const COMFY_PROXY_PREFIX = `/${COMFY_PROXY_SEGMENT}/`
-const COMFY_PROXY_TOKEN_PARAM = '__infinity_comfy_token'
+const COMFY_PROXY_AUTH_PREFIX = '/__comfy_proxy/auth/'
+const COMFY_PROXY_LEGACY_TOKEN_PARAM = '__infinity_comfy_token'
+const COMFY_PROXY_SESSION_COOKIE_PREFIX = '__infinity_comfy_session_'
+const COMFY_PROXY_SESSION_TTL_MS = 8 * 60 * 60 * 1000
+const COMFY_PROXY_SESSION_CLEANUP_MS = 10 * 60 * 1000
+const COMFY_PROXY_MAX_SESSIONS = 256
+const comfyProxySessions = new Map()
+const comfyProxySessionsByContext = new Map()
+const authorizedComfyProxyTargets = new Set()
 let localAppServer
 let localAppServerUrl
 
@@ -106,6 +116,26 @@ const normalizedComfyBaseUrl = (baseUrl) => {
   return parsed.toString().replace(/\/+$/, '')
 }
 
+const configuredValueList = (value) => {
+  const configured = String(value ?? '').trim()
+  if (!configured) return []
+  if (!configured.startsWith('[')) return [configured]
+  const parsed = JSON.parse(configured)
+  if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== 'string')) {
+    throw new ComfyProxyTargetError('Configured proxy target list is invalid')
+  }
+  return parsed.map((item) => item.trim()).filter(Boolean)
+}
+
+const authorizeConfiguredComfyProxyTargets = () => {
+  const candidates = [process.env.COMFY_PROXY_TARGET_BASE, ...configuredValueList(process.env.COMFY_PROXY_TARGET_BASES)]
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      authorizedComfyProxyTargets.add(validatedComfyProxyTargetBase(candidate))
+    }
+  }
+}
+
 const blockedProxyHeaders = new Set([
   'connection',
   'content-encoding',
@@ -119,11 +149,30 @@ const blockedProxyHeaders = new Set([
   'upgrade',
 ])
 
-const readRequestBody = (request) =>
+class ComfyProxyTargetError extends Error {}
+class RequestBodyTooLargeError extends Error {}
+class ComfyProxyAuthenticationError extends Error {}
+
+const readRequestBody = (request, maxBytes = Number.POSITIVE_INFINITY) =>
   new Promise((resolve, reject) => {
     const chunks = []
-    request.on('data', (chunk) => chunks.push(Buffer.from(chunk)))
-    request.on('end', () => resolve(Buffer.concat(chunks)))
+    let totalBytes = 0
+    let rejected = false
+    request.on('data', (chunk) => {
+      if (rejected) return
+      const buffer = Buffer.from(chunk)
+      totalBytes += buffer.length
+      if (totalBytes > maxBytes) {
+        rejected = true
+        chunks.length = 0
+        reject(new RequestBodyTooLargeError('Request body is too large'))
+        return
+      }
+      chunks.push(buffer)
+    })
+    request.on('end', () => {
+      if (!rejected) resolve(Buffer.concat(chunks))
+    })
     request.on('error', reject)
   })
 
@@ -132,7 +181,9 @@ const comfyProxyTokenFromFileContent = (content) => {
   return token || undefined
 }
 
-const configuredProxyBearerToken = async () => {
+const configuredProxyBearerToken = async (targetBase) => {
+  const primaryTarget = process.env.COMFY_PROXY_TARGET_BASE?.trim()
+  if (!primaryTarget || normalizedComfyBaseUrl(primaryTarget) !== targetBase) return undefined
   const envToken = process.env.COMFY_PROXY_BEARER_TOKEN?.trim()
   if (envToken) return envToken
 
@@ -146,16 +197,33 @@ const configuredProxyBearerToken = async () => {
   }
 }
 
-const proxyRequestHeaders = async (request, bearerToken) => {
+const proxyRequestHeaders = async (
+  request,
+  bearerToken,
+  targetBase,
+  allowSessionCredentials,
+  sessionUpstreamCookieHeader,
+) => {
   const headers = new Headers()
+  let browserUpstreamCookieHeader
   for (const [key, value] of Object.entries(request.headers)) {
-    if (blockedProxyHeaders.has(key.toLowerCase())) continue
+    const lower = key.toLowerCase()
+    if (blockedProxyHeaders.has(lower)) continue
+    if (lower === 'cookie') {
+      if (!allowSessionCredentials) continue
+      const cookieHeader = proxyCookieHeaderForTarget(value, targetBase)
+      if (cookieHeader) browserUpstreamCookieHeader = cookieHeader
+      continue
+    }
+    if (lower === 'authorization' && !allowSessionCredentials) continue
     if (Array.isArray(value)) {
       for (const item of value) headers.append(key, item)
     } else if (value !== undefined) {
       headers.set(key, value)
     }
   }
+  const upstreamCookieHeader = sessionUpstreamCookieHeader || browserUpstreamCookieHeader
+  if (upstreamCookieHeader) headers.set('Cookie', upstreamCookieHeader)
   if (bearerToken && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${bearerToken}`)
   return headers
 }
@@ -168,10 +236,195 @@ const shouldAttachProxyBearer = (request, targetUrl) => {
   return !staticFileExtension || pathname.endsWith('.json')
 }
 
+const requestOrigin = (request) => {
+  if (!request.headers.host) return undefined
+  try {
+    return new URL(`http://${request.headers.host}`).origin
+  } catch {
+    return undefined
+  }
+}
+
+const proxyRequestIsSameOrigin = (request, targetBase) => {
+  const fetchSite = String(request.headers['sec-fetch-site'] ?? '').trim().toLowerCase()
+  const origin = String(request.headers.origin ?? '').trim()
+  if (!localAppServerUrl || origin === 'null') return false
+  try {
+    const trustedOrigin = new URL(localAppServerUrl).origin
+    const actualOrigin = requestOrigin(request)
+    if (!actualOrigin) return false
+    const session = comfyProxySession(request, targetBase)
+    const fetchDestination = String(request.headers['sec-fetch-dest'] ?? '').trim().toLowerCase()
+    const isolatedFrameNavigation =
+      fetchSite === 'cross-site' &&
+      session?.frameOrigin === actualOrigin &&
+      (request.method === 'GET' || request.method === 'HEAD') &&
+      (fetchDestination === 'iframe' || fetchDestination === 'document')
+    if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none' && !isolatedFrameNavigation) return false
+    const trustedRequestOrigin =
+      actualOrigin === trustedOrigin || session?.frameOrigin === actualOrigin
+    if (!trustedRequestOrigin) return false
+    if (!origin || origin === 'undefined') return true
+    if (new URL(origin).origin !== actualOrigin) return false
+    return true
+  } catch {
+    return false
+  }
+}
+
+const assertAllowedProxyRequestOrigin = (request, targetBase) => {
+  if (!proxyRequestIsSameOrigin(request, targetBase)) {
+    throw new ComfyProxyTargetError('Cross-origin ComfyUI proxy requests are not allowed')
+  }
+}
+
+const comfyProxyTargetHash = (targetBase) => createHash('sha256').update(targetBase).digest('hex').slice(0, 24)
+
+const comfyProxyUpstreamCookiePrefix = (targetBase) =>
+  `__infinity_comfy_upstream_${comfyProxyTargetHash(targetBase)}_`
+
+const proxyCookieHeaderForTarget = (value, targetBase) => {
+  const prefix = comfyProxyUpstreamCookiePrefix(targetBase)
+  return String(value ?? '')
+    .split(';')
+    .map((part) => part.trim())
+    .map((part) => {
+      const separator = part.indexOf('=')
+      if (separator === -1) return undefined
+      const name = part.slice(0, separator)
+      return name.startsWith(prefix) ? `${name.slice(prefix.length)}${part.slice(separator)}` : undefined
+    })
+    .filter(Boolean)
+    .join('; ')
+}
+
+const comfyProxySessionCookieHeader = (session) => {
+  const value = session ? [...session.upstreamCookies].map(([name, cookieValue]) => `${name}=${cookieValue}`).join('; ') : ''
+  return value || undefined
+}
+
+const applyComfyProxyUpstreamSetCookies = (session, setCookies, targetBase) => {
+  if (!session) return
+  for (const value of setCookies) {
+    const firstPart = value.split(';', 1)[0] || ''
+    const separator = firstPart.indexOf('=')
+    if (separator <= 0) continue
+    const name = firstPart.slice(0, separator).trim()
+    const cookieValue = firstPart.slice(separator + 1)
+    const deleted = /(?:^|;)\s*max-age=0(?:;|$)/i.test(value) || cookieValue === ''
+    if (deleted) session.upstreamCookies.delete(name)
+    else session.upstreamCookies.set(name, cookieValue)
+    session.upstreamCookieNames.add(`${comfyProxyUpstreamCookiePrefix(targetBase)}${name}`)
+  }
+}
+
+const cookieValue = (request, name) => {
+  for (const part of String(request.headers.cookie ?? '').split(';')) {
+    const separator = part.indexOf('=')
+    if (separator === -1 || part.slice(0, separator).trim() !== name) continue
+    try {
+      return decodeURIComponent(part.slice(separator + 1).trim())
+    } catch {
+      return undefined
+    }
+  }
+  return undefined
+}
+
+const cleanupExpiredComfyProxySessions = (now = Date.now()) => {
+  for (const [sessionId, session] of comfyProxySessions) {
+    if (session.expiresAt <= now) deleteComfyProxySession(sessionId)
+  }
+}
+
+const comfyProxySessionCleanupTimer = setInterval(cleanupExpiredComfyProxySessions, COMFY_PROXY_SESSION_CLEANUP_MS)
+comfyProxySessionCleanupTimer.unref()
+
+const comfyProxySessionCookieName = (targetBase) =>
+  `${COMFY_PROXY_SESSION_COOKIE_PREFIX}${comfyProxyTargetHash(targetBase)}`
+
+const comfyProxySessionContextKey = (targetBase, frameOrigin) => `${targetBase}\u0000${frameOrigin}`
+
+const deleteComfyProxySession = (sessionId) => {
+  const session = comfyProxySessions.get(sessionId)
+  if (!session) return
+  const contextKey = comfyProxySessionContextKey(session.targetBase, session.frameOrigin)
+  if (comfyProxySessionsByContext.get(contextKey) === sessionId) comfyProxySessionsByContext.delete(contextKey)
+  comfyProxySessions.delete(sessionId)
+}
+
+const revokeComfyProxySessionsForContext = (request, targetBase, frameOrigin) => {
+  cleanupExpiredComfyProxySessions()
+  const upstreamCookieNames = new Set()
+  const presentedSessionId = cookieValue(request, comfyProxySessionCookieName(targetBase))
+  for (const [sessionId, session] of comfyProxySessions) {
+    const matchesContext = session.targetBase === targetBase && session.frameOrigin === frameOrigin
+    const matchesPresented = sessionId === presentedSessionId && session.targetBase === targetBase
+    if (!matchesContext && !matchesPresented) continue
+    for (const cookieName of session.upstreamCookieNames ?? []) upstreamCookieNames.add(cookieName)
+    deleteComfyProxySession(sessionId)
+  }
+  return [...upstreamCookieNames]
+}
+
+const createComfyProxySession = (targetBase, bearerToken, parentOrigin, frameOrigin, upstreamCookies = new Map()) => {
+  cleanupExpiredComfyProxySessions()
+  const contextKey = comfyProxySessionContextKey(targetBase, frameOrigin)
+  const previousSessionId = comfyProxySessionsByContext.get(contextKey)
+  if (previousSessionId) deleteComfyProxySession(previousSessionId)
+  while (comfyProxySessions.size >= COMFY_PROXY_MAX_SESSIONS) {
+    const oldestSessionId = comfyProxySessions.keys().next().value
+    if (!oldestSessionId) break
+    deleteComfyProxySession(oldestSessionId)
+  }
+  const sessionId = randomBytes(32).toString('base64url')
+  comfyProxySessions.set(sessionId, {
+    targetBase,
+    bearerToken,
+    parentOrigin,
+    frameOrigin,
+    upstreamCookies,
+    upstreamCookieNames: new Set(
+      [...upstreamCookies.keys()].map((name) => `${comfyProxyUpstreamCookiePrefix(targetBase)}${name}`),
+    ),
+    expiresAt: Date.now() + COMFY_PROXY_SESSION_TTL_MS,
+  })
+  comfyProxySessionsByContext.set(contextKey, sessionId)
+  return sessionId
+}
+
+const comfyProxySession = (request, targetBase) => {
+  cleanupExpiredComfyProxySessions()
+  const sessionId = cookieValue(request, comfyProxySessionCookieName(targetBase))
+  const actualOrigin = requestOrigin(request)
+  const cookieSession = sessionId ? comfyProxySessions.get(sessionId) : undefined
+  if (cookieSession?.targetBase === targetBase && cookieSession.frameOrigin === actualOrigin) return cookieSession
+  const contextSessionId = actualOrigin
+    ? comfyProxySessionsByContext.get(comfyProxySessionContextKey(targetBase, actualOrigin))
+    : undefined
+  const contextSession = contextSessionId ? comfyProxySessions.get(contextSessionId) : undefined
+  if (contextSession && contextSession.frameOrigin !== contextSession.parentOrigin) return contextSession
+  return undefined
+}
+
+const comfyProxySessionCookie = (targetBase, sessionId, isolatedFrame = false) => {
+  const attributes = [
+    `${comfyProxySessionCookieName(targetBase)}=${sessionId ?? ''}`,
+    `Path=${isolatedFrame ? '/' : COMFY_PROXY_PREFIX}`,
+    'HttpOnly',
+    'SameSite=Strict',
+  ]
+  if (!sessionId) attributes.push('Max-Age=0')
+  return attributes.join('; ')
+}
+
 const proxyCookiePath = (proxyBase) => (proxyBase.endsWith('/') ? proxyBase : `${proxyBase}/`)
 
-const rewriteComfyProxySetCookie = (value, proxyBase) => {
+const rewriteComfyProxySetCookie = (value, proxyBase, targetBase) => {
   const parts = value.split(';')
+  const firstSeparator = parts[0]?.indexOf('=') ?? -1
+  if (firstSeparator <= 0) return undefined
+  parts[0] = `${comfyProxyUpstreamCookiePrefix(targetBase)}${parts[0]}`
   let hasPath = false
   const rewritten = []
   for (const part of parts) {
@@ -187,6 +440,41 @@ const rewriteComfyProxySetCookie = (value, proxyBase) => {
   }
   if (!hasPath) rewritten.push(` Path=${proxyCookiePath(proxyBase)}`)
   return rewritten.join(';')
+}
+
+const clearComfyProxyUpstreamCookie = (proxyBase, cookieName) =>
+  `${cookieName}=; Path=${proxyCookiePath(proxyBase)}; Max-Age=0; HttpOnly; SameSite=Lax`
+
+const responseSetCookieValues = (headers) => {
+  if (typeof headers.getSetCookie === 'function') return headers.getSetCookie()
+  const value = headers.get('set-cookie')
+  return value ? [value] : []
+}
+
+const loginToComfyProxyTarget = async (targetBase, proxyBase, password) => {
+  const loginUrl = allowedComfyProxyTargetUrl(targetBase, '/login')
+  const upstreamResponse = await fetch(loginUrl, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: {
+      accept: 'text/html',
+      'content-type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({ password }).toString(),
+  })
+  const location = upstreamResponse.headers.get('location')
+  const rejected = location ? new URL(location, loginUrl).searchParams.has('wrong_password') : false
+  if (upstreamResponse.status < 300 || upstreamResponse.status >= 400 || rejected) {
+    throw new ComfyProxyAuthenticationError('ComfyUI password was rejected')
+  }
+  const rawCookies = responseSetCookieValues(upstreamResponse.headers)
+  const responseCookies = rawCookies
+    .map((value) => rewriteComfyProxySetCookie(value, proxyBase, targetBase))
+    .filter(Boolean)
+  if (responseCookies.length === 0) throw new ComfyProxyAuthenticationError('ComfyUI login did not establish a session')
+  const cookieSession = { upstreamCookies: new Map(), upstreamCookieNames: new Set() }
+  applyComfyProxyUpstreamSetCookies(cookieSession, rawCookies, targetBase)
+  return { responseCookies, upstreamCookies: cookieSession.upstreamCookies }
 }
 
 const comfyProxyRequestParts = (rawUrl) => {
@@ -207,6 +495,262 @@ const comfyProxyRequestParts = (rawUrl) => {
   }
 }
 
+const comfyProxyRootResourceRedirect = (request) => {
+  if (request.method !== 'GET' && request.method !== 'HEAD') return undefined
+  if (!localAppServerUrl || !request.headers.host || !request.headers.referer) return undefined
+
+  try {
+    const requestOrigin = new URL(`http://${request.headers.host}`).origin
+    const trustedOrigin = new URL(localAppServerUrl).origin
+    const referrerUrl = new URL(String(request.headers.referer))
+    if (referrerUrl.origin !== requestOrigin) return undefined
+
+    const referrerParts = comfyProxyRequestParts(`${referrerUrl.pathname}${referrerUrl.search}`)
+    if (!referrerParts) return undefined
+    const session = comfyProxySession(request, referrerParts.targetBase)
+    if (requestOrigin !== trustedOrigin && session?.frameOrigin !== requestOrigin) return undefined
+    allowedComfyProxyTargetUrl(referrerParts.targetBase, '/', Boolean(session))
+
+    const requestUrl = new URL(request.url || '/', trustedOrigin)
+    if (requestUrl.pathname.startsWith(referrerParts.proxyBase)) return undefined
+
+    let relativePath
+    if (requestUrl.pathname.startsWith(COMFY_PROXY_PREFIX)) {
+      if (!session) return undefined
+      try {
+        if (comfyProxyRequestParts(`${requestUrl.pathname}${requestUrl.search}`)) return undefined
+      } catch {
+        // Deep relative imports can escape the encoded target segment; repair them below.
+      }
+      relativePath = requestUrl.pathname.slice(COMFY_PROXY_PREFIX.length).replace(/^\/+/, '')
+    } else {
+      const targetBasePath = new URL(`${referrerParts.targetBase}/`).pathname
+      relativePath = requestUrl.pathname.startsWith(targetBasePath)
+        ? requestUrl.pathname.slice(targetBasePath.length)
+        : requestUrl.pathname.replace(/^\/+/, '')
+    }
+    if (!relativePath) return undefined
+    requestUrl.searchParams.delete(COMFY_PROXY_LEGACY_TOKEN_PARAM)
+    return `${referrerParts.proxyBase}${relativePath}${requestUrl.search}`
+  } catch {
+    return undefined
+  }
+}
+
+const redirectComfyProxyRootResource = (request, response) => {
+  const location = comfyProxyRootResourceRedirect(request)
+  if (!location) return false
+  response.statusCode = 307
+  response.setHeader('cache-control', 'private, no-store')
+  response.setHeader('vary', 'referer')
+  response.setHeader('location', location)
+  response.end()
+  return true
+}
+
+const validatedComfyProxyTargetBase = (targetBase) => {
+  const normalizedTarget = normalizedComfyBaseUrl(targetBase)
+  const parsed = new URL(normalizedTarget)
+  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
+    throw new ComfyProxyTargetError('ComfyUI proxy target is invalid')
+  }
+  return normalizedTarget
+}
+
+const allowedComfyProxyTargetUrl = (targetBase, targetPath, allowUnregistered = false) => {
+  const allowedTargetBase = validatedComfyProxyTargetBase(targetBase)
+  if (!allowUnregistered && !authorizedComfyProxyTargets.has(allowedTargetBase)) {
+    throw new ComfyProxyTargetError('ComfyUI proxy target is not authorized')
+  }
+  let decodedTargetPath
+  try {
+    decodedTargetPath = decodeURIComponent(targetPath)
+  } catch {
+    throw new ComfyProxyTargetError('ComfyUI proxy path is invalid')
+  }
+  if (
+    targetPath.startsWith('//') ||
+    decodedTargetPath.startsWith('//') ||
+    targetPath.includes('\\') ||
+    decodedTargetPath.includes('\\')
+  ) {
+    throw new ComfyProxyTargetError('ComfyUI proxy path is invalid')
+  }
+  const allowedBaseUrl = new URL(`${allowedTargetBase}/`)
+  const targetUrl = new URL(targetPath.replace(/^\/+/, ''), allowedBaseUrl)
+  const allowedPathPrefix = allowedBaseUrl.pathname
+  if (
+    targetUrl.origin !== allowedBaseUrl.origin ||
+    (targetUrl.pathname !== allowedPathPrefix.slice(0, -1) && !targetUrl.pathname.startsWith(allowedPathPrefix))
+  ) {
+    throw new ComfyProxyTargetError('ComfyUI proxy path is not allowed')
+  }
+  return targetUrl
+}
+
+const comfyProxyAuthRequestParts = (rawUrl) => {
+  const requestUrl = new URL(rawUrl || '/', 'http://127.0.0.1')
+  if (!requestUrl.pathname.startsWith(COMFY_PROXY_AUTH_PREFIX)) return undefined
+  const encodedBaseUrl = requestUrl.pathname.slice(COMFY_PROXY_AUTH_PREFIX.length).replace(/\/+$/, '')
+  if (!encodedBaseUrl || encodedBaseUrl.includes('/') || requestUrl.search) {
+    throw new ComfyProxyTargetError('Invalid proxy auth target')
+  }
+  const targetBase = validatedComfyProxyTargetBase(decodeURIComponent(encodedBaseUrl))
+  return {
+    targetBase,
+    proxyBase: `${COMFY_PROXY_PREFIX}${encodedBaseUrl}/`,
+  }
+}
+
+const isolatedFrameOriginMatchesParent = (frameOrigin, parentOrigin) => {
+  try {
+    const frame = new URL(frameOrigin)
+    const parent = new URL(parentOrigin)
+    return (
+      frame.protocol === parent.protocol &&
+      frame.port === parent.port &&
+      /^frame-[a-f0-9]{32}\.localhost$/.test(frame.hostname.toLowerCase())
+    )
+  } catch {
+    return false
+  }
+}
+
+const comfyProxyAuthContext = (request) => {
+  if (!localAppServerUrl) return undefined
+  const fetchSite = String(request.headers['sec-fetch-site'] ?? '').trim().toLowerCase()
+  if (fetchSite && !['same-origin', 'same-site', 'cross-site', 'none'].includes(fetchSite)) return undefined
+  const frameOrigin = requestOrigin(request)
+  const rawOrigin = String(request.headers.origin ?? '').trim()
+  if (!frameOrigin || rawOrigin === 'null') return undefined
+  try {
+    const trustedOrigin = new URL(localAppServerUrl).origin
+    const parentOrigin = rawOrigin && rawOrigin !== 'undefined' ? new URL(rawOrigin).origin : frameOrigin
+    if (parentOrigin !== trustedOrigin) return undefined
+    if (frameOrigin !== parentOrigin && !isolatedFrameOriginMatchesParent(frameOrigin, parentOrigin)) return undefined
+    return { frameOrigin, parentOrigin, isolatedFrame: frameOrigin !== parentOrigin }
+  } catch {
+    return undefined
+  }
+}
+
+const setComfyProxyAuthCors = (response, context) => {
+  if (!context.isolatedFrame) return
+  response.setHeader('access-control-allow-origin', context.parentOrigin)
+  response.setHeader('access-control-allow-credentials', 'true')
+  response.setHeader('access-control-allow-methods', 'POST, OPTIONS')
+  response.setHeader('access-control-allow-headers', 'Content-Type')
+  response.setHeader('vary', 'Origin')
+}
+
+const handleComfyProxyAuth = async (request, response) => {
+  response.setHeader('cache-control', 'no-store')
+  response.setHeader('pragma', 'no-cache')
+  let rejectionCookies = []
+  let rejectionContext
+  try {
+    const authContext = comfyProxyAuthContext(request)
+    if (!authContext) throw new ComfyProxyTargetError('Cross-origin proxy auth requests are not allowed')
+    setComfyProxyAuthCors(response, authContext)
+    if (request.method === 'OPTIONS') {
+      response.statusCode = 204
+      response.end()
+      return
+    }
+    if (request.method !== 'POST') {
+      response.statusCode = 405
+      response.setHeader('allow', 'POST, OPTIONS')
+      response.end('Method not allowed')
+      return
+    }
+    const parts = comfyProxyAuthRequestParts(request.url)
+    if (!parts) {
+      response.statusCode = 404
+      response.end('Not found')
+      return
+    }
+    if (!authorizedComfyProxyTargets.has(parts.targetBase)) {
+      throw new ComfyProxyTargetError('ComfyUI proxy target is not authorized')
+    }
+    const revokedCookieNames = revokeComfyProxySessionsForContext(request, parts.targetBase, authContext.frameOrigin)
+    rejectionCookies = [
+      comfyProxySessionCookie(parts.targetBase, undefined, authContext.isolatedFrame),
+      ...revokedCookieNames.map((name) => clearComfyProxyUpstreamCookie(parts.proxyBase, name)),
+    ]
+    rejectionContext = { parts, authContext }
+    if (!String(request.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) {
+      response.statusCode = 415
+      response.setHeader('set-cookie', rejectionCookies)
+      response.end('Expected application/json')
+      return
+    }
+    const body = await readRequestBody(request, 16 * 1024)
+    const payload = JSON.parse(body.toString('utf8') || '{}')
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('Invalid proxy auth payload')
+    const rawToken = payload.bearerToken
+    if (rawToken !== undefined && typeof rawToken !== 'string') throw new Error('Invalid proxy bearer token')
+    const bearerToken = rawToken?.trim()
+    if (bearerToken && (bearerToken.length > 8192 || !/^[\x21-\x7e]+$/.test(bearerToken))) {
+      throw new Error('Invalid proxy bearer token')
+    }
+    const rawPassword = payload.password
+    if (rawPassword !== undefined && typeof rawPassword !== 'string') throw new Error('Invalid ComfyUI password')
+    const password = rawPassword || undefined
+    if (password && (Buffer.byteLength(password, 'utf8') > 4096 || password.includes('\0'))) {
+      throw new Error('Invalid ComfyUI password')
+    }
+
+    const upstreamLogin = password
+      ? await loginToComfyProxyTarget(parts.targetBase, parts.proxyBase, password)
+      : { responseCookies: [], upstreamCookies: new Map() }
+
+    const sessionId = createComfyProxySession(
+      parts.targetBase,
+      bearerToken,
+      authContext.parentOrigin,
+      authContext.frameOrigin,
+      upstreamLogin.upstreamCookies,
+    )
+    response.statusCode = 204
+    response.setHeader('set-cookie', [
+      comfyProxySessionCookie(parts.targetBase, sessionId, authContext.isolatedFrame),
+      ...rejectionCookies.slice(1),
+      ...upstreamLogin.responseCookies,
+    ])
+    response.end()
+  } catch (error) {
+    if (rejectionContext) {
+      const extraCookieNames = revokeComfyProxySessionsForContext(
+        request,
+        rejectionContext.parts.targetBase,
+        rejectionContext.authContext.frameOrigin,
+      )
+      rejectionCookies.push(
+        ...extraCookieNames.map((name) => clearComfyProxyUpstreamCookie(rejectionContext.parts.proxyBase, name)),
+      )
+    }
+    if (rejectionCookies.length > 0) response.setHeader('set-cookie', rejectionCookies)
+    response.statusCode =
+      error instanceof ComfyProxyTargetError
+        ? 403
+        : error instanceof ComfyProxyAuthenticationError
+          ? 401
+          : error instanceof RequestBodyTooLargeError
+            ? 413
+            : 400
+    response.setHeader('content-type', 'text/plain; charset=utf-8')
+    response.end(
+      error instanceof ComfyProxyTargetError
+        ? error.message
+        : error instanceof ComfyProxyAuthenticationError
+          ? error.message
+        : error instanceof RequestBodyTooLargeError
+          ? 'Proxy auth payload is too large'
+          : 'Invalid ComfyUI proxy auth request',
+    )
+  }
+}
+
 const websocketOriginFor = (targetUrl) => `${targetUrl.protocol === 'wss:' ? 'https:' : 'http:'}//${targetUrl.host}`
 
 const blockedWebSocketProxyHeaders = new Set([
@@ -219,46 +763,77 @@ const blockedWebSocketProxyHeaders = new Set([
   'upgrade',
 ])
 
-const websocketProxyHeaders = (request, targetUrl, bearerToken) => {
+const websocketProxyHeaders = (
+  request,
+  targetUrl,
+  bearerToken,
+  targetBase,
+  allowSessionCredentials,
+  sessionUpstreamCookieHeader,
+) => {
   const headers = []
   const seen = new Set()
+  let browserUpstreamCookieHeader
   for (let index = 0; index < request.rawHeaders.length; index += 2) {
     const key = request.rawHeaders[index]
     const value = request.rawHeaders[index + 1]
     const lower = key.toLowerCase()
     if (blockedWebSocketProxyHeaders.has(lower)) continue
-    headers.push(lower === 'origin' ? `${key}: ${websocketOriginFor(targetUrl)}` : `${key}: ${value}`)
+    if (lower === 'cookie') {
+      if (!allowSessionCredentials) continue
+      const cookieHeader = proxyCookieHeaderForTarget(value, targetBase)
+      if (cookieHeader) browserUpstreamCookieHeader = cookieHeader
+    } else if (lower === 'authorization' && !allowSessionCredentials) {
+      continue
+    } else {
+      headers.push(lower === 'origin' ? `${key}: ${websocketOriginFor(targetUrl)}` : `${key}: ${value}`)
+    }
     seen.add(lower)
   }
 
   headers.unshift(`Host: ${targetUrl.host}`, 'Connection: Upgrade', 'Upgrade: websocket')
+  const upstreamCookieHeader = sessionUpstreamCookieHeader || browserUpstreamCookieHeader
+  if (upstreamCookieHeader) headers.push(`Cookie: ${upstreamCookieHeader}`)
   if (!seen.has('origin')) headers.push(`Origin: ${websocketOriginFor(targetUrl)}`)
   if (bearerToken && !seen.has('authorization')) headers.push(`Authorization: Bearer ${bearerToken}`)
   return headers
 }
 
-const comfyProxyBridge = (proxyBase, targetBase, bearerToken) => `<script>
+const comfyProxyBridge = (proxyBase, targetBase, parentOrigin) =>
+  parentOrigin
+    ? comfyProxyBridgeModule.comfyProxyBridge(proxyBase, targetBase, COMFY_PROXY_LEGACY_TOKEN_PARAM, parentOrigin)
+    : `<script>
 (() => {
   const proxyBase = ${JSON.stringify(proxyBase)};
   const targetBase = ${JSON.stringify(targetBase)};
-  const proxyTokenParam = ${JSON.stringify(COMFY_PROXY_TOKEN_PARAM)};
-  const proxyBearerToken = ${JSON.stringify(bearerToken ?? '')};
-  const proxyAuthParams = new URLSearchParams(location.search);
-  if (proxyBearerToken && !proxyAuthParams.has(proxyTokenParam)) proxyAuthParams.set(proxyTokenParam, proxyBearerToken);
-  const withProxyAuth = (value) => {
+  const legacyTokenParam = ${JSON.stringify(COMFY_PROXY_LEGACY_TOKEN_PARAM)};
+  const currentUrl = new URL(location.href);
+  if (currentUrl.searchParams.delete(legacyTokenParam)) {
+    history.replaceState(history.state, '', currentUrl.pathname + currentUrl.search + currentUrl.hash);
+  }
+  const exposeModernComfyApp = () => {
+    const modernApp = window.comfyAPI?.app?.app;
+    if (!window.app && modernApp?.graphToPrompt) window.app = modernApp;
+    return Boolean(window.app?.graphToPrompt);
+  };
+  if (!exposeModernComfyApp()) {
+    const appCompatibilityTimer = window.setInterval(() => {
+      if (exposeModernComfyApp()) window.clearInterval(appCompatibilityTimer);
+    }, 100);
+    window.setTimeout(() => window.clearInterval(appCompatibilityTimer), 120000);
+  }
+  const withinProxy = (value) => {
     try {
       const parsed = new URL(value, location.href);
       if (parsed.origin !== location.origin || !parsed.pathname.startsWith(proxyBase)) return value;
-      for (const [key, authValue] of proxyAuthParams) {
-        if (!parsed.searchParams.has(key)) parsed.searchParams.set(key, authValue);
-      }
+      parsed.searchParams.delete(legacyTokenParam);
       return parsed.pathname + parsed.search + parsed.hash;
     } catch {
       return value;
     }
   };
   const proxiedPath = (pathname, search = '', hash = '') =>
-    withProxyAuth(proxyBase + String(pathname || '/').replace(/^\\/+/, '') + search + hash);
+    withinProxy(proxyBase + String(pathname || '/').replace(/^\\/+/, '') + search + hash);
   const proxiedWebSocketUrl = (pathname, search = '', hash = '') => {
     const routed = new URL(proxiedPath(pathname, search, hash), location.href);
     routed.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -267,8 +842,8 @@ const comfyProxyBridge = (proxyBase, targetBase, bearerToken) => `<script>
   const route = (value) => {
     const raw = String(value);
     if (raw.startsWith('data:') || raw.startsWith('blob:')) return raw;
-    if (raw.startsWith(proxyBase)) return withProxyAuth(raw);
-    if (raw.startsWith('/')) return withProxyAuth(proxyBase + raw.slice(1));
+    if (raw.startsWith(proxyBase)) return withinProxy(raw);
+    if (raw.startsWith('/')) return withinProxy(proxyBase + raw.slice(1));
     try {
       const parsed = new URL(raw, location.href);
       const target = new URL(targetBase);
@@ -276,7 +851,7 @@ const comfyProxyBridge = (proxyBase, targetBase, bearerToken) => `<script>
         return proxiedPath(parsed.pathname, parsed.search, parsed.hash);
       }
       if (parsed.origin === location.origin && parsed.pathname.startsWith(proxyBase)) {
-        return withProxyAuth(parsed.pathname + parsed.search + parsed.hash);
+        return withinProxy(parsed.pathname + parsed.search + parsed.hash);
       }
       if (parsed.origin === location.origin && !parsed.pathname.startsWith(proxyBase)) {
         return proxiedPath(parsed.pathname, parsed.search, parsed.hash);
@@ -290,12 +865,12 @@ const comfyProxyBridge = (proxyBase, targetBase, bearerToken) => `<script>
       const parsed = new URL(raw, location.href);
       const target = new URL(targetBase);
       if (parsed.host === location.host && parsed.pathname.startsWith(proxyBase)) {
-        const routed = new URL(withProxyAuth(parsed.pathname + parsed.search + parsed.hash), location.href);
+        const routed = new URL(withinProxy(parsed.pathname + parsed.search + parsed.hash), location.href);
         routed.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
         return routed.toString();
       }
       if (parsed.origin === location.origin && parsed.pathname.startsWith(proxyBase)) {
-        const routed = new URL(withProxyAuth(parsed.pathname + parsed.search + parsed.hash), location.href);
+        const routed = new URL(withinProxy(parsed.pathname + parsed.search + parsed.hash), location.href);
         routed.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
         return routed.toString();
       }
@@ -381,43 +956,50 @@ const comfyProxyBridge = (proxyBase, targetBase, bearerToken) => `<script>
 })();
 </script>`
 
-const injectComfyProxyBridge = (html, proxyBase, targetBase, bearerToken) => {
-  const bridge = comfyProxyBridge(proxyBase, targetBase, bearerToken)
+const injectComfyProxyBridge = (html, proxyBase, targetBase, parentOrigin) => {
+  const bridge = comfyProxyBridge(proxyBase, targetBase, parentOrigin)
   return html.includes('</head>') ? html.replace('</head>', `${bridge}</head>`) : `${bridge}${html}`
 }
 
-const rewriteComfyProxyLocation = (value, proxyBase, targetBase, bearerToken) => {
+const rewriteComfyProxyLocation = (value, proxyBase, targetBase) => {
   try {
-    const targetOrigin = new URL(targetBase).origin
-    const parsed = new URL(value, `${targetBase}/`)
-    if (parsed.origin !== targetOrigin) return value
-    if (bearerToken && !parsed.searchParams.has(COMFY_PROXY_TOKEN_PARAM)) {
-      parsed.searchParams.set(COMFY_PROXY_TOKEN_PARAM, bearerToken)
+    const allowedBaseUrl = new URL(`${targetBase}/`)
+    const parsed = new URL(value, allowedBaseUrl)
+    const allowedPathPrefix = allowedBaseUrl.pathname
+    if (
+      parsed.origin !== allowedBaseUrl.origin ||
+      (parsed.pathname !== allowedPathPrefix.slice(0, -1) && !parsed.pathname.startsWith(allowedPathPrefix))
+    ) {
+      throw new ComfyProxyTargetError('ComfyUI proxy redirect is not allowed')
     }
-    return `${proxyBase}${parsed.pathname.replace(/^\/+/, '')}${parsed.search}${parsed.hash}`
+    parsed.searchParams.delete(COMFY_PROXY_LEGACY_TOKEN_PARAM)
+    const relativePath =
+      parsed.pathname === allowedPathPrefix.slice(0, -1) ? '' : parsed.pathname.slice(allowedPathPrefix.length)
+    return `${proxyBase}${relativePath}${parsed.search}${parsed.hash}`
   } catch {
-    return value
+    throw new ComfyProxyTargetError('ComfyUI proxy redirect is not allowed')
   }
 }
 
-const rewriteComfyProxyResponseHeader = (key, value, proxyBase, targetBase, bearerToken) => {
-  if (key.toLowerCase() === 'location') return rewriteComfyProxyLocation(value, proxyBase, targetBase, bearerToken)
-  if (key.toLowerCase() === 'set-cookie') return rewriteComfyProxySetCookie(value, proxyBase)
+const rewriteComfyProxyResponseHeader = (key, value, proxyBase, targetBase) => {
+  if (key.toLowerCase() === 'location') return rewriteComfyProxyLocation(value, proxyBase, targetBase)
+  if (key.toLowerCase() === 'set-cookie') return rewriteComfyProxySetCookie(value, proxyBase, targetBase)
   return value
 }
 
-const setComfyProxyResponseHeaders = (response, headers, proxyBase, targetBase, bearerToken) => {
+const setComfyProxyResponseHeaders = (response, headers, proxyBase, targetBase, session) => {
   const setCookies =
     typeof headers.getSetCookie === 'function' ? headers.getSetCookie() : headers.get('set-cookie') ? [headers.get('set-cookie')] : []
   headers.forEach((value, key) => {
     const lower = key.toLowerCase()
     if (lower === 'set-cookie' || blockedProxyHeaders.has(lower)) return
-    response.setHeader(key, rewriteComfyProxyResponseHeader(key, value, proxyBase, targetBase, bearerToken))
+    response.setHeader(key, rewriteComfyProxyResponseHeader(key, value, proxyBase, targetBase))
   })
   if (setCookies.length > 0) {
+    applyComfyProxyUpstreamSetCookies(session, setCookies, targetBase)
     response.setHeader(
       'set-cookie',
-      setCookies.filter(Boolean).map((value) => rewriteComfyProxySetCookie(value, proxyBase)),
+      setCookies.map((value) => rewriteComfyProxySetCookie(value, proxyBase, targetBase)).filter(Boolean),
     )
   }
 }
@@ -430,26 +1012,56 @@ const serveComfyProxy = async (request, response, requestUrl) => {
     return
   }
   const { targetPath, targetBase, proxyBase } = parts
-  const targetUrl = new URL(targetPath, `${targetBase}/`)
+  assertAllowedProxyRequestOrigin(request, targetBase)
+  const session = comfyProxySession(request, targetBase)
+  const targetUrl = allowedComfyProxyTargetUrl(targetBase, targetPath)
+  if (requestUrl.searchParams.has(COMFY_PROXY_LEGACY_TOKEN_PARAM)) {
+    response.setHeader('cache-control', 'no-store')
+    response.setHeader('referrer-policy', 'no-referrer')
+    const accept = String(request.headers.accept ?? '').toLowerCase()
+    if ((request.method === 'GET' || request.method === 'HEAD') && accept.includes('text/html')) {
+      const cleanUrl = new URL(requestUrl)
+      cleanUrl.searchParams.delete(COMFY_PROXY_LEGACY_TOKEN_PARAM)
+      response.statusCode = 302
+      response.setHeader('location', `${cleanUrl.pathname}${cleanUrl.search}`)
+      response.end()
+    } else {
+      response.statusCode = 400
+      response.setHeader('content-type', 'text/plain; charset=utf-8')
+      response.end('Legacy ComfyUI proxy credentials in URLs are not accepted')
+    }
+    return
+  }
   targetUrl.search = requestUrl.search
-  targetUrl.searchParams.delete(COMFY_PROXY_TOKEN_PARAM)
-  const bearerToken = requestUrl.searchParams.get(COMFY_PROXY_TOKEN_PARAM)?.trim() || (await configuredProxyBearerToken())
+  const bearerToken = comfyProxySession(request, targetBase)?.bearerToken || (await configuredProxyBearerToken(targetBase))
   const hasBody = request.method !== 'GET' && request.method !== 'HEAD'
   const proxied = await fetch(targetUrl, {
     method: request.method,
-    headers: await proxyRequestHeaders(request, shouldAttachProxyBearer(request, targetUrl) ? bearerToken : undefined),
+    headers: await proxyRequestHeaders(
+      request,
+      shouldAttachProxyBearer(request, targetUrl) ? bearerToken : undefined,
+      targetBase,
+      Boolean(session),
+      comfyProxySessionCookieHeader(session),
+    ),
     body: hasBody ? await readRequestBody(request) : undefined,
     redirect: 'manual',
   })
   const contentType = proxied.headers.get('content-type') ?? ''
 
   response.statusCode = proxied.status
-  setComfyProxyResponseHeaders(response, proxied.headers, proxyBase, targetBase, bearerToken)
-  response.setHeader('Access-Control-Allow-Origin', '*')
+  setComfyProxyResponseHeaders(response, proxied.headers, proxyBase, targetBase, session)
 
   if (contentType.includes('text/html')) {
     response.setHeader('content-type', 'text/html; charset=utf-8')
-    response.end(injectComfyProxyBridge(await proxied.text(), proxyBase, targetBase, bearerToken))
+    response.end(
+      injectComfyProxyBridge(
+        await proxied.text(),
+        proxyBase,
+        targetBase,
+        session?.parentOrigin ?? requestOrigin(request),
+      ),
+    )
     return
   }
 
@@ -494,17 +1106,23 @@ const startAppServer = () =>
       resolve(localAppServerUrl)
       return
     }
+    authorizeConfiguredComfyProxyTargets()
     localAppServer = http.createServer((request, response) => {
       void (async () => {
         try {
           const requestUrl = new URL(request.url || '/', 'http://127.0.0.1')
+          if (requestUrl.pathname.startsWith(COMFY_PROXY_AUTH_PREFIX)) {
+            await handleComfyProxyAuth(request, response)
+            return
+          }
+          if (redirectComfyProxyRootResource(request, response)) return
           if (requestUrl.pathname.startsWith(COMFY_PROXY_PREFIX)) {
             await serveComfyProxy(request, response, requestUrl)
             return
           }
           await serveStaticApp(response, requestUrl.pathname)
         } catch (err) {
-          response.statusCode = 502
+          response.statusCode = err instanceof ComfyProxyTargetError ? 403 : 502
           response.setHeader('content-type', 'text/plain; charset=utf-8')
           response.end(err instanceof Error ? err.message : 'Infinity app server failed')
         }
@@ -526,11 +1144,15 @@ const startAppServer = () =>
             return
           }
           const { requestUrl, targetPath, targetBase } = parts
-          const targetUrl = new URL(targetPath, `${targetBase}/`)
+          assertAllowedProxyRequestOrigin(request, targetBase)
+          const session = comfyProxySession(request, targetBase)
+          const targetUrl = allowedComfyProxyTargetUrl(targetBase, targetPath)
+          if (requestUrl.searchParams.has(COMFY_PROXY_LEGACY_TOKEN_PARAM)) {
+            throw new ComfyProxyTargetError('Legacy ComfyUI proxy credentials in URLs are not accepted')
+          }
           targetUrl.protocol = targetUrl.protocol === 'https:' ? 'wss:' : 'ws:'
           targetUrl.search = requestUrl.search
-          targetUrl.searchParams.delete(COMFY_PROXY_TOKEN_PARAM)
-          const bearerToken = requestUrl.searchParams.get(COMFY_PROXY_TOKEN_PARAM)?.trim() || (await configuredProxyBearerToken())
+          const bearerToken = session?.bearerToken || (await configuredProxyBearerToken(targetBase))
           const port = Number(targetUrl.port || (targetUrl.protocol === 'wss:' ? 443 : 80))
           const connectOptions = { host: targetUrl.hostname, port, servername: targetUrl.hostname }
           const upstream =
@@ -542,6 +1164,9 @@ const startAppServer = () =>
                 request,
                 targetUrl,
                 bearerToken,
+                targetBase,
+                Boolean(session),
+                comfyProxySessionCookieHeader(session),
               ).join('\r\n')}\r\n\r\n`,
             )
             if (head.length > 0) upstream.write(head)
@@ -742,6 +1367,17 @@ const loadProjectLibrary = async () => {
 
 ipcMain.handle('infinity-storage:load', loadProjectLibrary)
 ipcMain.handle('infinity-storage:save', (_event, payload) => saveProjectLibrary(payload))
+ipcMain.handle('infinity-comfy:authorize-target', (event, baseUrl) => {
+  if (!localAppServerUrl) throw new Error('Infinity app server is not ready')
+  if (!event.senderFrame || event.senderFrame !== event.sender.mainFrame) {
+    throw new Error('ComfyUI target authorization is only allowed from the main frame')
+  }
+  const senderOrigin = new URL(event.senderFrame.url).origin
+  if (senderOrigin !== new URL(localAppServerUrl).origin) throw new Error('ComfyUI target authorization is not allowed')
+  const targetBase = validatedComfyProxyTargetBase(baseUrl)
+  authorizedComfyProxyTargets.add(targetBase)
+  return { ok: true }
+})
 
 async function createWindow() {
   const appUrl = await startAppServer()
@@ -762,7 +1398,12 @@ async function createWindow() {
   })
 
   win.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url)
+    try {
+      const parsed = new URL(url)
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') void shell.openExternal(parsed.toString())
+    } catch {
+      // Invalid or non-web popup targets stay blocked inside the desktop app.
+    }
     return { action: 'deny' }
   })
 

@@ -117,6 +117,47 @@ describe('App', () => {
     expect(projectSelector).toHaveAttribute('aria-expanded', 'false')
   })
 
+  it('confirms topbar project deletion in an accessible in-app dialog without invoking browser confirm', async () => {
+    const nativeConfirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    projectStore.getState().updateProjectMetadata({ name: 'Kitchen Board' })
+    const kitchenProjectId = projectStore.getState().project.project.id
+    projectStore.getState().createProject({ name: 'Spare Board' })
+    projectStore.getState().switchProject(kitchenProjectId)
+    render(<App />)
+
+    const openAndDeleteKitchenProject = () => {
+      const selector = screen.getByRole('button', { name: 'Current project' })
+      if (selector.getAttribute('aria-expanded') !== 'true') fireEvent.click(selector)
+      fireEvent.click(screen.getByRole('button', { name: 'Delete project Kitchen Board' }))
+    }
+
+    openAndDeleteKitchenProject()
+
+    let dialog = screen.getByRole('dialog', { name: /delete project/i })
+    expect(within(dialog).getByRole('heading', { name: /delete project/i })).toBeVisible()
+    expect(dialog).toHaveTextContent('Kitchen Board')
+    expect(dialog).toHaveTextContent(/delete|remove|cannot be undone/i)
+    expect(nativeConfirm).not.toHaveBeenCalled()
+    fireEvent.click(within(dialog).getByRole('button', { name: /cancel/i }))
+
+    expect(projectStore.getState().projectLibrary[kitchenProjectId]).toBeDefined()
+    expect(projectStore.getState().project.project.id).toBe(kitchenProjectId)
+    expect(screen.queryByRole('dialog', { name: /delete project/i })).not.toBeInTheDocument()
+
+    openAndDeleteKitchenProject()
+    dialog = screen.getByRole('dialog', { name: /delete project/i })
+    fireEvent.click(within(dialog).getByRole('button', { name: /^delete( project)?$/i }))
+
+    expect(projectStore.getState().projectLibrary[kitchenProjectId]).toBeUndefined()
+    expect(projectStore.getState().project.project.id).not.toBe(kitchenProjectId)
+    expect(screen.queryByRole('dialog', { name: /delete project/i })).not.toBeInTheDocument()
+    expect(nativeConfirm).not.toHaveBeenCalled()
+    const projectSwitcher = screen.getByRole('button', { name: 'Current project' })
+    expect(projectSwitcher).toBeVisible()
+    await waitFor(() => expect(projectSwitcher).toHaveFocus())
+    expect(document.activeElement).not.toBe(document.body)
+  })
+
   it('moves project import, export, and metadata editing into the topbar', async () => {
     projectStore.getState().updateProjectMetadata({
       name: 'Kitchen Board',

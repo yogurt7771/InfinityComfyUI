@@ -54,18 +54,19 @@ import type {
   Resource,
   ResourceType,
 } from '../domain/types'
-import { comfyProxyUrl } from '../domain/comfyProxy'
 import {
-  exportApiWorkflowFromComfyEditor,
-  exportUiWorkflowFromComfyEditor,
-  loadApiWorkflowIntoComfyEditor,
-  openApiWorkflowJsonFileInComfyEditor,
-  openWorkflowJsonFileInComfyEditor,
-} from '../domain/comfyEditorBridge'
+  ComfyFrameLoginRequiredError,
+  exportWorkflowFromComfyFrame,
+  loadApiWorkflowIntoComfyFrame,
+  loadUiWorkflowIntoComfyFrame,
+  waitForComfyFrameBridge,
+} from '../domain/comfyFrameBridge'
+import { comfyProxyUrl, prepareIsolatedComfyProxySession } from '../domain/comfyProxy'
 import { projectStore, useProjectStore } from '../store/projectStore'
 import { ResourcePreview } from './ResourcePreview'
 import { FullResourcePreviewModal } from './ResourcePreviewModal'
 import { ModalFrame } from './ModalFrame'
+import { ConfirmationDialog } from './ConfirmationDialog'
 
 const resourceTypes: ResourceType[] = ['text', 'number', 'boolean', 'image', 'video', 'audio']
 const outputSources: FunctionOutputDef['extract']['source'][] = [
@@ -1253,30 +1254,6 @@ export type EmbeddedComfySave = {
   editor: ComfyWorkflowEditorMetadata
 }
 
-type ComfyFrameGraph = {
-  getNodeById?: (id: unknown) => unknown
-  _nodes?: unknown[]
-  _nodes_by_id?: Record<string, unknown>
-  change?: () => void
-  serialize?: () => unknown
-}
-
-type ComfyFrameWindow = Window & {
-  fetch: typeof fetch
-  Request?: typeof Request
-  Response: typeof Response
-  app?: {
-    graphToPrompt?: (graph?: ComfyFrameGraph) => Promise<{ output?: unknown; workflow?: unknown }> | { output?: unknown; workflow?: unknown }
-    queuePrompt?: (...args: unknown[]) => Promise<unknown> | unknown
-    handleFile?: (file: File, openSource?: unknown, options?: unknown) => Promise<unknown> | unknown
-    loadGraphData?: (workflow: ComfyUiWorkflow) => Promise<unknown> | unknown
-    loadApiJson?: (workflow: ComfyWorkflow) => Promise<unknown> | unknown
-    rootGraph?: ComfyFrameGraph
-    rootGraphInternal?: ComfyFrameGraph
-    graph?: ComfyFrameGraph
-  }
-}
-
 const isComfyWorkflowFunction = (fn: GenerationFunction) => fn.workflow.format === 'comfyui_api_json'
 
 const endpointSupportsWorkflowFunction = (endpoint: ComfyEndpointConfig, functionId: string) => {
@@ -1318,18 +1295,6 @@ const setEndpointFunctionAvailability = (
   onUpdateEndpoint(endpoint.id, endpointCapabilitiesPatch(endpoint, nextFunctions))
 }
 
-const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
-
-async function waitForComfyFrameApp(frame: HTMLIFrameElement) {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    const frameWindow = frame.contentWindow as ComfyFrameWindow | null
-    const app = frameWindow?.app
-    if (app?.graphToPrompt) return app
-    await wait(150)
-  }
-  throw new Error('ComfyUI editor is not ready yet')
-}
-
 export function ComfyWorkflowEditorDialog({
   open = true,
   endpoint,
@@ -1352,39 +1317,67 @@ export function ComfyWorkflowEditorDialog({
   const [error, setError] = useState<string>()
   const [saving, setSaving] = useState(false)
   const [frameReady, setFrameReady] = useState(false)
+  const [frameSrc, setFrameSrc] = useState<string>()
+  const [frameOrigin, setFrameOrigin] = useState<string>()
   const endpointId = endpoint?.id
-  const proxyUrl = endpoint
-    ? comfyProxyUrl(endpoint.baseUrl, {
-        bearerToken: endpoint.auth?.type === 'token' ? endpoint.auth.token : undefined,
-      })
-    : undefined
+  const endpointBaseUrl = endpoint?.baseUrl
+  const proxyUrl = endpointBaseUrl ? comfyProxyUrl(endpointBaseUrl) : undefined
+  const proxyBearerToken =
+    endpoint?.auth?.type === 'token' || endpoint?.auth?.type === 'password' ? endpoint.auth.token : undefined
+  const proxyPassword = endpoint?.auth?.type === 'password' ? endpoint.auth.password : undefined
 
   /* eslint-disable react-hooks/set-state-in-effect -- A changed endpoint invalidates the iframe readiness state immediately. */
   useEffect(() => {
     setFrameReady(false)
+    setFrameSrc(undefined)
+    setFrameOrigin(undefined)
     setStatus(endpointId ? 'Loading ComfyUI editor' : 'No ComfyUI endpoint configured')
     setError(undefined)
-  }, [endpointId, proxyUrl])
+    wasOpenRef.current = false
+    if (!open || !endpointBaseUrl || !proxyUrl) return
+
+    let cancelled = false
+    setStatus('Preparing secure ComfyUI session')
+    void prepareIsolatedComfyProxySession(endpointBaseUrl, {
+      bearerToken: proxyBearerToken,
+      password: proxyPassword,
+    })
+      .then((session) => {
+        if (cancelled) return
+        setFrameOrigin(session.frameOrigin)
+        setFrameSrc(session.proxyUrl)
+        setStatus('Loading ComfyUI editor')
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setError(err instanceof Error ? err.message : 'Failed to prepare the ComfyUI proxy session')
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [endpointBaseUrl, endpointId, open, proxyBearerToken, proxyPassword, proxyUrl])
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const initializeFrame = useCallback(async () => {
-    if (initializingRef.current) return initializingRef.current
+    if (initializingRef.current) {
+      try {
+        await initializingRef.current
+      } catch {
+        // The active initializer owns error/status reporting. Concurrent iframe load events must not leak its rejection.
+      }
+      return
+    }
     const frame = frameRef.current
-    if (!frame || !endpoint) return
+    if (!frame || !endpointId || !frameOrigin) return
     const run = (async () => {
       setStatus('Loading ComfyUI editor')
-      const app = await waitForComfyFrameApp(frame)
-      if (initialUiJson && app.handleFile) {
-        await openWorkflowJsonFileInComfyEditor(app, initialUiJson, 'Infinity Workflow.json')
-        setStatus('Opened editable workflow through ComfyUI File Open')
-      } else if (initialUiJson && app.loadGraphData) {
-        await app.loadGraphData(initialUiJson)
+      await waitForComfyFrameBridge(frame, frameOrigin)
+      if (initialUiJson) {
+        await loadUiWorkflowIntoComfyFrame(frame, frameOrigin, initialUiJson)
         setStatus('Loaded editable ComfyUI workflow')
-      } else if (initialApiJson && app.handleFile) {
-        await openApiWorkflowJsonFileInComfyEditor(app, initialApiJson)
-        setStatus('Opened API workflow through ComfyUI File Open')
-      } else if (initialApiJson && app.loadApiJson) {
-        await loadApiWorkflowIntoComfyEditor(app, initialApiJson)
+      } else if (initialApiJson) {
+        await loadApiWorkflowIntoComfyFrame(frame, frameOrigin, initialApiJson)
         setStatus('Loaded API workflow into ComfyUI editor')
       } else {
         setStatus(initialUiJson ? 'ComfyUI editor ready' : 'ComfyUI editor ready. No editable UI workflow is stored yet.')
@@ -1396,15 +1389,7 @@ export function ComfyWorkflowEditorDialog({
     try {
       await run
     } catch (err) {
-      const frameWindow = frameRef.current?.contentWindow
-      const framePath = (() => {
-        try {
-          return frameWindow?.location.pathname ?? ''
-        } catch {
-          return ''
-        }
-      })()
-      if (framePath.includes('/login')) {
+      if (err instanceof ComfyFrameLoginRequiredError) {
         setStatus('ComfyUI login page opened. Log in to continue.')
         setError(undefined)
         return
@@ -1414,7 +1399,7 @@ export function ComfyWorkflowEditorDialog({
     } finally {
       if (initializingRef.current === run) initializingRef.current = undefined
     }
-  }, [endpoint, initialApiJson, initialUiJson])
+  }, [endpointId, frameOrigin, initialApiJson, initialUiJson])
 
   useEffect(() => {
     if (!open) {
@@ -1427,13 +1412,10 @@ export function ComfyWorkflowEditorDialog({
   }, [initializeFrame, open])
 
   const saveFromComfy = async () => {
-    if (!frameRef.current || !endpoint) return
+    if (!frameRef.current || !endpoint || !frameOrigin) return
     setSaving(true)
     try {
-      const app = await waitForComfyFrameApp(frameRef.current)
-      const frameWindow = frameRef.current.contentWindow as ComfyFrameWindow | null
-      const uiJson = await exportUiWorkflowFromComfyEditor(app)
-      const rawJson = await exportApiWorkflowFromComfyEditor(app, frameWindow ?? undefined)
+      const { rawJson, uiJson } = await exportWorkflowFromComfyFrame(frameRef.current, frameOrigin)
       onSave({
         rawJson,
         uiJson,
@@ -1453,7 +1435,7 @@ export function ComfyWorkflowEditorDialog({
     }
   }
 
-  const showLoadingFallback = Boolean(open && proxyUrl && !frameReady && !error && !status.includes('login page'))
+  const showLoadingFallback = Boolean(open && endpoint && proxyUrl && !frameReady && !error && !status.includes('login page'))
 
   return (
     <ModalShell label="ComfyUI Workflow Editor" modalClassName="comfy-editor-modal" hidden={!open} onClose={onClose}>
@@ -1472,19 +1454,26 @@ export function ComfyWorkflowEditorDialog({
         </div>
         {proxyUrl ? (
           <div className="comfy-editor-frame-wrap">
-            <iframe
-              ref={frameRef}
-              title={`ComfyUI editor ${endpoint?.name ?? ''}`.trim()}
-              className="comfy-editor-frame"
-              src={proxyUrl}
-              onLoad={() => {
-                if (open) void initializeFrame()
-              }}
-            />
+            {frameSrc ? (
+              <iframe
+                ref={frameRef}
+                title={`ComfyUI editor ${endpoint?.name ?? ''}`.trim()}
+                className="comfy-editor-frame"
+                src={frameSrc}
+                sandbox="allow-downloads allow-forms allow-modals allow-popups allow-same-origin allow-scripts"
+                onLoad={() => {
+                  if (open) void initializeFrame()
+                }}
+              />
+            ) : null}
             {showLoadingFallback ? (
               <div className="comfy-editor-loading" role="status" aria-label="ComfyUI editor loading">
-                <strong>Loading ComfyUI editor</strong>
-                <span>Initializing ComfyUI, extensions, and custom nodes.</span>
+                <strong>{frameSrc ? 'Waiting for ComfyUI' : 'Loading ComfyUI editor'}</strong>
+                <span>
+                  {frameSrc
+                    ? 'Log in inside ComfyUI if prompted. Extensions and custom nodes will continue loading automatically.'
+                    : 'Initializing ComfyUI, extensions, and custom nodes.'}
+                </span>
               </div>
             ) : null}
           </div>
@@ -2914,6 +2903,33 @@ function EndpointManager({
   const deleteHeader = (index: number) => {
     updateDraft({ customHeaders: Object.fromEntries(endpointHeaders(draft).filter((_, headerIndex) => headerIndex !== index)) })
   }
+  const updatePassword = (password: string) => {
+    if (password) {
+      updateDraft({
+        auth: {
+          type: 'password',
+          password,
+          token: draft.auth?.token,
+          exportSecret: draft.auth?.exportSecret,
+        },
+      })
+      return
+    }
+    updateDraft({
+      auth: draft.auth?.token
+        ? { type: 'token', token: draft.auth.token, exportSecret: draft.auth.exportSecret }
+        : { type: 'none' },
+    })
+  }
+  const updateFallbackToken = (token: string) => {
+    if (draft.auth?.type === 'password') {
+      updateDraft({ auth: { ...draft.auth, token: token || undefined } })
+      return
+    }
+    updateDraft({
+      auth: token ? { type: 'token', token, exportSecret: draft.auth?.exportSecret } : { type: 'none' },
+    })
+  }
   const setEndpointAllFunctions = (enabled: boolean) => {
     updateDraft(endpointCapabilitiesPatch(draft, enabled ? undefined : workflowFunctionIds))
   }
@@ -3019,6 +3035,28 @@ function EndpointManager({
               onChange={(event) => updateDraft({ timeoutMs: Math.max(1000, Number(event.target.value) || 1000) })}
             />
           </label>
+          <label className="field endpoint-password-field">
+            <span>ComfyUI password</span>
+            <input
+              aria-label="ComfyUI password"
+              type="password"
+              autoComplete="current-password"
+              value={draft.auth?.type === 'password' ? (draft.auth.password ?? '') : ''}
+              onChange={(event) => updatePassword(event.target.value)}
+            />
+            <small>Saved with this project and removed from exports unless secret export is explicitly enabled.</small>
+          </label>
+          <details className="field endpoint-token-fallback-field">
+            <summary>API token fallback (optional)</summary>
+            <input
+              aria-label="ComfyUI API token fallback"
+              type="password"
+              autoComplete="off"
+              value={draft.auth?.token ?? ''}
+              onChange={(event) => updateFallbackToken(event.target.value)}
+            />
+            <small>Only needed when this ComfyUI server does not accept its login cookie for API requests.</small>
+          </details>
           <label className="inline-check endpoint-enabled">
             <input
               aria-label="Endpoint enabled"
@@ -3210,6 +3248,7 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
   const [functionManagerOpen, setFunctionManagerOpen] = useState(false)
   const [endpointEditorId, setEndpointEditorId] = useState<'new' | string>()
   const [error, setError] = useState<string>()
+  const [pendingProjectDelete, setPendingProjectDelete] = useState<{ projectId: string; projectName: string }>()
 
   const taskCounts = useMemo(() => {
     const tasks = Object.values(project.tasks)
@@ -3309,8 +3348,17 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
   }
 
   const handleProjectDelete = () => {
-    if (!window.confirm(`Delete project "${project.project.name || 'Untitled Project'}"?`)) return
-    deleteProject(project.project.id)
+    setPendingProjectDelete({
+      projectId: project.project.id,
+      projectName: project.project.name || 'Untitled Project',
+    })
+  }
+
+  const confirmProjectDelete = () => {
+    if (!pendingProjectDelete) return
+    const { projectId } = pendingProjectDelete
+    setPendingProjectDelete(undefined)
+    deleteProject(projectId)
   }
 
   return (
@@ -3460,6 +3508,21 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
           onClose={() => setEndpointEditorId(undefined)}
         />
       ) : null}
+      {pendingProjectDelete ? (
+        <ConfirmationDialog
+          label="Delete project confirmation"
+          title="Delete project?"
+          message={
+            <>
+              Delete <strong>{pendingProjectDelete.projectName}</strong> and all of its assets, functions, and run history?
+              This action cannot be undone.
+            </>
+          }
+          confirmLabel="Delete project"
+          onCancel={() => setPendingProjectDelete(undefined)}
+          onConfirm={confirmProjectDelete}
+        />
+      ) : null}
     </ModalShell>
   )
 }
@@ -3492,6 +3555,10 @@ export function LeftPanel() {
   const [createFunctionOpen, setCreateFunctionOpen] = useState(false)
   const [endpointEditorId, setEndpointEditorId] = useState<'new' | string>()
   const [dockError, setDockError] = useState<string>()
+  const [pendingConfirmation, setPendingConfirmation] = useState<
+    | { kind: 'function'; functionId: string; name: string }
+    | { kind: 'endpoint'; endpointId: string; name: string }
+  >()
   const [previewResource, setPreviewResource] = useState<Resource | undefined>()
   const [historyDialog, setHistoryDialog] = useState<{
     title: string
@@ -3500,6 +3567,8 @@ export function LeftPanel() {
   }>()
   const previewTimerRef = useRef<number | undefined>(undefined)
   const historyRefreshTimerRef = useRef<number | undefined>(undefined)
+  const newFunctionButtonRef = useRef<HTMLButtonElement | null>(null)
+  const newServerButtonRef = useRef<HTMLButtonElement | null>(null)
   const assetsOpen = openDock === 'assets'
   const historyOpen = openDock === 'history'
   const functionsOpen = openDock === 'functions'
@@ -3646,20 +3715,40 @@ export function LeftPanel() {
   }
   const removeFunction = (functionId: string) => {
     const fn = managedFunctions.find((item) => item.id === functionId)
-    if (fn && !window.confirm(`Delete function "${fn.name}"?`)) return
-    deleteFunction(functionId)
-    if (selectedFunctionId === functionId) setSelectedFunctionId(undefined)
+    if (!fn) return
+    setPendingConfirmation({ kind: 'function', functionId, name: fn.name })
   }
   const removeEndpoint = (endpoint: ComfyEndpointConfig) => {
     const activeEndpointTasks = Object.values(project.tasks).filter(
       (task) => task.endpointId === endpoint.id && activeTaskStatuses.has(task.status),
     )
     if (activeEndpointTasks.length > 0) {
-      setDockError(`Cannot delete "${endpoint.name}" while ${activeEndpointTasks.length} task${activeEndpointTasks.length > 1 ? 's are' : ' is'} active.`)
+      setDockError(
+        `Cannot delete "${endpoint.name}" while ${activeEndpointTasks.length} active task${activeEndpointTasks.length > 1 ? 's are' : ' is'} running.`,
+      )
       return
     }
-    if (!window.confirm(`Delete ComfyUI server "${endpoint.name}"?`)) return
-    deleteEndpoint(endpoint.id)
+    setPendingConfirmation({ kind: 'endpoint', endpointId: endpoint.id, name: endpoint.name })
+  }
+  const confirmPendingAction = () => {
+    if (!pendingConfirmation) return
+    const action = pendingConfirmation
+    setPendingConfirmation(undefined)
+    if (action.kind === 'function') {
+      deleteFunction(action.functionId)
+      if (selectedFunctionId === action.functionId) setSelectedFunctionId(undefined)
+      return
+    }
+    const activeEndpointTasks = Object.values(project.tasks).filter(
+      (task) => task.endpointId === action.endpointId && activeTaskStatuses.has(task.status),
+    )
+    if (activeEndpointTasks.length > 0) {
+      setDockError(
+        `Cannot delete "${action.name}" while ${activeEndpointTasks.length} active task${activeEndpointTasks.length > 1 ? 's are' : ' is'} running.`,
+      )
+      return
+    }
+    deleteEndpoint(action.endpointId)
     setDockError(undefined)
   }
   const functionKind = (fn: GenerationFunction) => {
@@ -3757,6 +3846,31 @@ export function LeftPanel() {
           onDeleteEndpoint={deleteEndpoint}
           onTestEndpoint={(endpoint) => void checkEndpointStatus(endpoint.id)}
           onClose={() => setEndpointEditorId(undefined)}
+        />
+      ) : null}
+      {pendingConfirmation ? (
+        <ConfirmationDialog
+          label={pendingConfirmation.kind === 'function' ? 'Delete function confirmation' : 'Delete ComfyUI server confirmation'}
+          title={pendingConfirmation.kind === 'function' ? 'Delete function?' : 'Delete ComfyUI server?'}
+          message={
+            pendingConfirmation.kind === 'function' ? (
+              <>
+                Delete <strong>{pendingConfirmation.name}</strong> from this project? Existing run history is kept, but the
+                function will no longer be available for new runs.
+              </>
+            ) : (
+              <>
+                Delete <strong>{pendingConfirmation.name}</strong> from this project? Saved workflows will remain, but this
+                server configuration and its credentials will be removed.
+              </>
+            )
+          }
+          confirmLabel={pendingConfirmation.kind === 'function' ? 'Delete function' : 'Delete server'}
+          restoreFocusFallback={() =>
+            pendingConfirmation.kind === 'function' ? newFunctionButtonRef.current : newServerButtonRef.current
+          }
+          onCancel={() => setPendingConfirmation(undefined)}
+          onConfirm={confirmPendingAction}
         />
       ) : null}
       <div className="assets-dock-stack">
@@ -3948,7 +4062,12 @@ export function LeftPanel() {
             <span>{managedFunctions.length}</span>
           </div>
           <div className="dock-management-toolbar">
-            <button type="button" className="dock-create-button" onClick={() => setCreateFunctionOpen(true)}>
+            <button
+              ref={newFunctionButtonRef}
+              type="button"
+              className="dock-create-button"
+              onClick={() => setCreateFunctionOpen(true)}
+            >
               <Plus size={15} />
               New function
             </button>
@@ -3998,6 +4117,7 @@ export function LeftPanel() {
           </div>
           <div className="dock-management-toolbar">
             <button
+              ref={newServerButtonRef}
               type="button"
               className="dock-create-button"
               onClick={() => setEndpointEditorId('new')}
@@ -4045,6 +4165,7 @@ export function LeftPanel() {
               <div className="empty-list">No servers</div>
             )}
           </div>
+          {dockError ? <div className="toast-error dock-toast-error">{dockError}</div> : null}
         </section>
       ) : null}
       {tasksOpen ? (

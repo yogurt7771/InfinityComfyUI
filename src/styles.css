@@ -4,6 +4,7 @@
 .full-preview-modal,
 .openai-message-modal,
 .local-action-dialog,
+.confirmation-dialog,
 .side-panel {
   --ink: #f6fbfc;
   --ink-soft: #dce8ed;
@@ -1295,6 +1296,63 @@ div.server-list-item {
   border-radius: 10px;
   background: var(--panel-soft);
   box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
+}
+
+.confirmation-dialog {
+  width: min(480px, calc(100vw - 44px));
+  grid-template-rows: none;
+  gap: 20px;
+  padding: 22px;
+  overflow: visible;
+}
+
+.confirmation-dialog-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 14px;
+}
+
+.confirmation-dialog-heading h2,
+.confirmation-dialog-heading p {
+  margin: 0;
+}
+
+.confirmation-dialog-heading h2 {
+  color: var(--ink);
+  font-size: 18px;
+}
+
+.confirmation-dialog-heading p {
+  margin-top: 8px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.confirmation-dialog-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid rgba(251, 113, 133, 0.34);
+  border-radius: 12px;
+  color: var(--danger);
+  background: rgba(127, 29, 29, 0.18);
+}
+
+.confirmation-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.confirmation-dialog-actions button {
+  min-width: 112px;
+}
+
+.confirmation-dialog-confirm {
+  font-weight: 800;
 }
 
 .manager-header,
@@ -6667,6 +6725,8 @@ body[data-theme='light'] .openai-message-modal,
 :is(body[data-theme='light'], .app-shell[data-theme='light']) .openai-message-modal,
 body[data-theme='light'] .local-action-dialog,
 :is(body[data-theme='light'], .app-shell[data-theme='light']) .local-action-dialog,
+body[data-theme='light'] .confirmation-dialog,
+:is(body[data-theme='light'], .app-shell[data-theme='light']) .confirmation-dialog,
 :is(body[data-theme='light'], .app-shell[data-theme='light']) .side-panel {
   --ink: #101828;
   --ink-soft: #344054;

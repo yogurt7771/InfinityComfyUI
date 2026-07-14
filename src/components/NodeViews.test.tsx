@@ -1965,10 +1965,10 @@ describe('NodeViews', () => {
     expect(onRerunResultNode).toHaveBeenCalledWith('node_result')
   })
 
-  it('asks before rerunning a succeeded result node so outputs are intentionally overwritten', () => {
+  it('confirms a succeeded-result rerun in an accessible in-app dialog without invoking browser confirm', () => {
     const onRerunResultNode = vi.fn()
-    const confirm = vi.fn(() => true)
-    vi.stubGlobal('confirm', confirm)
+    const nativeConfirm = vi.fn(() => false)
+    vi.stubGlobal('confirm', nativeConfirm)
     const props = {
       id: 'node_result',
       selected: false,
@@ -1991,8 +1991,23 @@ describe('NodeViews', () => {
 
     fireEvent.click(within(container).getByRole('button', { name: 'Rerun result' }))
 
-    expect(confirm).toHaveBeenCalledWith('This run already succeeded. Rerun and overwrite its outputs?')
+    let dialog = screen.getByRole('dialog', { name: /rerun|overwrite/i })
+    expect(within(dialog).getByRole('heading', { name: /rerun|overwrite/i })).toBeVisible()
+    expect(dialog).toHaveTextContent(/already succeeded|completed/i)
+    expect(dialog).toHaveTextContent(/overwrite|replace.*outputs/i)
+    expect(nativeConfirm).not.toHaveBeenCalled()
+    fireEvent.click(within(dialog).getByRole('button', { name: /cancel/i }))
+
+    expect(onRerunResultNode).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog', { name: /rerun|overwrite/i })).not.toBeInTheDocument()
+
+    fireEvent.click(within(container).getByRole('button', { name: 'Rerun result' }))
+    dialog = screen.getByRole('dialog', { name: /rerun|overwrite/i })
+    fireEvent.click(within(dialog).getByRole('button', { name: /rerun|overwrite/i }))
+
     expect(onRerunResultNode).toHaveBeenCalledWith('node_result')
+    expect(screen.queryByRole('dialog', { name: /rerun|overwrite/i })).not.toBeInTheDocument()
+    expect(nativeConfirm).not.toHaveBeenCalled()
   })
 
   it('adds copy and download controls to text input resources', () => {

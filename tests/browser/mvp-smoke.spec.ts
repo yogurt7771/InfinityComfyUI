@@ -1237,6 +1237,88 @@ test('ctrl-drag box selection keeps the canvas rendered and selects enclosed nod
   await expect(page.locator('.react-flow__nodesselection-rect')).toBeHidden()
 })
 
+test('keeps the app mounted through group drag, undo, and group context actions', async ({ page }) => {
+  const pageErrors = collectPageErrors(page)
+  const consoleErrors: string[] = []
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text())
+  })
+  await page.goto('/')
+
+  const rootHandle = await page.locator('#root').elementHandle()
+  if (!rootHandle) throw new Error('Infinity ComfyUI root not found')
+  await addSelectableResourceNodes(page)
+
+  const firstChild = page.locator('.react-flow__node-resource').first()
+  const secondChild = page.locator('.react-flow__node-resource').last()
+  await firstChild.locator('.node-title').click()
+  await page.keyboard.down('Control')
+  await secondChild.locator('.node-title').click()
+  await page.keyboard.up('Control')
+  await expect(page.locator('.react-flow__node.selected')).toHaveCount(2)
+
+  await page.keyboard.press('Control+g')
+  const group = page.locator('.react-flow__node-group')
+  await expect(group).toHaveCount(1)
+  await expect(group).toHaveClass(/selected/)
+
+  const beforeGroup = await group.boundingBox()
+  const beforeFirst = await firstChild.boundingBox()
+  const beforeSecond = await secondChild.boundingBox()
+  if (!beforeGroup || !beforeFirst || !beforeSecond) throw new Error('grouped nodes not found before drag')
+
+  const pointerDelta = { x: 96, y: 64 }
+  await page.mouse.move(beforeGroup.x + 32, beforeGroup.y + 24)
+  await page.mouse.down()
+  await page.mouse.move(beforeGroup.x + 32 + pointerDelta.x, beforeGroup.y + 24 + pointerDelta.y, { steps: 12 })
+  await page.mouse.up()
+
+  await expect
+    .poll(async () => {
+      const afterGroup = await group.boundingBox()
+      const afterFirst = await firstChild.boundingBox()
+      const afterSecond = await secondChild.boundingBox()
+      if (!afterGroup || !afterFirst || !afterSecond) return undefined
+      const groupDelta = { x: Math.round(afterGroup.x - beforeGroup.x), y: Math.round(afterGroup.y - beforeGroup.y) }
+      const firstDelta = { x: Math.round(afterFirst.x - beforeFirst.x), y: Math.round(afterFirst.y - beforeFirst.y) }
+      const secondDelta = { x: Math.round(afterSecond.x - beforeSecond.x), y: Math.round(afterSecond.y - beforeSecond.y) }
+      return {
+        moved: groupDelta.x > 40 && groupDelta.y > 20,
+        childrenFollowGroup: JSON.stringify(firstDelta) === JSON.stringify(groupDelta)
+          && JSON.stringify(secondDelta) === JSON.stringify(groupDelta),
+      }
+    })
+    .toEqual({ moved: true, childrenFollowGroup: true })
+
+  await page.keyboard.press('Control+z')
+  await expect
+    .poll(async () => {
+      const undoneGroup = await group.boundingBox()
+      const undoneFirst = await firstChild.boundingBox()
+      const undoneSecond = await secondChild.boundingBox()
+      if (!undoneGroup || !undoneFirst || !undoneSecond) return undefined
+      return {
+        group: { x: Math.round(undoneGroup.x - beforeGroup.x), y: Math.round(undoneGroup.y - beforeGroup.y) },
+        first: { x: Math.round(undoneFirst.x - beforeFirst.x), y: Math.round(undoneFirst.y - beforeFirst.y) },
+        second: { x: Math.round(undoneSecond.x - beforeSecond.x), y: Math.round(undoneSecond.y - beforeSecond.y) },
+      }
+    })
+    .toEqual({
+      group: { x: 0, y: 0 },
+      first: { x: 0, y: 0 },
+      second: { x: 0, y: 0 },
+    })
+
+  await group.click({ button: 'right', position: { x: 32, y: 24 } })
+
+  await expect(page.getByLabel('Group actions')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Infinity ComfyUI' })).toBeVisible()
+  expect(await rootHandle.evaluate((element) => element.isConnected)).toBe(true)
+  expect([...pageErrors, ...consoleErrors].join('\n')).not.toMatch(
+    /Maximum update depth exceeded|Minified React error #185/i,
+  )
+})
+
 test.skip('supports ctrl box selection, shift add, alt remove, batch drag, and batch delete', async ({ page }) => {
   await page.goto('/')
 

@@ -14,6 +14,7 @@ import {
   Upload,
 } from 'lucide-react'
 import { CanvasWorkspace } from './components/CanvasWorkspace'
+import { ConfirmationDialog } from './components/ConfirmationDialog'
 import { LeftPanel, ProjectInfoDialog } from './components/WorkbenchPanels'
 import { downloadConfigPackage, downloadProjectPackage, readPackageFile } from './domain/projectTransfer'
 import type { ProjectState } from './domain/types'
@@ -23,9 +24,11 @@ import './styles.css'
 export default function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const projectSwitcherRef = useRef<HTMLDivElement | null>(null)
+  const projectSwitcherButtonRef = useRef<HTMLButtonElement | null>(null)
   const [projectInfoOpen, setProjectInfoOpen] = useState(false)
   const [projectListOpen, setProjectListOpen] = useState(false)
   const [newProjectDraft, setNewProjectDraft] = useState<ProjectState['project']>()
+  const [pendingProjectDelete, setPendingProjectDelete] = useState<{ projectId: string; projectName: string }>()
   const [packageError, setPackageError] = useState<string>()
   const [theme, setTheme] = useState<'light' | 'dark'>('light')
   const project = useProjectStore((state) => state.project)
@@ -136,7 +139,13 @@ export default function App() {
   }
 
   const removeProject = (projectId: string, projectName: string) => {
-    if (!window.confirm(`Delete project "${projectName || 'Untitled Project'}"?`)) return
+    setPendingProjectDelete({ projectId, projectName: projectName || 'Untitled Project' })
+  }
+
+  const confirmProjectDelete = () => {
+    if (!pendingProjectDelete) return
+    const { projectId } = pendingProjectDelete
+    setPendingProjectDelete(undefined)
     deleteProject(projectId)
     setProjectListOpen(false)
   }
@@ -163,6 +172,7 @@ export default function App() {
             <h1>Infinity ComfyUI</h1>
             <div className="project-switcher-row" ref={projectSwitcherRef}>
               <button
+                ref={projectSwitcherButtonRef}
                 type="button"
                 className="project-switcher"
                 aria-label="Current project"
@@ -304,6 +314,22 @@ export default function App() {
           project={newProjectDraft ?? project.project}
           onUpdate={saveProjectInfo}
           onClose={closeProjectInfo}
+        />
+      ) : null}
+      {pendingProjectDelete ? (
+        <ConfirmationDialog
+          label="Delete project confirmation"
+          title="Delete project?"
+          message={
+            <>
+              Delete <strong>{pendingProjectDelete.projectName}</strong> and all of its assets, functions, and run history?
+              This action cannot be undone.
+            </>
+          }
+          confirmLabel="Delete project"
+          restoreFocusFallback={() => projectSwitcherButtonRef.current}
+          onCancel={() => setPendingProjectDelete(undefined)}
+          onConfirm={confirmProjectDelete}
         />
       ) : null}
       {packageError ? <div className="toast-error app-toast-error">{packageError}</div> : null}

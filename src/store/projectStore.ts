@@ -2,7 +2,7 @@ import { useStore } from 'zustand'
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import { get as getIdb, set as setIdb } from 'idb-keyval'
 import { ComfyClient, type ComfyUploadImageOptions, type ComfyUploadImageResult } from '../domain/comfyClient'
-import { comfyProxyUrl } from '../domain/comfyProxy'
+import { comfyProxyUrl, prepareComfyProxySession } from '../domain/comfyProxy'
 import { ComfyServer, comfyFileFromResource } from '../domain/comfyServer'
 import { extractComfyOutputs, type ComfyFileRef } from '../domain/comfyOutputs'
 import { runComfyPrompt, type ComfyPromptClient } from '../domain/comfyRunner'
@@ -253,6 +253,7 @@ export type ProjectLibraryPackage = {
 type DesktopProjectStorage = {
   loadProjectLibrary: () => Promise<ProjectLibraryPackage | undefined>
   saveProjectLibrary: (payload: ProjectLibraryPackage) => Promise<{ ok: boolean; rootPath?: string; error?: string }>
+  authorizeComfyProxyTarget?: (baseUrl: string) => Promise<{ ok: boolean }>
 }
 
 declare global {
@@ -375,16 +376,28 @@ const defaultDeps: ProjectStoreDeps = {
   idFactory: () => crypto.randomUUID(),
   now: () => new Date().toISOString(),
   randomInt: (min, max) => Math.floor(Math.random() * (max - min + 1)) + min,
-  createComfyClient: (endpoint) =>
-    new ComfyClient({
-      baseUrl:
-        typeof window !== 'undefined' && window.location.origin !== 'null'
-          ? new URL(comfyProxyUrl(endpoint.baseUrl), window.location.origin).toString()
-          : endpoint.baseUrl,
+  createComfyClient: (endpoint) => {
+    const browserProxyAvailable = typeof window !== 'undefined' && window.location.origin !== 'null'
+    const bearerToken =
+      endpoint.auth?.type === 'token' || endpoint.auth?.type === 'password' ? endpoint.auth.token : undefined
+    const password = endpoint.auth?.type === 'password' ? endpoint.auth.password : undefined
+    let sessionPromise: Promise<void> | undefined
+    return new ComfyClient({
+      baseUrl: browserProxyAvailable
+        ? new URL(comfyProxyUrl(endpoint.baseUrl), window.location.origin).toString()
+        : endpoint.baseUrl,
       clientId: crypto.randomUUID(),
-      token: endpoint.auth?.type === 'token' ? endpoint.auth.token : undefined,
+      token: browserProxyAvailable ? undefined : bearerToken,
       headers: endpoint.customHeaders,
-    }),
+      fetchImpl: browserProxyAvailable
+        ? async (input, init) => {
+            sessionPromise ??= prepareComfyProxySession(endpoint.baseUrl, { bearerToken, password })
+            await sessionPromise
+            return fetch(input, init)
+          }
+        : undefined,
+    })
+  },
   comfyRunOptions: {
     pollIntervalMs: 1000,
   },

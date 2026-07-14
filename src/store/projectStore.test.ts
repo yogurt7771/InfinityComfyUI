@@ -7,7 +7,7 @@ import { createOpenAIImageFunction, OPENAI_IMAGE_FUNCTION_ID } from '../domain/o
 import { createGeminiImageFunction, GEMINI_IMAGE_FUNCTION_ID } from '../domain/geminiImage'
 import { REQUEST_FUNCTION_ID } from '../domain/requestFunction'
 import { LOCAL_TEXT_TRIM_FUNCTION_ID } from '../domain/localTransforms'
-import { comfyProxyUrl } from '../domain/comfyProxy'
+import { comfyProxyAuthUrl, comfyProxyUrl } from '../domain/comfyProxy'
 import type { FunctionInputDef, GenerationFunction } from '../domain/types'
 
 describe('project store actions', () => {
@@ -1023,6 +1023,7 @@ describe('project store actions', () => {
     const ids = ['node_openai_image', 'task_1', 'node_result_1', 'asset_1', 'res_image_1']
     const fetchMock = vi
       .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
       .mockResolvedValueOnce({
         ok: true,
         blob: async () => new Blob(['secure-ref'], { type: 'image/png' }),
@@ -1128,6 +1129,17 @@ describe('project store actions', () => {
       const proxyBaseUrl = new URL(comfyProxyUrl('http://127.0.0.1:27707'), window.location.origin).toString()
       expect(fetchMock).toHaveBeenNthCalledWith(
         1,
+        new URL(comfyProxyAuthUrl('http://127.0.0.1:27707'), window.location.origin),
+        {
+          method: 'POST',
+          cache: 'no-store',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        },
+      )
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        2,
         `${proxyBaseUrl}view?filename=reference.png&subfolder=renders&type=output`,
         {
           method: 'GET',
@@ -1135,11 +1147,11 @@ describe('project store actions', () => {
         },
       )
       expect(fetchMock).toHaveBeenNthCalledWith(
-        2,
+        3,
         'https://api.openai.com/v1/images/edits',
         expect.objectContaining({ method: 'POST' }),
       )
-      const body = fetchMock.mock.calls[1]?.[1]?.body as FormData
+      const body = fetchMock.mock.calls[2]?.[1]?.body as FormData
       const image = body.getAll('image')[0] as File
       await expect(image.text()).resolves.toBe('secure-ref')
     } finally {

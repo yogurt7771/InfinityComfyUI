@@ -37,6 +37,33 @@ describe('Electron packaging configuration', () => {
     expect(main).toContain('win.loadURL')
   })
 
+  it('keeps packaged ComfyUI authentication in bounded same-origin sessions instead of browser-visible token URLs', () => {
+    const main = readFileSync(resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
+    const preload = readFileSync(resolve(__dirname, '..', 'electron', 'preload.cjs'), 'utf8')
+
+    expect(main).toContain("'/__comfy_proxy/auth/'")
+    expect(main).toContain("COMFY_PROXY_SESSION_COOKIE_PREFIX = '__infinity_comfy_session_'")
+    expect(main).toMatch(/COMFY_PROXY_SESSION_TTL_MS\s*=\s*8\s*\*\s*60\s*\*\s*60\s*\*\s*1000/)
+    expect(main).toContain('`${COMFY_PROXY_SESSION_COOKIE_PREFIX}${comfyProxyTargetHash(targetBase)}`')
+    expect(main).toContain("'HttpOnly'")
+    expect(main).toContain("'SameSite=Strict'")
+    expect(main).toContain('cookieSession.frameOrigin === actualOrigin')
+    expect(main).toMatch(/searchParams\.delete\(COMFY_PROXY_LEGACY_TOKEN_PARAM\)/)
+    expect(main).toContain('Legacy ComfyUI proxy credentials in URLs are not accepted')
+    expect(main).not.toContain('proxyBearerToken')
+    expect(main).toMatch(/configuredProxyBearerToken\s*\(\s*targetBase\s*\)/)
+    expect(main).toMatch(/COMFY_PROXY_(?:MAX_SESSIONS|SESSION_(?:MAX|LIMIT))/)
+    expect(main).toContain('Cross-origin ComfyUI proxy requests are not allowed')
+    expect(main).toContain('Proxy auth payload is too large')
+    expect(preload).toContain("authorizeComfyProxyTarget: (baseUrl) => ipcRenderer.invoke('infinity-comfy:authorize-target', baseUrl)")
+    expect(main).toContain("ipcMain.handle('infinity-comfy:authorize-target'")
+    expect(main).toContain('event.senderFrame.url')
+    expect(main).toContain('senderOrigin !== new URL(localAppServerUrl).origin')
+    expect(main).toContain('contextIsolation: true')
+    expect(main).toContain('nodeIntegration: false')
+    expect(main).toContain('sandbox: true')
+  })
+
   it('uses the custom generated icon for browser, portable, and installer builds', () => {
     const packageJson = JSON.parse(readFileSync(resolve(__dirname, '..', 'package.json'), 'utf8')) as {
       build?: {

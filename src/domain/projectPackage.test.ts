@@ -135,6 +135,78 @@ describe('project package helpers', () => {
     })
   })
 
+  it('excludes a saved ComfyUI password from config exports by default', () => {
+    const passwordProject = structuredClone(project)
+    passwordProject.comfy.endpoints[0]!.auth = {
+      type: 'password',
+      password: 'fixture-config-password',
+      token: 'fixture-config-fallback-token',
+      exportSecret: false,
+    }
+
+    const exported = createConfigPackage(passwordProject)
+
+    expect(exported.config.comfy.endpoints[0]?.auth).toEqual({
+      type: 'password',
+      exportSecret: false,
+    })
+    expect(JSON.stringify(exported)).not.toContain('fixture-config-password')
+    expect(JSON.stringify(exported)).not.toContain('fixture-config-fallback-token')
+  })
+
+  it('includes a saved ComfyUI password only when secret export is explicitly enabled', () => {
+    const passwordProject = structuredClone(project)
+    passwordProject.comfy.endpoints[0]!.auth = {
+      type: 'password',
+      password: 'fixture-exported-config-password',
+      token: 'fixture-exported-config-fallback-token',
+      exportSecret: true,
+    }
+
+    expect(createConfigPackage(passwordProject).config.comfy.endpoints[0]?.auth).toEqual({
+      type: 'password',
+      password: 'fixture-exported-config-password',
+      token: 'fixture-exported-config-fallback-token',
+      exportSecret: true,
+    })
+  })
+
+  it('excludes ComfyUI password and fallback token from full project exports by default', () => {
+    const passwordProject = structuredClone(project)
+    passwordProject.comfy.endpoints[0]!.auth = {
+      type: 'password',
+      password: 'fixture-full-project-password',
+      token: 'fixture-full-project-fallback-token',
+      exportSecret: false,
+    }
+
+    const exported = createProjectPackage(passwordProject)
+
+    expect(exported.project.comfy.endpoints[0]?.auth).toEqual({
+      type: 'password',
+      exportSecret: false,
+    })
+    expect(JSON.stringify(exported)).not.toContain('fixture-full-project-password')
+    expect(JSON.stringify(exported)).not.toContain('fixture-full-project-fallback-token')
+  })
+
+  it('includes ComfyUI password and fallback token in full project exports only when explicitly enabled', () => {
+    const passwordProject = structuredClone(project)
+    passwordProject.comfy.endpoints[0]!.auth = {
+      type: 'password',
+      password: 'fixture-exported-full-project-password',
+      token: 'fixture-exported-full-project-fallback-token',
+      exportSecret: true,
+    }
+
+    expect(createProjectPackage(passwordProject).project.comfy.endpoints[0]?.auth).toEqual({
+      type: 'password',
+      password: 'fixture-exported-full-project-password',
+      token: 'fixture-exported-full-project-fallback-token',
+      exportSecret: true,
+    })
+  })
+
   it('excludes built-in function definitions from project and config exports', () => {
     const builtInFunction = createOpenAIImageFunction('2026-05-09T00:00:00.000Z')
     const projectWithBuiltIn: ProjectState = {

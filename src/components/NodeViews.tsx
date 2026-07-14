@@ -60,6 +60,7 @@ import type {
 import { ResourcePreview } from './ResourcePreview'
 import { FullResourcePreviewModal, sameTypePreviewResources } from './ResourcePreviewModal'
 import { ModalFrame } from './ModalFrame'
+import { ConfirmationDialog } from './ConfirmationDialog'
 
 type WorkbenchNodeData = {
   resourceId?: string
@@ -2469,6 +2470,7 @@ export const FunctionNodeView = memo(({ id, data, selected }: NodeProps) => {
 export const ResultGroupNodeView = memo(({ id, data, selected }: NodeProps) => {
   const nodeData = data as WorkbenchNodeData
   const [previewResource, setPreviewResource] = useState<Resource | undefined>()
+  const [rerunConfirmationOpen, setRerunConfirmationOpen] = useState(false)
   const resources = (nodeData.resources ?? [])
     .map((ref) => nodeData.resourcesById[ref.resourceId])
     .filter(Boolean)
@@ -2481,9 +2483,14 @@ export const ResultGroupNodeView = memo(({ id, data, selected }: NodeProps) => {
   const task = nodeData.taskId ? nodeData.tasksById?.[nodeData.taskId] : undefined
   const errorMessage = nodeData.error?.message ?? task?.error?.message
   const handleRerun = () => {
-    if (status === 'succeeded' && !globalThis.confirm('This run already succeeded. Rerun and overwrite its outputs?')) {
+    if (status === 'succeeded') {
+      setRerunConfirmationOpen(true)
       return
     }
+    nodeData.onRerunResultNode(id)
+  }
+  const confirmRerun = () => {
+    setRerunConfirmationOpen(false)
     nodeData.onRerunResultNode(id)
   }
   const runControl = isActive ? (
@@ -2607,6 +2614,20 @@ export const ResultGroupNodeView = memo(({ id, data, selected }: NodeProps) => {
         }
         onClose={() => setPreviewResource(undefined)}
       />
+      {rerunConfirmationOpen ? (
+        <ConfirmationDialog
+          label="Rerun succeeded result confirmation"
+          title="Rerun and overwrite outputs?"
+          message={
+            <>
+              <strong>{title}</strong> already succeeded. Rerunning it will replace its current outputs with the new result.
+            </>
+          }
+          confirmLabel="Rerun and overwrite"
+          onCancel={() => setRerunConfirmationOpen(false)}
+          onConfirm={confirmRerun}
+        />
+      ) : null}
     </div>
   )
 })
