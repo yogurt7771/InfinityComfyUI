@@ -24,7 +24,7 @@ const PREVIEW_MIN_SIZE_BY_TYPE: Record<ResourceType, { width: number; height: nu
   image: { width: 260, height: 154 },
   video: { width: 260, height: 154 },
   audio: { width: 260, height: 44 },
-  text: { width: 230, height: 92 },
+  text: { width: 230, height: 164 },
   number: { width: 200, height: 42 },
   boolean: { width: 200, height: 42 },
 }

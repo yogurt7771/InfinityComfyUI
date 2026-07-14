@@ -3283,15 +3283,27 @@ function CanvasSurface() {
     if (!menu) return
 
     const margin = 8
-    const rect = menu.getBoundingClientRect()
     const maxHeight = Math.max(120, window.innerHeight - margin * 2)
-    const left = Math.min(Math.max(addMenu.screen.x, margin), Math.max(margin, window.innerWidth - rect.width - margin))
-    const top = Math.min(Math.max(addMenu.screen.y, margin), Math.max(margin, window.innerHeight - rect.height - margin))
+    const initialRect = menu.getBoundingClientRect()
+    menu.style.maxHeight = initialRect.height > maxHeight ? `${maxHeight}px` : ''
 
-    menu.style.left = `${left}px`
-    menu.style.top = `${top}px`
-    menu.style.maxHeight = rect.height > maxHeight ? `${maxHeight}px` : ''
+    // The menu has a fixed responsive outer width, so applying max-height only
+    // changes its internal scrolling area and cannot push an edge off-screen.
+    const clampMenuToViewport = () => {
+      const rect = menu.getBoundingClientRect()
+      const maxLeft = Math.max(margin, Math.floor(window.innerWidth - rect.width - margin))
+      const maxTop = Math.max(margin, Math.floor(window.innerHeight - rect.height - margin))
+      const left = Math.min(Math.max(addMenu.screen.x, margin), maxLeft)
+      const top = Math.min(Math.max(addMenu.screen.y, margin), maxTop)
+
+      menu.style.left = `${left}px`
+      menu.style.top = `${top}px`
+    }
+
+    clampMenuToViewport()
+    const frame = window.requestAnimationFrame(clampMenuToViewport)
     addMenuSearchRef.current?.focus()
+    return () => window.cancelAnimationFrame(frame)
   }, [
     addMenu,
     filteredAddMenuAssets.length,

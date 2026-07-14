@@ -1451,7 +1451,7 @@ div.server-list-item {
   padding: 8px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: #eef5f7;
+  background: var(--panel-soft);
 }
 
 .dock-management-item {
@@ -1599,7 +1599,7 @@ div.server-list-item {
   align-items: center;
   border: 1px solid rgba(148, 163, 184, 0.26);
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.72);
+  background: var(--panel);
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
 }
 
@@ -1631,7 +1631,7 @@ div.server-list-item {
 .history-command-main small span {
   padding: 1px 7px;
   border-radius: 999px;
-  color: var(--teal-dark);
+  color: var(--teal);
   background: rgba(94, 234, 212, 0.16);
 }
 
@@ -2380,7 +2380,9 @@ textarea[aria-invalid="true"] {
   position: fixed;
   z-index: 20;
   display: grid;
-  min-width: 170px;
+  box-sizing: border-box;
+  width: min(320px, calc(100vw - 16px));
+  min-width: 0;
   gap: 6px;
   padding: 8px;
   border: 1px solid var(--line-strong);
@@ -4512,8 +4514,8 @@ textarea[aria-invalid="true"] {
 }
 
 .text-source-input:focus {
-  border-color: var(--accent);
-  outline: 2px solid color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: var(--teal);
+  outline: 2px solid color-mix(in srgb, var(--teal) 20%, transparent);
 }
 
 .text-source-input::selection {
@@ -6864,6 +6866,21 @@ body[data-theme='light'] select {
   color: #101828;
   background: rgba(255, 255, 255, 0.96);
   caret-color: #0f766e;
+}
+
+:is(body[data-theme='light'], .app-shell[data-theme='light']) .text-source-input,
+body[data-theme='light'] .text-source-input {
+  border-color: transparent;
+  color: transparent;
+  background: transparent;
+  caret-color: var(--ink);
+  -webkit-text-fill-color: transparent;
+}
+
+:is(body[data-theme='light'], .app-shell[data-theme='light']) .text-source-input:focus,
+body[data-theme='light'] .text-source-input:focus {
+  border-color: var(--teal);
+  outline: 2px solid color-mix(in srgb, var(--teal) 20%, transparent);
 }
 
 :is(body[data-theme='light'], .app-shell[data-theme='light']) input::placeholder,

@@ -939,17 +939,14 @@ function highlightedTextSource(value: string, mode: Exclude<TextDisplayMode, 're
 }
 
 function TextSourceEditor({
+  draft,
   mode,
   title,
-  value,
-  onCommit,
 }: {
+  draft: ReturnType<typeof useCommittedTextDraft>
   mode: Exclude<TextDisplayMode, 'render markdown' | 'render html'>
   title: string
-  value: string
-  onCommit: (value: string) => void
 }) {
-  const draft = useCommittedTextDraft(value, onCommit)
   const editorId = useId()
   const highlightRef = useRef<HTMLPreElement | null>(null)
 
@@ -1008,9 +1005,10 @@ function TextResourceEditor({
   const value = String(resource.value ?? '')
   const renderedLanguage = mode === 'render markdown' ? 'markdown' : mode === 'render html' ? 'html' : undefined
   const sourceMode = mode === 'render markdown' || mode === 'render html' ? undefined : mode
+  const draft = useCommittedTextDraft(value, (nextValue) => onUpdateValue(resource.id, nextValue))
 
   return (
-    <>
+    <div className="text-resource-editor nodrag nopan">
       <label
         className="text-display-mode-control nodrag nopan"
         onClick={(event) => event.stopPropagation()}
@@ -1020,7 +1018,10 @@ function TextResourceEditor({
         <select
           aria-label={`${title} display mode`}
           value={mode}
-          onChange={(event) => onUpdateDisplayMode(resource.id, event.target.value as TextDisplayMode)}
+          onChange={(event) => {
+            if (sourceMode) draft.commit(draft.value)
+            onUpdateDisplayMode(resource.id, event.target.value as TextDisplayMode)
+          }}
           onDoubleClick={(event) => event.stopPropagation()}
         >
           {textDisplayModes.map((displayMode) => (
@@ -1032,10 +1033,9 @@ function TextResourceEditor({
       </label>
       {sourceMode ? (
         <TextSourceEditor
+          draft={draft}
           mode={sourceMode}
           title={title}
-          value={value}
-          onCommit={(nextValue) => onUpdateValue(resource.id, nextValue)}
         />
       ) : renderedLanguage ? (
         <>
@@ -1062,7 +1062,7 @@ function TextResourceEditor({
       ) : (
         <p className="resource-preview-text">Unsupported display mode</p>
       )}
-    </>
+    </div>
   )
 }
 

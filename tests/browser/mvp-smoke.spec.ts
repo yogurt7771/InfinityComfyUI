@@ -43,9 +43,8 @@ async function openFunctionManagement(page: Page) {
 }
 
 async function openComfyServerManagement(page: Page) {
-  await openSettings(page)
-  await page.getByRole('button', { name: 'ComfyUI Server Management' }).click()
-  return page.getByRole('dialog', { name: 'ComfyUI Server Management' })
+  await page.getByRole('button', { name: 'ComfyUI Servers' }).click()
+  return page.getByRole('region', { name: 'ComfyUI Servers popover' })
 }
 
 async function closeSettings(page: Page) {
@@ -89,7 +88,7 @@ async function addTextAssetFromCanvas(
   const canvas = page.locator('.workspace-canvas')
   await canvas.dblclick({ position: { x: 180, y: 420 } })
   await page.getByRole('menuitem', { name: 'Text Asset' }).click()
-  await page.getByLabel('Prompt text').fill(text)
+  await page.getByRole('textbox', { name: 'Prompt source' }).fill(text)
 }
 
 async function addTextAssetFromCanvasAt(
@@ -100,7 +99,7 @@ async function addTextAssetFromCanvasAt(
   const canvas = page.locator('.workspace-canvas')
   await canvas.dblclick({ position })
   await page.getByRole('menuitem', { name: 'Text Asset' }).click()
-  await page.getByLabel('Prompt text').last().fill(text)
+  await page.getByRole('textbox', { name: 'Prompt source' }).last().fill(text)
 }
 
 async function addSelectableResourceNodes(page: Page) {
@@ -833,42 +832,70 @@ test.skip('opens the add-node menu from handle clicks and places connected nodes
   await expect(page.locator('.react-flow__edge.input-edge')).toHaveCount(1)
 })
 
-test('keeps the add-node menu inside the viewport near canvas edges', async ({ page }) => {
-  await page.goto('/')
+for (const viewportCase of [
+  { name: 'desktop', viewport: { width: 2048, height: 1024 }, requiresInternalScroll: false },
+  { name: 'narrow', viewport: { width: 320, height: 720 }, requiresInternalScroll: false },
+  { name: 'short', viewport: { width: 900, height: 320 }, requiresInternalScroll: true },
+]) {
+  test(`keeps the add-node menu inside the viewport near canvas edges (${viewportCase.name})`, async ({ page }) => {
+    await page.setViewportSize(viewportCase.viewport)
+    await page.goto('/')
 
-  const canvas = page.locator('.workspace-canvas')
-  const canvasBox = await canvas.boundingBox()
-  if (!canvasBox) throw new Error('canvas not found')
+    const canvas = page.locator('.workspace-canvas')
+    const canvasBox = await canvas.boundingBox()
+    if (!canvasBox) throw new Error('canvas not found')
 
-  await canvas.dblclick({
-    position: {
-      x: Math.max(10, canvasBox.width - 12),
-      y: Math.max(10, canvasBox.height - 12),
-    },
-  })
+    await canvas.dblclick({
+      position: {
+        x: Math.max(10, canvasBox.width - 12),
+        y: Math.max(10, canvasBox.height - 12),
+      },
+    })
 
-  const menu = page.getByRole('menu', { name: 'Add node' })
-  await expect(menu).toBeVisible()
-
-  await expect
-    .poll(async () =>
-      menu.evaluate((element) => {
-        const rect = element.getBoundingClientRect()
-        return {
-          bottomInside: rect.bottom <= window.innerHeight - 8,
-          leftInside: rect.left >= 8,
-          rightInside: rect.right <= window.innerWidth - 8,
-          topInside: rect.top >= 8,
-        }
-      }),
+    const menu = page.getByRole('menu', { name: 'Add node' })
+    await expect(menu).toBeVisible()
+    await menu.evaluate(
+      () => new Promise<void>((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(() => resolveFrame()))),
     )
-    .toEqual({
+
+    const bounds = await menu.evaluate((element) => {
+      const rect = element.getBoundingClientRect()
+      return {
+        bottomInside: rect.bottom <= window.innerHeight - 8,
+        leftInside: rect.left >= 8,
+        rightInside: rect.right <= window.innerWidth - 8,
+        topInside: rect.top >= 8,
+      }
+    })
+    expect.soft(bounds).toEqual({
       bottomInside: true,
       leftInside: true,
       rightInside: true,
       topInside: true,
     })
-})
+
+    if (viewportCase.requiresInternalScroll) {
+      const scrollMetrics = await menu.evaluate((element) => ({
+        clientWidth: element.clientWidth,
+        clientHeight: element.clientHeight,
+        overflowY: getComputedStyle(element).overflowY,
+        scrollHeight: element.scrollHeight,
+      }))
+      expect.soft(scrollMetrics.scrollHeight).toBeGreaterThan(scrollMetrics.clientHeight)
+      expect.soft(['auto', 'scroll']).toContain(scrollMetrics.overflowY)
+
+      await menu.hover({
+        position: {
+          x: Math.min(24, scrollMetrics.clientWidth / 2),
+          y: Math.max(1, scrollMetrics.clientHeight - 16),
+        },
+      })
+      await page.mouse.wheel(0, 1200)
+      await page.waitForTimeout(100)
+      expect.soft(await menu.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
+    }
+  })
+}
 
 test.skip('filters the add-node menu with a focused keyword search', async ({ page }) => {
   await page.goto('/')
@@ -897,7 +924,7 @@ test.skip('creates asset nodes from canvas menu and blank-canvas drops', async (
   await expect(page.getByRole('menuitem', { name: 'Text Asset' })).toBeVisible()
   await expect(page.getByRole('menuitem', { name: 'Number Asset' })).toBeVisible()
   await page.getByRole('menuitem', { name: 'Text Asset' }).click()
-  await expect(canvas.getByLabel('Prompt text')).toHaveValue('')
+  await expect(canvas.getByRole('textbox', { name: 'Prompt source' })).toHaveValue('')
 
   await canvas.dblclick({ position: { x: 760, y: 380 } })
   await page.getByRole('menuitem', { name: 'Number Asset' }).click()
@@ -965,7 +992,7 @@ test.skip('edits optional primitive inputs inline and lets connections override 
   await page.mouse.up()
   await expect(page.getByRole('menu', { name: 'Add node' })).toBeVisible()
   await page.getByRole('menuitem', { name: 'Text Asset' }).click()
-  await expect(canvas.getByLabel('Prompt text').last()).toHaveValue('avoid blur')
+  await expect(canvas.getByRole('textbox', { name: 'Prompt source' }).last()).toHaveValue('avoid blur')
   await expect(functionNode.locator('[data-testid="function-input-slot-negative_prompt"]')).toContainText('avoid blur')
   await selectFirstInputEdge(page)
   await page.keyboard.press('Delete')
@@ -973,7 +1000,7 @@ test.skip('edits optional primitive inputs inline and lets connections override 
 
   await canvas.dblclick({ position: { x: 180, y: 520 } })
   await page.getByRole('menuitem', { name: 'Text Asset' }).click()
-  await canvas.getByLabel('Prompt text').last().fill('connected negative prompt')
+  await canvas.getByRole('textbox', { name: 'Prompt source' }).last().fill('connected negative prompt')
 
   const sourceHandle = page.locator('.react-flow__node-resource .react-flow__handle-right').last()
   const targetHandle = functionNode.locator('[data-slot-handle="input:negative_prompt"]')
@@ -1010,7 +1037,7 @@ test.skip('keeps manual resource-to-function connections visible after mouse up'
   const canvas = page.locator('.workspace-canvas')
   await canvas.dblclick({ position: { x: 180, y: 500 } })
   await page.getByRole('menuitem', { name: 'Text Asset' }).click()
-  const promptInput = page.getByLabel('Prompt text')
+  const promptInput = page.getByRole('textbox', { name: 'Prompt source' })
   await promptInput.fill('中文，标点。！？manual connection prompt')
   await expect(promptInput).toHaveValue('中文，标点。！？manual connection prompt')
   await expect(page.locator('.react-flow__edge.input-edge')).toHaveCount(0)
@@ -1082,7 +1109,7 @@ test('pastes clipboard text as an asset and copies selected nodes without edges'
   const canvas = page.locator('.workspace-canvas')
   await canvas.click({ position: { x: 760, y: 360 } })
   await page.keyboard.press(browserName === 'webkit' ? 'Meta+V' : 'Control+V')
-  await expect(canvas.getByLabel('Prompt text')).toHaveValue('Clipboard prompt text')
+  await expect(canvas.getByRole('textbox', { name: 'Prompt source' })).toHaveValue('Clipboard prompt text')
 
   await page.locator('.react-flow__node-resource').first().click({ position: { x: 18, y: 18 } })
   await page.keyboard.press(browserName === 'webkit' ? 'Meta+C' : 'Control+C')
@@ -1306,7 +1333,7 @@ test.skip('creates a compatible function from a dangling image connection and bi
   const canvas = page.locator('.workspace-canvas')
   await canvas.dblclick({ position: { x: 120, y: 160 } })
   await page.getByRole('menuitem', { name: 'Text Asset' }).click()
-  await page.getByLabel('Prompt text').fill('existing prompt should stay unconnected')
+  await page.getByRole('textbox', { name: 'Prompt source' }).fill('existing prompt should stay unconnected')
 
   await canvas.dblclick({ position: { x: 220, y: 320 } })
   await page.getByRole('menuitem', { name: 'Image Asset' }).click()
@@ -1336,21 +1363,32 @@ test.skip('creates a compatible function from a dangling image connection and bi
   await expect(page.locator('.react-flow__edge.input-edge').getByText('prompt', { exact: true })).toHaveCount(0)
 })
 
-test('tests the current endpoint input value after a fast edit', async ({ page }) => {
+test('requires saving an endpoint URL before testing the persisted value', async ({ page }) => {
   await page.addInitScript(() => {
+    type EndpointFetchAudit = {
+      __expectedEndpointTestUrl?: string
+      __testedEndpointUrls: string[]
+      __unexpectedEndpointUrls: string[]
+    }
     const originalFetch = window.fetch.bind(window)
-    ;(window as unknown as { __testedEndpointUrls: string[] }).__testedEndpointUrls = []
+    const audit = window as unknown as EndpointFetchAudit
+    audit.__testedEndpointUrls = []
+    audit.__unexpectedEndpointUrls = []
     window.fetch = async (...args) => {
-      const url = String(args[0])
-      if (url.endsWith('/system_stats')) {
-        ;(window as unknown as { __testedEndpointUrls: string[] }).__testedEndpointUrls.push(url)
-        if (url === 'http://127.0.0.1:27707/system_stats') {
-          return new Response(JSON.stringify({ system: { comfyui_version: 'test' }, devices: [] }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          })
+      const input = args[0]
+      const rawUrl = input instanceof Request ? input.url : String(input)
+      const url = new URL(rawUrl, window.location.href)
+      if (url.pathname.endsWith('/system_stats')) {
+        const absoluteUrl = url.href
+        audit.__testedEndpointUrls.push(absoluteUrl)
+        if (absoluteUrl !== audit.__expectedEndpointTestUrl) {
+          audit.__unexpectedEndpointUrls.push(absoluteUrl)
+          throw new TypeError(`Unexpected endpoint test URL: ${absoluteUrl}`)
         }
-        throw new TypeError(`Unexpected endpoint URL: ${url}`)
+        return new Response(JSON.stringify({ system: { comfyui_version: 'test' }, devices: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
       }
 
       return originalFetch(...args)
@@ -1359,18 +1397,59 @@ test('tests the current endpoint input value after a fast edit', async ({ page }
 
   await page.goto('/')
   await expect(page.getByRole('heading', { name: 'Infinity ComfyUI' })).toBeVisible()
-  const dialog = await openComfyServerManagement(page)
-  await dialog.getByLabel('Endpoint URL Local ComfyUI').fill('http://127.0.0.1:27707')
-  await dialog.locator('.endpoint-manager-row').getByRole('button', { name: 'Test' }).click()
+  const servers = await openComfyServerManagement(page)
+  await servers.getByRole('button', { name: 'Edit server Local ComfyUI' }).click()
+  let dialog = page.getByRole('dialog', { name: 'Edit ComfyUI Server' })
+  const endpointUrl = dialog.getByLabel('Endpoint URL')
+  const initialUrl = await endpointUrl.inputValue()
+  const savedUrl = initialUrl === 'http://127.0.0.1:27707'
+    ? 'http://127.0.0.1:27708'
+    : 'http://127.0.0.1:27707'
+  const expectedProxyUrl = await page.evaluate(
+    (targetBase) => new URL(`/__comfy_proxy/${encodeURIComponent(targetBase)}/system_stats`, window.location.origin).href,
+    savedUrl,
+  )
+
+  await page.evaluate((expectedUrl) => {
+    const audit = window as unknown as {
+      __expectedEndpointTestUrl: string
+      __testedEndpointUrls: string[]
+      __unexpectedEndpointUrls: string[]
+    }
+    audit.__expectedEndpointTestUrl = expectedUrl
+    audit.__testedEndpointUrls = []
+    audit.__unexpectedEndpointUrls = []
+  }, expectedProxyUrl)
+  await endpointUrl.fill(savedUrl)
+  await expect(dialog.getByRole('button', { name: 'Test', exact: true })).toBeDisabled()
+  await expect(dialog.getByText('Save before testing', { exact: true })).toBeVisible()
+  expect(
+    await page.evaluate(() => {
+      const audit = window as unknown as { __testedEndpointUrls: string[]; __unexpectedEndpointUrls: string[] }
+      return { tested: audit.__testedEndpointUrls, unexpected: audit.__unexpectedEndpointUrls }
+    }),
+  ).toEqual({ tested: [], unexpected: [] })
+
+  await dialog.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+
+  await servers.getByRole('button', { name: 'Edit server Local ComfyUI' }).click()
+  dialog = page.getByRole('dialog', { name: 'Edit ComfyUI Server' })
+  await expect(dialog.getByLabel('Endpoint URL')).toHaveValue(savedUrl)
+  const testButton = dialog.getByRole('button', { name: 'Test', exact: true })
+  await expect(testButton).toBeEnabled()
+  await expect(dialog.getByText('Save before testing', { exact: true })).toHaveCount(0)
+  await testButton.click()
 
   await expect
-    .poll(async () =>
-      page.evaluate(() => (window as unknown as { __testedEndpointUrls: string[] }).__testedEndpointUrls.join('\n')),
-    )
-    .toContain('http://127.0.0.1:27707/system_stats')
+    .poll(async () => page.evaluate(() => (window as unknown as { __testedEndpointUrls: string[] }).__testedEndpointUrls))
+    .toEqual([expectedProxyUrl])
+  expect(
+    await page.evaluate(() => (window as unknown as { __unexpectedEndpointUrls: string[] }).__unexpectedEndpointUrls),
+  ).toEqual([])
   await expect
     .poll(async () =>
-      dialog.locator('.endpoint-manager-row .status-dot').evaluate((element) => element.className),
+      dialog.locator('.endpoint-actions .status-dot').evaluate((element) => element.className),
     )
     .toContain('online')
 })
