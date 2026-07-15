@@ -19,7 +19,24 @@ export type ComfyFrameExport = {
 
 export class ComfyFrameLoginRequiredError extends Error {}
 
-const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
+const abortError = () => new DOMException('ComfyUI editor request was cancelled', 'AbortError')
+
+const wait = (ms: number, signal?: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(abortError())
+      return
+    }
+    const timer = window.setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    const onAbort = () => {
+      window.clearTimeout(timer)
+      reject(abortError())
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
 
 export function requestComfyFrame<T>(
   frame: HTMLIFrameElement,
@@ -27,8 +44,13 @@ export function requestComfyFrame<T>(
   command: string,
   payload?: unknown,
   timeoutMs = 1500,
+  signal?: AbortSignal,
 ) {
   return new Promise<T>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(abortError())
+      return
+    }
     const frameWindow = frame.contentWindow
     if (!frameWindow) {
       reject(new Error('ComfyUI editor frame is unavailable'))
@@ -37,9 +59,18 @@ export function requestComfyFrame<T>(
 
     const requestId = crypto.randomUUID()
     const timer = window.setTimeout(() => {
-      window.removeEventListener('message', onMessage)
+      cleanup()
       reject(new Error('ComfyUI editor bridge timed out'))
     }, timeoutMs)
+    const cleanup = () => {
+      window.clearTimeout(timer)
+      window.removeEventListener('message', onMessage)
+      signal?.removeEventListener('abort', onAbort)
+    }
+    const onAbort = () => {
+      cleanup()
+      reject(abortError())
+    }
     const onMessage = (event: MessageEvent<BridgeResponse<T>>) => {
       const message = event.data
       if (
@@ -51,12 +82,12 @@ export function requestComfyFrame<T>(
       ) {
         return
       }
-      window.clearTimeout(timer)
-      window.removeEventListener('message', onMessage)
+      cleanup()
       if (message.error) reject(new Error(message.error))
       else resolve(message.payload as T)
     }
     window.addEventListener('message', onMessage)
+    signal?.addEventListener('abort', onAbort, { once: true })
     frameWindow.postMessage(
       { channel: COMFY_FRAME_BRIDGE_CHANNEL, type: 'request', id: requestId, command, payload },
       frameOrigin,
@@ -64,18 +95,25 @@ export function requestComfyFrame<T>(
   })
 }
 
-export async function waitForComfyFrameBridge(frame: HTMLIFrameElement, frameOrigin: string) {
+export async function waitForComfyFrameBridge(
+  frame: HTMLIFrameElement,
+  frameOrigin: string,
+  signal?: AbortSignal,
+) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
+    if (signal?.aborted) throw abortError()
     try {
-      const result = await requestComfyFrame<BridgePing>(frame, frameOrigin, 'ping', undefined, 350)
+      const result = await requestComfyFrame<BridgePing>(frame, frameOrigin, 'ping', undefined, 350, signal)
       if (result.loginRequired || result.pathname?.includes('/login')) {
         throw new ComfyFrameLoginRequiredError('ComfyUI login page opened')
       }
       if (result.ready) return
     } catch (error) {
       if (error instanceof ComfyFrameLoginRequiredError) throw error
+      if (signal?.aborted) throw error
+      if (error instanceof Error && error.message.includes('authorization was not approved')) throw error
     }
-    await wait(150)
+    await wait(150, signal)
   }
   throw new Error('ComfyUI editor is not ready yet')
 }

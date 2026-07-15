@@ -7,7 +7,7 @@ describe('desktop project persistence', () => {
     Reflect.deleteProperty(window, 'infinityComfyUIStorage')
   })
 
-  it('loads through the Electron bridge and saves the active project library after 5 idle seconds', async () => {
+  it('writes a normalized snapshot after loading and saves later edits after 5 idle seconds', async () => {
     vi.useFakeTimers()
     const loadProjectLibrary = vi.fn().mockResolvedValue(undefined)
     const saveProjectLibrary = vi.fn().mockResolvedValue({ ok: true, rootPath: 'C:/Infinity/projects' })
@@ -25,14 +25,16 @@ describe('desktop project persistence', () => {
     await Promise.resolve()
 
     expect(loadProjectLibrary).toHaveBeenCalledTimes(1)
+    expect(saveProjectLibrary).toHaveBeenCalledTimes(1)
 
     projectStore.getState().updateProjectMetadata({ name: 'Desktop Saved Project' })
     await vi.advanceTimersByTimeAsync(4999)
 
-    expect(saveProjectLibrary).not.toHaveBeenCalled()
+    expect(saveProjectLibrary).toHaveBeenCalledTimes(1)
 
     await vi.advanceTimersByTimeAsync(1)
 
+    expect(saveProjectLibrary).toHaveBeenCalledTimes(2)
     const savedLibrary = saveProjectLibrary.mock.calls.at(-1)?.[0]
     expect(savedLibrary).toMatchObject({
       currentProjectId: projectStore.getState().project.project.id,
@@ -40,7 +42,7 @@ describe('desktop project persistence', () => {
     expect(savedLibrary.projects[savedLibrary.currentProjectId].project.name).toBe('Desktop Saved Project')
   })
 
-  it('does not overwrite a saved desktop library while startup loading is still pending', async () => {
+  it('does not write while desktop loading is pending or after it returns an invalid library', async () => {
     vi.useFakeTimers()
     let resolveLoad: (value: unknown) => void = () => undefined
     const loadProjectLibrary = vi.fn(
@@ -62,33 +64,25 @@ describe('desktop project persistence', () => {
     const { projectStore } = await import('./projectStore')
     await Promise.resolve()
 
-    const savedProject = structuredClone(projectStore.getState().project)
-    savedProject.project.id = 'saved_project'
-    savedProject.project.name = 'Saved Desktop Project'
-
     projectStore.getState().updateProjectMetadata({ name: 'Unsaved Startup Default' })
     await vi.advanceTimersByTimeAsync(5000)
 
     expect(saveProjectLibrary).not.toHaveBeenCalled()
 
     resolveLoad({
-      currentProjectId: savedProject.project.id,
-      projects: {
-        [savedProject.project.id]: savedProject,
-      },
+      currentProjectId: 'missing_project',
+      projects: 'invalid library payload',
     })
     await Promise.resolve()
     await Promise.resolve()
     await vi.advanceTimersByTimeAsync(5000)
 
-    expect(projectStore.getState().project.project.id).toBe(savedProject.project.id)
-    expect(projectStore.getState().project.project.name).toBe('Saved Desktop Project')
-    expect(projectStore.getState().projectLibrary[savedProject.project.id].project.name).toBe('Saved Desktop Project')
-    expect(projectStore.getState().projectLibrary.project_local).toBeUndefined()
+    expect(projectStore.getState().project.project.id).toBe('project_local')
+    expect(projectStore.getState().project.project.name).toBe('Unsaved Startup Default')
     expect(saveProjectLibrary).not.toHaveBeenCalled()
   })
 
-  it('does not save after loading an existing library until the project is edited', async () => {
+  it('saves one normalized snapshot after loading and waits for edits before saving again', async () => {
     vi.useFakeTimers()
     const savedProject = {
       schemaVersion: '1.0.0',
@@ -141,17 +135,17 @@ describe('desktop project persistence', () => {
     await Promise.resolve()
     await vi.advanceTimersByTimeAsync(5000)
 
-    expect(saveProjectLibrary).not.toHaveBeenCalled()
+    expect(saveProjectLibrary).toHaveBeenCalledTimes(1)
 
     projectStore.getState().markEndpoint('endpoint_local', 'online')
     await vi.advanceTimersByTimeAsync(5000)
 
-    expect(saveProjectLibrary).not.toHaveBeenCalled()
+    expect(saveProjectLibrary).toHaveBeenCalledTimes(1)
 
     projectStore.getState().updateProjectMetadata({ name: 'Edited Project' })
     await vi.advanceTimersByTimeAsync(5000)
 
-    expect(saveProjectLibrary).toHaveBeenCalledTimes(1)
+    expect(saveProjectLibrary).toHaveBeenCalledTimes(2)
     const savedLibrary = saveProjectLibrary.mock.calls.at(-1)?.[0]
     expect(savedLibrary.projects[savedLibrary.currentProjectId].project.name).toBe('Edited Project')
   })
@@ -178,7 +172,7 @@ describe('desktop project persistence', () => {
 
     await vi.advanceTimersByTimeAsync(5000)
 
-    expect(saveProjectLibrary).toHaveBeenCalledTimes(1)
+    expect(saveProjectLibrary).toHaveBeenCalledTimes(2)
     const savedLibrary = saveProjectLibrary.mock.calls.at(-1)?.[0]
     const savedProject = savedLibrary.projects[savedLibrary.currentProjectId]
     const savedResources = savedProject.resources as Record<string, { value: unknown }>
@@ -264,7 +258,7 @@ describe('desktop project persistence', () => {
     projectStore.getState().updateProjectMetadata({ name: 'Must Survive Refresh' })
     await vi.advanceTimersByTimeAsync(5000)
 
-    expect(saveProjectLibrary).toHaveBeenCalledTimes(1)
+    expect(saveProjectLibrary).toHaveBeenCalledTimes(2)
 
     await vi.advanceTimersByTimeAsync(5000)
 

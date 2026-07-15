@@ -65,7 +65,7 @@ docker compose up -d --build
 http://127.0.0.1:7930
 ```
 
-如果 ComfyUI 跑在宿主机本地，容器内的嵌入式 ComfyUI 代理会默认把 `127.0.0.1` / `localhost` 转到 `host.docker.internal`。在不支持该主机名的 Linux Docker 环境里，请保留 `docker-compose.yml` 里的 `extra_hosts`，或手动添加 `--add-host host.docker.internal:host-gateway`。
+Infinity 的 ComfyUI API、媒体和 WebSocket 请求全部由用户浏览器直接发往配置的服务器，不经过 Infinity 容器。使用 Docker 时，`127.0.0.1` 指用户浏览器所在机器，而不是 Infinity 容器。
 
 ### 发布目录
 
@@ -120,7 +120,8 @@ npm run package:win    # 打包 Windows exe
 点击右上角 `Settings`，进入 `ComfyUI Server Management`：
 
 - 新增服务器：填写名称、URL，例如 `http://127.0.0.1:8188`。
-- 自定义 Headers：用于鉴权或代理网关，例如 `Authorization`。
+- API token：由浏览器直接用于 API、媒体和工作流任务；它与 ComfyUI 页面登录密码相互独立。
+- 自定义 Headers：用于鉴权或网关，例如 `Authorization`。
 - 启用/禁用服务器：禁用后不会参与任务调度。
 - 测试连接：确认 `/queue`、`/prompt`、`/history/{prompt_id}` 等接口可访问。
 - 状态刷新：程序会每 5 秒检查一次服务器状态和队列数量。
@@ -146,10 +147,20 @@ npm run package:win    # 打包 Windows exe
 
 嵌入式 ComfyUI 编辑器说明：
 
+- iframe 页面登录完全由用户在 ComfyUI 内手动完成；Infinity 不再收集、不代填、也不提交页面密码。
 - 打开已有 UI 工作流时会走 ComfyUI 的 File Open 逻辑，保留节点和连线。
 - 保存时会触发 ComfyUI 的导出逻辑，分别得到 UI 工作流和 `Export (API)` 等价的调用工作流。
 - 如果导入的是非 API 工作流，可以先用嵌入式 ComfyUI 打开，再保存为可运行的 API 工作流。
 - 如果导入的是 API JSON，仍可作为调用工作流保存，但 UI 编辑能力取决于 ComfyUI 是否能恢复对应图。
+
+自动载入和保存工作流需要在 ComfyUI 端安装仓库内的纯前端桥扩展。扩展不新增节点、后端路由或 Python 依赖：
+
+```powershell
+# 目录名是桥接静态资源 URL 的一部分，必须固定为 infinity_comfy_bridge
+Copy-Item -Recurse .\comfyui_bridge <ComfyUI>\custom_nodes\infinity_comfy_bridge
+```
+
+安装或更新后重启 ComfyUI 并刷新页面。远端跨站嵌入时，iframe 会先显示一次浏览器存储授权页；用户点击继续后，仍由用户在 ComfyUI 页面内手动输入页面密码。首次连接工作流桥时，ComfyUI 会要求确认 Infinity 页面的来源，授权记录仅保存在 ComfyUI 自己的浏览器存储中。ComfyUI 还必须允许被 Infinity 的来源嵌入；若使用反向代理，请同时允许该来源的 CORS 和 iframe。
 
 输入绑定说明：
 
@@ -386,7 +397,7 @@ npm run package:win
 
 ### 浏览器版本访问本地 ComfyUI 失败
 
-浏览器直接请求 ComfyUI 时可能受到 CORS 或网络策略影响。可以优先使用桌面版，或在 ComfyUI/代理层允许来自本地前端地址的请求。
+浏览器直连 ComfyUI 时会受 CORS、HTTPS mixed-content、iframe 响应头和浏览器网络策略约束。请在 ComfyUI 或其网关允许 Infinity 页面来源，并确认 ComfyUI 端已将 `comfyui_bridge` 安装为 `custom_nodes/infinity_comfy_bridge`。页面密码在 iframe 内手动输入；API 调用使用服务器配置中的独立 token。Infinity 的 Vite、Node、Docker 和 Electron 运行形态均不注册 ComfyUI 代理路由。
 
 ## 需求来源
 

@@ -330,8 +330,8 @@ describe('CanvasWorkspace', () => {
     expect(within(dialog).getByRole('textbox', { name: 'Gemini prompt' })).toBeInTheDocument()
   })
 
-  it('opens the selected one-off ComfyUI endpoint in a top-level tab without iframe, proxy, or token URL leakage', () => {
-    const endpoint = configureTemporaryComfyProject()
+  it('opens the selected one-off ComfyUI endpoint in an iframe without proxy or token URL leakage', () => {
+    configureTemporaryComfyProject()
     const openSpy = vi.spyOn(window, 'open').mockReturnValue({} as WindowProxy)
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
     const menu = openAddMenu()
@@ -341,20 +341,23 @@ describe('CanvasWorkspace', () => {
     expect(within(dialog).getByRole('combobox', { name: 'ComfyUI server for temporary workflow' })).toBeInTheDocument()
     fireEvent.click(within(dialog).getByRole('button', { name: 'Edit temporary workflow in ComfyUI' }))
 
-    expect(openSpy).toHaveBeenCalledTimes(1)
-    expect(openSpy.mock.calls[0]?.[0]).toBe(endpoint.baseUrl)
-    expect(openSpy.mock.calls[0]?.[1]).toBe('_blank')
-    const openedUrl = new URL(String(openSpy.mock.calls[0]?.[0]))
-    expect(openedUrl.searchParams.has('token')).toBe(false)
-    expect(openedUrl.href).not.toContain('/__comfy_proxy/')
+    const editorDialog = screen.getByRole('dialog', { name: 'ComfyUI Workflow Editor' })
+    const frameUrl = new URL((within(editorDialog).getByTitle(/^ComfyUI editor\b/) as HTMLIFrameElement).src)
+    const targetUrl = new URL(String(frameUrl.searchParams.get('target')))
+    expect(frameUrl.origin).toBe('https://comfyui.example.test:8443')
+    expect(frameUrl.pathname).toBe('/custom/ui/extensions/infinity_comfy_bridge/storage-access.html')
+    expect(targetUrl.pathname).toBe('/custom/ui')
+    expect(targetUrl.searchParams.get('theme')).toBe('dark')
+    expect(targetUrl.searchParams.has('token')).toBe(false)
+    expect(targetUrl.hash).toBe('')
+    expect(frameUrl.href).not.toContain('/__comfy_proxy/')
+    expect(openSpy).not.toHaveBeenCalled()
     expect(fetchSpy).not.toHaveBeenCalled()
     expect(screen.getByRole('dialog', { name: 'ComfyUI workflow runner' })).toBeVisible()
-    expect(screen.queryByRole('dialog', { name: 'ComfyUI Workflow Editor' })).not.toBeInTheDocument()
-    expect(document.querySelector('iframe')).toBeNull()
     expect(screen.queryByRole('menu', { name: 'Add node' })).not.toBeInTheDocument()
   })
 
-  it('submits a one-off endpoint password directly from the browser without exposing its fallback token', () => {
+  it('leaves one-off endpoint password login to the user without exposing saved credentials', () => {
     configureTemporaryComfyProject(
       { type: 'password', password: 'fixture-ui-password', token: 'fixture-fallback-token' },
       'https://comfyui.example.test:8443',
@@ -368,34 +371,31 @@ describe('CanvasWorkspace', () => {
     const dialog = screen.getByRole('dialog', { name: 'ComfyUI workflow runner' })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Edit temporary workflow in ComfyUI' }))
 
-    const submittedForm = submitSpy.mock.contexts[0] as HTMLFormElement | undefined
-    expect(submittedForm).toBeDefined()
-    expect(submittedForm?.method.toLowerCase()).toBe('post')
-    expect(submittedForm?.action).toBe('https://comfyui.example.test:8443/login')
-    expect(submittedForm?.target).not.toBe('_self')
-    const body = new FormData(submittedForm)
-    expect(body.get('password')).toBe('fixture-ui-password')
-    expect(body.get('token')).toBeNull()
-    expect(submittedForm?.outerHTML).not.toContain('/__comfy_proxy/')
+    const editorDialog = screen.getByRole('dialog', { name: 'ComfyUI Workflow Editor' })
+    const frame = within(editorDialog).getByTitle(/^ComfyUI editor\b/) as HTMLIFrameElement
+    const frameUrl = new URL(frame.src)
+    expect(frameUrl.pathname).toBe('/extensions/infinity_comfy_bridge/storage-access.html')
+    expect(frameUrl.searchParams.get('target')).toBe('https://comfyui.example.test:8443/')
+    expect(frame.src).not.toContain('fixture-ui-password')
+    expect(frame.src).not.toContain('fixture-fallback-token')
+    expect(submitSpy).not.toHaveBeenCalled()
     expect(fetchSpy).not.toHaveBeenCalled()
     expect(screen.getByRole('dialog', { name: 'ComfyUI workflow runner' })).toBeVisible()
-    expect(screen.queryByRole('dialog', { name: 'ComfyUI Workflow Editor' })).not.toBeInTheDocument()
-    expect(document.querySelector('iframe')).toBeNull()
+    expect(within(editorDialog).getByRole('status')).toHaveTextContent(/sign in|login|connecting|bridge/i)
   })
 
-  it('shows an accessible popup-blocked error and keeps the one-off workflow dialog open', () => {
+  it('keeps the embedded one-off editor available when popups are blocked', () => {
     configureTemporaryComfyProject()
-    vi.spyOn(window, 'open').mockReturnValue(null)
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(null)
 
     const menu = openAddMenu()
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'ComfyUI Workflow' }))
     const dialog = screen.getByRole('dialog', { name: 'ComfyUI workflow runner' })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Edit temporary workflow in ComfyUI' }))
 
-    expect(within(dialog).getByRole('alert')).toHaveTextContent(/allow pop-ups/i)
     expect(screen.getByRole('dialog', { name: 'ComfyUI workflow runner' })).toBeVisible()
-    expect(screen.queryByRole('dialog', { name: 'ComfyUI Workflow Editor' })).not.toBeInTheDocument()
-    expect(document.querySelector('iframe')).toBeNull()
+    expect(screen.getByRole('dialog', { name: 'ComfyUI Workflow Editor' })).toBeInTheDocument()
+    expect(openSpy).not.toHaveBeenCalled()
   })
 
   it('accepts pasted ComfyUI API workflow JSON and enters the existing run configuration with endpoint and candidates intact', () => {

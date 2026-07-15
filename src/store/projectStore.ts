@@ -2,7 +2,11 @@ import { useStore } from 'zustand'
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import { get as getIdb, set as setIdb } from 'idb-keyval'
 import { ComfyClient, type ComfyUploadImageOptions, type ComfyUploadImageResult } from '../domain/comfyClient'
-import { assertSafeComfyEndpoints } from '../domain/comfyEndpoint'
+import {
+  assertSafeComfyEndpoints,
+  normalizeBrowserDirectComfyEndpoint,
+  normalizeBrowserDirectComfyEndpoints,
+} from '../domain/comfyEndpoint'
 import { ComfyServer, comfyFileFromResource } from '../domain/comfyServer'
 import { extractComfyOutputs, type ComfyFileRef } from '../domain/comfyOutputs'
 import { runComfyPrompt, type ComfyPromptClient } from '../domain/comfyRunner'
@@ -253,7 +257,6 @@ export type ProjectLibraryPackage = {
 type DesktopProjectStorage = {
   loadProjectLibrary: () => Promise<ProjectLibraryPackage | undefined>
   saveProjectLibrary: (payload: ProjectLibraryPackage) => Promise<{ ok: boolean; rootPath?: string; error?: string }>
-  authorizeComfyProxyTarget?: (baseUrl: string) => Promise<{ ok: boolean }>
 }
 
 declare global {
@@ -377,12 +380,10 @@ const defaultDeps: ProjectStoreDeps = {
   now: () => new Date().toISOString(),
   randomInt: (min, max) => Math.floor(Math.random() * (max - min + 1)) + min,
   createComfyClient: (endpoint) => {
-    const bearerToken =
-      endpoint.auth?.type === 'token' || endpoint.auth?.type === 'password' ? endpoint.auth.token : undefined
     return new ComfyClient({
       baseUrl: endpoint.baseUrl,
       clientId: crypto.randomUUID(),
-      token: bearerToken,
+      token: endpoint.auth?.token,
       headers: endpoint.customHeaders,
     })
   },
@@ -9070,7 +9071,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         capabilities: { supportedFunctions: comfyWorkflowFunctionIds(get().project.functions) },
         health: { status: 'unknown' },
       }
-      const endpoint: ComfyEndpointConfig = { ...baseEndpoint, ...patch, id: endpointId, health: { status: 'unknown' } }
+      const endpoint = normalizeBrowserDirectComfyEndpoint({
+        ...baseEndpoint,
+        ...patch,
+        id: endpointId,
+        health: { status: 'unknown' },
+      })
 
       set((state) => ({
         project: {
@@ -9095,7 +9101,9 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           comfy: {
             ...state.project.comfy,
             endpoints: state.project.comfy.endpoints.map((endpoint) =>
-              endpoint.id === endpointId ? { ...endpoint, ...patch } : endpoint,
+              endpoint.id === endpointId
+                ? normalizeBrowserDirectComfyEndpoint({ ...endpoint, ...patch })
+                : endpoint,
             ),
           },
         },
@@ -9139,9 +9147,13 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
     exportConfig: () => createConfigPackage(get().project),
 
     importProject: (payload) => {
-      assertSafeComfyEndpoints(payload.project.comfy.endpoints)
+      const endpoints = normalizeBrowserDirectComfyEndpoints(payload.project.comfy.endpoints)
+      assertSafeComfyEndpoints(endpoints)
       const now = runtime.now()
-      const importedProject = withRuntimeHistory(withBuiltInFunctions(payload.project, now))
+      const importedProject = withRuntimeHistory(withBuiltInFunctions({
+        ...payload.project,
+        comfy: { ...payload.project.comfy, endpoints },
+      }, now))
       set((state) => ({
         project: importedProject,
         projectLibrary: {
@@ -9155,7 +9167,8 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
     importConfig: (payload) => {
       const config = payload.config
-      assertSafeComfyEndpoints(config.comfy.endpoints)
+      const endpoints = normalizeBrowserDirectComfyEndpoints(config.comfy.endpoints)
+      assertSafeComfyEndpoints(endpoints)
       const now = runtime.now()
       set((state) => {
         const project = {
@@ -9164,7 +9177,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           functions: withBuiltInFunctions({ ...state.project, functions: config.functions }, now).functions,
           comfy: {
             ...config.comfy,
-            endpoints: config.comfy.endpoints.map((endpoint) => ({
+            endpoints: endpoints.map((endpoint) => ({
               ...endpoint,
               health: { status: 'unknown' as const },
             })),
@@ -9196,7 +9209,7 @@ const persistentProjectSnapshot = (project: ProjectState): ProjectState => {
     comfy: {
       ...baseProject.comfy,
       endpoints: baseProject.comfy.endpoints.map((endpoint) => {
-        const persistentEndpoint = { ...endpoint }
+        const persistentEndpoint = normalizeBrowserDirectComfyEndpoint(endpoint)
         delete persistentEndpoint.health
         return persistentEndpoint
       }),
@@ -9228,7 +9241,16 @@ const loadProjectLibrary = (
   if (projectEntries.length === 0) return false
 
   const projects = Object.fromEntries(
-    projectEntries.map(([projectId, project]) => [projectId, withRuntimeHistory(withBuiltInFunctions(project, now))]),
+    projectEntries.map(([projectId, project]) => [
+      projectId,
+      withRuntimeHistory(withBuiltInFunctions({
+        ...project,
+        comfy: {
+          ...project.comfy,
+          endpoints: normalizeBrowserDirectComfyEndpoints(project.comfy.endpoints),
+        },
+      }, now)),
+    ]),
   ) as Record<string, ProjectState>
   const activeProject = projects[payload?.currentProjectId ?? ''] ?? Object.values(projects)[0]
   if (!activeProject) return false
@@ -9247,18 +9269,25 @@ const loadIndexedDbProjectLibrary = (
   getIdb<ProjectLibraryPackage>(PROJECT_LIBRARY_STORAGE_KEY)
     .then(async (savedLibrary) => {
       const now = new Date().toISOString()
-      if (loadProjectLibrary(savedLibrary, now, applyState)) return
+      if (loadProjectLibrary(savedLibrary, now, applyState)) return true
 
       const savedProject = await getIdb<ProjectState>(PROJECT_STORAGE_KEY)
-      if (!savedProject) return
-      const project = withRuntimeHistory(withBuiltInFunctions(savedProject, now))
+      if (!savedProject) return savedLibrary === undefined
+      const project = withRuntimeHistory(withBuiltInFunctions({
+        ...savedProject,
+        comfy: {
+          ...savedProject.comfy,
+          endpoints: normalizeBrowserDirectComfyEndpoints(savedProject.comfy.endpoints),
+        },
+      }, now))
       applyState({
         project,
         projectLibrary: { [project.project.id]: project },
         ...selectedState([]),
       })
+      return true
     })
-    .catch(() => undefined)
+    .catch(() => false)
 
 const startIndexedDbProjectPersistence = () => {
   let saveTimer: number | undefined
@@ -9322,10 +9351,15 @@ const startIndexedDbProjectPersistence = () => {
     })
   }
 
-  void loadIndexedDbProjectLibrary(applyLoadedState).finally(() => {
+  void loadIndexedDbProjectLibrary(applyLoadedState).then((loadSucceeded) => {
     loadSettled = true
-    lastSavedLibraryKey = serializedProjectLibraryKey(projectStore.getState())
     applyWithoutSchedulingSave({ projectPersistenceReady: true })
+    if (loadSucceeded) {
+      lastSavedLibraryKey = undefined
+      runProjectLibrarySave(projectStore.getState())
+    } else {
+      lastSavedLibraryKey = serializedProjectLibraryKey(projectStore.getState())
+    }
   })
 
   projectStore.subscribe((state) => scheduleSaveProjectLibrary(state))
@@ -9404,10 +9438,15 @@ const startDesktopProjectPersistence = (storage: DesktopProjectStorage) => {
     .loadProjectLibrary()
     .then((savedLibrary) => {
       const now = new Date().toISOString()
-      loadProjectLibrary(savedLibrary, now, applyLoadedState)
+      const safeToPersist = savedLibrary === undefined || loadProjectLibrary(savedLibrary, now, applyLoadedState)
       loadSettled = true
-      lastSavedLibraryKey = serializedProjectLibraryKey(projectStore.getState())
       applyWithoutSchedulingSave({ projectPersistenceReady: true })
+      if (safeToPersist) {
+        lastSavedLibraryKey = undefined
+        runProjectLibrarySave(projectStore.getState())
+      } else {
+        lastSavedLibraryKey = serializedProjectLibraryKey(projectStore.getState())
+      }
     })
     .catch(() => {
       loadSettled = true

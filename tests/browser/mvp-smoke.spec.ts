@@ -1487,10 +1487,7 @@ test('requires saving an endpoint URL before testing the persisted value', async
   const savedUrl = initialUrl === 'http://127.0.0.1:27707'
     ? 'http://127.0.0.1:27708'
     : 'http://127.0.0.1:27707'
-  const expectedProxyUrl = await page.evaluate(
-    (targetBase) => new URL(`/__comfy_proxy/${encodeURIComponent(targetBase)}/system_stats`, window.location.origin).href,
-    savedUrl,
-  )
+  const expectedDirectUrl = `${savedUrl.replace(/\/+$/, '')}/system_stats`
 
   await page.evaluate((expectedUrl) => {
     const audit = window as unknown as {
@@ -1501,10 +1498,10 @@ test('requires saving an endpoint URL before testing the persisted value', async
     audit.__expectedEndpointTestUrl = expectedUrl
     audit.__testedEndpointUrls = []
     audit.__unexpectedEndpointUrls = []
-  }, expectedProxyUrl)
+  }, expectedDirectUrl)
   await endpointUrl.fill(savedUrl)
-  await expect(dialog.getByRole('button', { name: 'Test', exact: true })).toBeDisabled()
-  await expect(dialog.getByText('Save before testing', { exact: true })).toBeVisible()
+  await expect(dialog.getByRole('button', { name: 'Test connection', exact: true })).toBeDisabled()
+  await expect(dialog.getByText('Save changes before testing', { exact: true })).toBeVisible()
   expect(
     await page.evaluate(() => {
       const audit = window as unknown as { __testedEndpointUrls: string[]; __unexpectedEndpointUrls: string[] }
@@ -1512,26 +1509,22 @@ test('requires saving an endpoint URL before testing the persisted value', async
     }),
   ).toEqual({ tested: [], unexpected: [] })
 
-  await dialog.getByRole('button', { name: 'Save', exact: true }).click()
+  await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
   await expect(dialog).toHaveCount(0)
 
   await servers.getByRole('button', { name: 'Edit server Local ComfyUI' }).click()
   dialog = page.getByRole('dialog', { name: 'Edit ComfyUI Server' })
   await expect(dialog.getByLabel('Endpoint URL')).toHaveValue(savedUrl)
-  const testButton = dialog.getByRole('button', { name: 'Test', exact: true })
+  const testButton = dialog.getByRole('button', { name: 'Test connection', exact: true })
   await expect(testButton).toBeEnabled()
-  await expect(dialog.getByText('Save before testing', { exact: true })).toHaveCount(0)
+  await expect(dialog.getByText('Save changes before testing', { exact: true })).toHaveCount(0)
   await testButton.click()
 
   await expect
     .poll(async () => page.evaluate(() => (window as unknown as { __testedEndpointUrls: string[] }).__testedEndpointUrls))
-    .toEqual([expectedProxyUrl])
+    .toEqual([expectedDirectUrl])
   expect(
     await page.evaluate(() => (window as unknown as { __unexpectedEndpointUrls: string[] }).__unexpectedEndpointUrls),
   ).toEqual([])
-  await expect
-    .poll(async () =>
-      dialog.locator('.endpoint-actions .status-dot').evaluate((element) => element.className),
-    )
-    .toContain('online')
+  await expect(dialog.getByLabel('Server status online, queue 0')).toBeVisible()
 })

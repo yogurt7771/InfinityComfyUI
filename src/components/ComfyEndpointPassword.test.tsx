@@ -6,7 +6,7 @@ import { projectStore } from '../store/projectStore'
 const endpointPasswordLabel = /^comfyui password$/i
 const endpointTokenLabel = /^comfyui api token$/i
 
-describe('ComfyUI server password configuration', () => {
+describe('ComfyUI server token-only configuration', () => {
   beforeEach(() => {
     const project = structuredClone(projectStore.getState().project)
     project.comfy.endpoints = [
@@ -35,7 +35,7 @@ describe('ComfyUI server password configuration', () => {
     vi.restoreAllMocks()
   })
 
-  it('shows and saves password and API token together without expanding advanced controls', () => {
+  it('normalizes a legacy password entry to API-token-only authentication when saved', () => {
     const project = structuredClone(projectStore.getState().project)
     project.comfy.endpoints[0]!.auth = {
       type: 'password',
@@ -54,45 +54,34 @@ describe('ComfyUI server password configuration', () => {
     fireEvent.click(within(serverList).getByRole('button', { name: /edit (server|endpoint) password test comfyui/i }))
 
     const dialog = screen.getByRole('dialog', { name: /edit comfyui server/i })
-    const passwordInput = within(dialog).getByLabelText(endpointPasswordLabel)
-    const tokenInput = within(dialog).queryByLabelText(endpointTokenLabel)
-    expect.soft(within(dialog).queryByText(/api token fallback.*optional/i)).not.toBeInTheDocument()
-    expect(tokenInput).not.toBeNull()
-    if (!(tokenInput instanceof HTMLInputElement)) return
-
-    expect(passwordInput).not.toBe(tokenInput)
-    expect(passwordInput).toBeVisible()
-    expect(passwordInput).toHaveAttribute('type', 'password')
-    expect(passwordInput).toHaveValue('fixture-existing-password')
+    const tokenInput = within(dialog).getByLabelText(endpointTokenLabel)
+    expect(within(dialog).queryByLabelText(endpointPasswordLabel)).not.toBeInTheDocument()
+    expect(within(dialog).queryByText(/api token fallback.*optional/i)).not.toBeInTheDocument()
     expect(tokenInput).toBeVisible()
     expect(tokenInput).toHaveAttribute('type', 'password')
     expect(tokenInput).toHaveValue('fixture-existing-token')
 
-    fireEvent.change(passwordInput, { target: { value: 'fixture-edited-password' } })
     fireEvent.change(tokenInput, { target: { value: 'fixture-edited-token' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }))
 
     expect(projectStore.getState().project.comfy.endpoints[0]?.auth).toEqual({
-      type: 'password',
-      password: 'fixture-edited-password',
+      type: 'token',
       token: 'fixture-edited-token',
     })
   })
 
-  it('keeps an existing legacy token when a password is saved', () => {
+  it('keeps an existing API token while exposing no password control', () => {
     render(<LeftPanel />)
     fireEvent.click(screen.getByRole('button', { name: 'ComfyUI Servers' }))
     const popover = screen.getByLabelText('ComfyUI Servers popover')
     const serverList = within(popover).getByLabelText('ComfyUI server list')
     fireEvent.click(within(serverList).getByRole('button', { name: /edit (server|endpoint) password test comfyui/i }))
 
-    let dialog = screen.getByRole('dialog', { name: /edit comfyui server/i })
-    const passwordInput = within(dialog).getByLabelText(endpointPasswordLabel)
-    const tokenFallbackInput = within(dialog).getByLabelText(endpointTokenLabel)
-    expect(passwordInput).toHaveAttribute('type', 'password')
-    expect(passwordInput).toHaveValue('')
-    expect(tokenFallbackInput).toHaveAttribute('type', 'password')
-    expect(tokenFallbackInput).toHaveValue('fixture-legacy-token')
+    const dialog = screen.getByRole('dialog', { name: /edit comfyui server/i })
+    const tokenInput = within(dialog).getByLabelText(endpointTokenLabel)
+    expect(within(dialog).queryByLabelText(endpointPasswordLabel)).not.toBeInTheDocument()
+    expect(tokenInput).toHaveAttribute('type', 'password')
+    expect(tokenInput).toHaveValue('fixture-legacy-token')
 
     fireEvent.change(within(dialog).getByLabelText(/(server|endpoint) name/i), {
       target: { value: 'Password Test Renamed' },
@@ -104,26 +93,9 @@ describe('ComfyUI server password configuration', () => {
       token: 'fixture-legacy-token',
     })
 
-    fireEvent.click(within(serverList).getByRole('button', { name: /edit (server|endpoint) password test renamed/i }))
-    dialog = screen.getByRole('dialog', { name: /edit comfyui server/i })
-    fireEvent.change(within(dialog).getByLabelText(endpointPasswordLabel), {
-      target: { value: 'fixture-saved-ui-password' },
-    })
-    expect(projectStore.getState().project.comfy.endpoints[0]?.auth).toEqual({
-      type: 'token',
-      token: 'fixture-legacy-token',
-    })
-
-    fireEvent.click(within(dialog).getByRole('button', { name: /save/i }))
-
-    expect(projectStore.getState().project.comfy.endpoints[0]?.auth).toEqual({
-      type: 'password',
-      password: 'fixture-saved-ui-password',
-      token: 'fixture-legacy-token',
-    })
   })
 
-  it('stores a password authentication entry when creating a new ComfyUI server', () => {
+  it('creates a new ComfyUI server with API-token-only authentication', () => {
     render(<LeftPanel />)
     fireEvent.click(screen.getByRole('button', { name: 'ComfyUI Servers' }))
     const popover = screen.getByLabelText('ComfyUI Servers popover')
@@ -131,28 +103,27 @@ describe('ComfyUI server password configuration', () => {
     const dialog = screen.getByRole('dialog', { name: /new comfyui server|create comfyui server/i })
 
     const tokenInput = within(dialog).getByLabelText(endpointTokenLabel)
+    expect(within(dialog).queryByLabelText(endpointPasswordLabel)).not.toBeInTheDocument()
     expect(tokenInput).toBeVisible()
     expect(tokenInput).toHaveAttribute('type', 'password')
     expect(tokenInput).toHaveValue('')
     fireEvent.change(within(dialog).getByLabelText(/(server|endpoint) name/i), {
-      target: { value: 'Created Password ComfyUI' },
+      target: { value: 'Created Token ComfyUI' },
     })
     fireEvent.change(within(dialog).getByLabelText(/url/i), {
       target: { value: 'http://127.0.0.1:8188' },
     })
-    fireEvent.change(within(dialog).getByLabelText(endpointPasswordLabel), {
-      target: { value: 'fixture-created-ui-password' },
-    })
+    fireEvent.change(tokenInput, { target: { value: 'fixture-created-api-token' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Add server' }))
 
     expect(projectStore.getState().project.comfy.endpoints.at(-1)).toMatchObject({
-      name: 'Created Password ComfyUI',
+      name: 'Created Token ComfyUI',
       baseUrl: 'http://127.0.0.1:8188',
-      auth: { type: 'password', password: 'fixture-created-ui-password' },
+      auth: { type: 'token', token: 'fixture-created-api-token' },
     })
   })
 
-  it('submits a saved password directly to the ComfyUI login route without exposing its bearer fallback', () => {
+  it('never submits a saved password when opening ComfyUI and leaves login to the user', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch')
     const popup = {} as WindowProxy
     vi.spyOn(window, 'open').mockReturnValue(popup)
@@ -167,16 +138,13 @@ describe('ComfyUI server password configuration', () => {
     }
 
     const error = openComfyEditorInBrowser(endpoint)
-    const submittedForm = submitSpy.mock.contexts[0] as HTMLFormElement | undefined
-
     expect(error).toBeUndefined()
-    expect(submittedForm?.method.toLowerCase()).toBe('post')
-    expect(submittedForm?.action).toBe('http://127.0.0.1:27707/login')
-    const body = new FormData(submittedForm)
-    expect(body.get('password')).toBe('fixture-editor-ui-password')
-    expect(body.get('token')).toBeNull()
-    expect(submittedForm?.action).not.toContain('fixture-editor-fallback-token')
-    expect(submittedForm?.outerHTML).not.toContain('/__comfy_proxy/')
+    expect(submitSpy).not.toHaveBeenCalled()
+    const openedUrl = new URL(String(vi.mocked(window.open).mock.calls[0]?.[0]))
+    expect(openedUrl.href).toBe('http://127.0.0.1:27707/')
+    expect(openedUrl.href).not.toContain('fixture-editor-ui-password')
+    expect(openedUrl.href).not.toContain('fixture-editor-fallback-token')
+    expect(openedUrl.href).not.toContain('/__comfy_proxy/')
     expect(fetchMock).not.toHaveBeenCalled()
     expect(popup.opener).toBeNull()
   })

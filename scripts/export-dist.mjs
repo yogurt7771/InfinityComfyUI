@@ -80,9 +80,6 @@ function writeReleaseCompose() {
     environment:
       HOST: 0.0.0.0
       PORT: 7930
-      COMFY_PROXY_LOOPBACK_HOST: \${COMFY_PROXY_LOOPBACK_HOST:-host.docker.internal}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
 `,
     'utf8',
   )

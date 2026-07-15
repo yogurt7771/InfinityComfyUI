@@ -909,9 +909,10 @@ describe('LeftPanel', () => {
     })
   })
 
-  it('keeps workflow creation blocked when opening ComfyUI does not import a workflow', () => {
+  it('keeps workflow creation blocked while the embedded ComfyUI editor has not exported a workflow', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
     const openSpy = vi.spyOn(window, 'open').mockReturnValue({} as WindowProxy)
+    const submitSpy = vi.spyOn(HTMLFormElement.prototype, 'submit').mockImplementation(() => undefined)
     const state = panelProject()
     state.comfy.endpoints = [
       state.comfy.endpoints[0]!,
@@ -920,7 +921,7 @@ describe('LeftPanel', () => {
         id: 'endpoint_remote',
         name: 'Remote ComfyUI',
         baseUrl: 'http://127.0.0.1:8188/custom/ui?theme=dark',
-        auth: { type: 'token', token: 'remote-editor-token' },
+        auth: { type: 'password', password: 'remote-editor-password', token: 'remote-editor-token' },
         capabilities: { supportedFunctions: [] },
       },
     ]
@@ -943,13 +944,18 @@ describe('LeftPanel', () => {
     })
     fireEvent.click(within(createDialog).getByRole('button', { name: 'Edit in ComfyUI' }))
 
-    expect(openSpy).toHaveBeenCalledTimes(1)
-    const openedUrl = new URL(String(openSpy.mock.calls[0]?.[0]))
-    expect(openedUrl.origin).toBe('http://127.0.0.1:8188')
-    expect(openedUrl.pathname).toBe('/custom/ui')
-    expect(openedUrl.searchParams.get('theme')).toBe('dark')
-    expect(openedUrl.searchParams.has('token')).toBe(false)
-    expect(openedUrl.href).not.toContain('/__comfy_proxy/')
+    const editorDialog = screen.getByRole('dialog', { name: 'ComfyUI Workflow Editor' })
+    const frameUrl = new URL((within(editorDialog).getByTitle(/^ComfyUI editor\b/) as HTMLIFrameElement).src)
+    const targetUrl = new URL(String(frameUrl.searchParams.get('target')))
+    expect(frameUrl.origin).toBe('http://127.0.0.1:8188')
+    expect(frameUrl.pathname).toBe('/custom/ui/extensions/infinity_comfy_bridge/storage-access.html')
+    expect(targetUrl.pathname).toBe('/custom/ui')
+    expect(targetUrl.searchParams.get('theme')).toBe('dark')
+    expect(targetUrl.searchParams.has('token')).toBe(false)
+    expect(frameUrl.href).not.toContain('/__comfy_proxy/')
+    expect(frameUrl.href).not.toContain('remote-editor-password')
+    expect(openSpy).not.toHaveBeenCalled()
+    expect(submitSpy).not.toHaveBeenCalled()
     expect(fetchMock).not.toHaveBeenCalled()
     expect(within(createDialog).getByRole('button', { name: 'Save function' })).toBeDisabled()
     expect(Object.values(projectStore.getState().project.functions).some((fn) => fn.name === 'Kitchen Batch Render')).toBe(false)
@@ -1410,9 +1416,10 @@ describe('LeftPanel', () => {
     })
   })
 
-  it('keeps a selected workflow unchanged when opening its ComfyUI editor', () => {
+  it('keeps a selected workflow unchanged while its embedded ComfyUI editor is open', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
     const openSpy = vi.spyOn(window, 'open').mockReturnValue({} as WindowProxy)
+    const submitSpy = vi.spyOn(HTMLFormElement.prototype, 'submit').mockImplementation(() => undefined)
     const state = panelProject()
     state.comfy.endpoints = [
       state.comfy.endpoints[0]!,
@@ -1443,7 +1450,12 @@ describe('LeftPanel', () => {
     expect(within(dialog).getByLabelText('Workflow editor ComfyUI server Flux Render')).toHaveValue('endpoint_remote')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Edit in ComfyUI' }))
 
-    expect(openSpy).toHaveBeenCalledWith('http://127.0.0.1:8188/', '_blank')
+    const editorDialog = screen.getByRole('dialog', { name: 'ComfyUI Workflow Editor' })
+    const frameUrl = new URL((within(editorDialog).getByTitle(/^ComfyUI editor\b/) as HTMLIFrameElement).src)
+    expect(frameUrl.pathname).toBe('/extensions/infinity_comfy_bridge/storage-access.html')
+    expect(frameUrl.searchParams.get('target')).toBe('http://127.0.0.1:8188/')
+    expect(openSpy).not.toHaveBeenCalled()
+    expect(submitSpy).not.toHaveBeenCalled()
     expect(projectStore.getState().project.functions.fn_render.workflow).toEqual(originalWorkflow)
     expect(fetchMock).not.toHaveBeenCalled()
   })
@@ -2092,7 +2104,7 @@ describe('LeftPanel', () => {
   })
 })
 
-describe('top-level ComfyUI workflow editor launch', () => {
+describe('embedded ComfyUI workflow editor launch', () => {
   beforeEach(() => {
     const project = panelProject()
     projectStore.setState({
@@ -2114,7 +2126,7 @@ describe('top-level ComfyUI workflow editor launch', () => {
     return screen.getByRole('dialog', { name: 'Function Management' })
   }
 
-  it('opens a token-configured endpoint in a top-level new tab without putting the token in its URL', () => {
+  it('opens a token-configured endpoint in an iframe without putting the token in its URL', () => {
     const state = projectStore.getState().project
     const endpoint = {
       ...state.comfy.endpoints[0]!,
@@ -2131,19 +2143,21 @@ describe('top-level ComfyUI workflow editor launch', () => {
 
     fireEvent.click(within(manager).getByRole('button', { name: 'Edit in ComfyUI' }))
 
-    expect(openSpy).toHaveBeenCalledTimes(1)
-    expect(openSpy.mock.calls[0]?.[0]).toBe(endpoint.baseUrl)
-    expect(openSpy.mock.calls[0]?.[1]).toBe('_blank')
-    const openedUrl = new URL(String(openSpy.mock.calls[0]?.[0]))
-    expect(openedUrl.searchParams.has('token')).toBe(false)
-    expect(openedUrl.href).not.toContain('/__comfy_proxy/')
+    const editorDialog = screen.getByRole('dialog', { name: 'ComfyUI Workflow Editor' })
+    const frameUrl = new URL((within(editorDialog).getByTitle(/^ComfyUI editor\b/) as HTMLIFrameElement).src)
+    const targetUrl = new URL(String(frameUrl.searchParams.get('target')))
+    expect(frameUrl.origin).toBe('https://comfyui.example.test:8443')
+    expect(frameUrl.pathname).toBe('/custom/ui/extensions/infinity_comfy_bridge/storage-access.html')
+    expect(targetUrl.pathname).toBe('/custom/ui')
+    expect(targetUrl.searchParams.get('theme')).toBe('dark')
+    expect(targetUrl.searchParams.has('token')).toBe(false)
+    expect(frameUrl.href).not.toContain('/__comfy_proxy/')
+    expect(openSpy).not.toHaveBeenCalled()
     expect(fetchSpy).not.toHaveBeenCalled()
-    expect(screen.queryByRole('dialog', { name: 'ComfyUI Workflow Editor' })).not.toBeInTheDocument()
-    expect(screen.queryByTitle(/ComfyUI editor/)).not.toBeInTheDocument()
     expect(projectStore.getState().project.functions.fn_render.workflow).toEqual(originalWorkflow)
   })
 
-  it('submits a password directly to the endpoint login route in a top-level tab', () => {
+  it('leaves password login to the user inside the endpoint iframe', () => {
     const state = projectStore.getState().project
     const endpoint = {
       ...state.comfy.endpoints[0]!,
@@ -2161,21 +2175,20 @@ describe('top-level ComfyUI workflow editor launch', () => {
 
     fireEvent.click(within(manager).getByRole('button', { name: 'Edit in ComfyUI' }))
 
-    const submittedForm = submitSpy.mock.contexts[0] as HTMLFormElement | undefined
-    expect(submittedForm).toBeDefined()
-    expect(submittedForm?.method.toLowerCase()).toBe('post')
-    expect(submittedForm?.action).toBe('https://comfyui.example.test:8443/login')
-    expect(submittedForm?.target).not.toBe('_self')
-    const body = new FormData(submittedForm)
-    expect(body.get('password')).toBe('fixture-ui-password')
-    expect(body.get('token')).toBeNull()
-    expect(submittedForm?.outerHTML).not.toContain('/__comfy_proxy/')
+    const editorDialog = screen.getByRole('dialog', { name: 'ComfyUI Workflow Editor' })
+    const frame = within(editorDialog).getByTitle(/^ComfyUI editor\b/) as HTMLIFrameElement
+    const frameUrl = new URL(frame.src)
+    expect(frameUrl.pathname).toBe('/extensions/infinity_comfy_bridge/storage-access.html')
+    expect(frameUrl.searchParams.get('target')).toBe('https://comfyui.example.test:8443/')
+    expect(frame.src).not.toContain('fixture-ui-password')
+    expect(frame.src).not.toContain('fixture-fallback-token')
+    expect(submitSpy).not.toHaveBeenCalled()
     expect(fetchSpy).not.toHaveBeenCalled()
-    expect(screen.queryByRole('dialog', { name: 'ComfyUI Workflow Editor' })).not.toBeInTheDocument()
+    expect(within(editorDialog).getByRole('status')).toHaveTextContent(/sign in|login|connecting|bridge/i)
     expect(projectStore.getState().project.functions.fn_render.workflow).toEqual(originalWorkflow)
   })
 
-  it('opens an endpoint with no password directly so the user can complete login in the top-level tab', () => {
+  it('opens an endpoint with no password directly in the embedded editor', () => {
     const state = projectStore.getState().project
     const endpoint = {
       ...state.comfy.endpoints[0]!,
@@ -2190,19 +2203,192 @@ describe('top-level ComfyUI workflow editor launch', () => {
 
     fireEvent.click(within(manager).getByRole('button', { name: 'Edit in ComfyUI' }))
 
-    expect(openSpy).toHaveBeenCalledTimes(1)
-    expect(openSpy.mock.calls[0]?.[0]).toBe(endpoint.baseUrl)
-    expect(openSpy.mock.calls[0]?.[1]).toBe('_blank')
-    expect(screen.queryByRole('dialog', { name: 'ComfyUI Workflow Editor' })).not.toBeInTheDocument()
+    const editorDialog = screen.getByRole('dialog', { name: 'ComfyUI Workflow Editor' })
+    const frameUrl = new URL((within(editorDialog).getByTitle(/^ComfyUI editor\b/) as HTMLIFrameElement).src)
+    expect(frameUrl.pathname).toBe('/custom/ui/extensions/infinity_comfy_bridge/storage-access.html')
+    expect(frameUrl.searchParams.get('target')).toBe(endpoint.baseUrl)
+    expect(openSpy).not.toHaveBeenCalled()
   })
 
-  it('shows a visible explanation when the browser blocks the editor popup', () => {
-    vi.spyOn(window, 'open').mockReturnValue(null)
+  it('does not depend on popup availability for the primary editor path', () => {
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(null)
     const manager = openFunctionManager()
 
     fireEvent.click(within(manager).getByRole('button', { name: 'Edit in ComfyUI' }))
 
-    expect(screen.getByRole('alert')).toHaveTextContent(/popup|new tab|blocked|allow/i)
-    expect(screen.queryByRole('dialog', { name: 'ComfyUI Workflow Editor' })).not.toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'ComfyUI Workflow Editor' })).toBeInTheDocument()
+    expect(openSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('embedded ComfyUI workflow editor contract', () => {
+  beforeEach(() => {
+    const project = panelProject()
+    projectStore.setState({
+      project,
+      projectLibrary: { [project.project.id]: project },
+      selectedNodeId: undefined,
+      selectedNodeIds: [],
+    } as unknown as Partial<ReturnType<typeof projectStore.getState>>)
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  const openEditor = () => {
+    render(<SettingsPage onClose={() => undefined} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Function Management' }))
+    const manager = screen.getByRole('dialog', { name: 'Function Management' })
+    fireEvent.click(within(manager).getByRole('button', { name: 'Edit in ComfyUI' }))
+    return screen.getByRole('dialog', { name: 'ComfyUI Workflow Editor' })
+  }
+
+  it('uses a sanitized direct endpoint page iframe and never submits saved credentials', () => {
+    const state = projectStore.getState().project
+    state.comfy.endpoints = [
+      {
+        ...state.comfy.endpoints[0]!,
+        baseUrl: 'https://comfyui.example.test:8443/custom/ui/?theme=dark&token=url-token#canvas',
+        auth: {
+          type: 'password',
+          password: 'fixture-editor-password',
+          token: 'fixture-editor-api-token',
+        },
+      },
+    ]
+    projectStore.setState({ project: state } as Partial<ReturnType<typeof projectStore.getState>>)
+    const openSpy = vi.spyOn(window, 'open')
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    const submitSpy = vi.spyOn(HTMLFormElement.prototype, 'submit').mockImplementation(() => undefined)
+    const initialFormCount = document.forms.length
+
+    const editorDialog = openEditor()
+
+    const frame = within(editorDialog).getByTitle(/^ComfyUI editor\b/) as HTMLIFrameElement
+    const frameUrl = new URL(frame.src)
+    const targetUrl = new URL(String(frameUrl.searchParams.get('target')))
+    expect(frameUrl.origin).toBe('https://comfyui.example.test:8443')
+    expect(frameUrl.pathname).toBe('/custom/ui/extensions/infinity_comfy_bridge/storage-access.html')
+    expect(targetUrl.pathname).toBe('/custom/ui/')
+    expect(targetUrl.searchParams.get('theme')).toBe('dark')
+    expect([...targetUrl.searchParams.keys()].some((key) => key.toLowerCase() === 'token')).toBe(false)
+    expect(targetUrl.hash).toBe('')
+    expect(frame.src).not.toContain('/__comfy_proxy/')
+    expect(frame.src).not.toContain('fixture-editor-password')
+    expect(frame.src).not.toContain('fixture-editor-api-token')
+    expect(within(editorDialog).getByRole('button', { name: 'Save from ComfyUI' })).toBeDisabled()
+    expect(within(editorDialog).getByRole('status')).toHaveTextContent(/sign in|login|waiting|connect|loading/i)
+    expect(openSpy).not.toHaveBeenCalled()
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(submitSpy).not.toHaveBeenCalled()
+    expect(document.forms).toHaveLength(initialFormCount)
+  })
+
+  it('loads UI workflow first and saves bridge exports with embedded metadata', async () => {
+    const state = projectStore.getState().project
+    const initialUiJson = { nodes: [{ id: 6, type: 'CLIPTextEncode' }], links: [] }
+    state.functions.fn_render.workflow = { ...state.functions.fn_render.workflow, uiJson: initialUiJson }
+    projectStore.setState({ project: state } as Partial<ReturnType<typeof projectStore.getState>>)
+    const editorDialog = openEditor()
+    const frame = within(editorDialog).getByTitle(/^ComfyUI editor\b/) as HTMLIFrameElement
+    const frameWindow = frame.contentWindow
+    expect(frameWindow).not.toBeNull()
+    const requests: Array<Record<string, unknown>> = []
+    const exportedRawJson = {
+      '30': { class_type: 'EmptyLatentImage', inputs: { width: 768, height: 768, batch_size: 1 } },
+      '40': { class_type: 'SaveImage', inputs: { images: ['30', 0] } },
+    }
+    const exportedUiJson = { nodes: [{ id: 30, type: 'EmptyLatentImage' }], links: [] }
+    vi.spyOn(frameWindow!, 'postMessage').mockImplementation((message, targetOrigin) => {
+      const request = message as Record<string, unknown>
+      requests.push(request)
+      const payload =
+        request.command === 'export'
+          ? { rawJson: exportedRawJson, uiJson: exportedUiJson }
+          : request.command === 'ping'
+            ? { ready: true }
+            : { ok: true }
+      queueMicrotask(() => {
+        window.dispatchEvent(
+          new MessageEvent('message', {
+            origin: String(targetOrigin),
+            source: frameWindow,
+            data: {
+              channel: 'infinity-comfy-editor-v1',
+              type: 'response',
+              id: request.id,
+              payload,
+            },
+          }),
+        )
+      })
+    })
+
+    fireEvent.load(frame)
+
+    await waitFor(() => expect(requests.some((request) => request.command === 'load-ui')).toBe(true))
+    expect(requests.some((request) => request.command === 'load-api')).toBe(false)
+    expect(requests.find((request) => request.command === 'load-ui')?.payload).toEqual(initialUiJson)
+    const saveButton = within(editorDialog).getByRole('button', { name: 'Save from ComfyUI' })
+    await waitFor(() => expect(saveButton).toBeEnabled())
+    fireEvent.click(saveButton)
+
+    await waitFor(() =>
+      expect(projectStore.getState().project.functions.fn_render.workflow).toMatchObject({
+        rawJson: exportedRawJson,
+        uiJson: exportedUiJson,
+        editor: {
+          kind: 'comfyui_embedded',
+          endpointId: 'endpoint_local',
+          baseUrl: 'http://127.0.0.1:27707',
+        },
+      }),
+    )
+  })
+
+  it('retries bridge readiness after iframe reload and falls back to the API workflow', async () => {
+    const editorDialog = openEditor()
+    const frame = within(editorDialog).getByTitle(/^ComfyUI editor\b/) as HTMLIFrameElement
+    const frameWindow = frame.contentWindow
+    const requests: Array<Record<string, unknown>> = []
+    const mockBridgeRequests = (sourceWindow: Window) => {
+      vi.spyOn(sourceWindow, 'postMessage').mockImplementation((message, targetOrigin) => {
+        const request = message as Record<string, unknown>
+        requests.push(request)
+        if (request.command === 'ping' && requests.filter((item) => item.command === 'ping').length < 2) return
+        queueMicrotask(() => {
+          window.dispatchEvent(
+            new MessageEvent('message', {
+              origin: String(targetOrigin),
+              source: sourceWindow,
+              data: {
+                channel: 'infinity-comfy-editor-v1',
+                type: 'response',
+                id: request.id,
+                payload: request.command === 'ping' ? { ready: true } : { ok: true },
+              },
+            }),
+          )
+        })
+      })
+    }
+    mockBridgeRequests(frameWindow!)
+
+    expect(within(editorDialog).getByRole('button', { name: 'Save from ComfyUI' })).toBeDisabled()
+    expect(within(editorDialog).getByRole('button', { name: /retry/i })).toBeEnabled()
+    fireEvent.load(frame)
+    fireEvent.load(frame)
+
+    await waitFor(() => expect(requests.filter((request) => request.command === 'ping')).toHaveLength(1))
+    fireEvent.click(within(editorDialog).getByRole('button', { name: /retry/i }))
+    const reloadedFrame = within(editorDialog).getByTitle(/^ComfyUI editor\b/) as HTMLIFrameElement
+    expect(reloadedFrame).not.toBe(frame)
+    mockBridgeRequests(reloadedFrame.contentWindow!)
+    fireEvent.load(reloadedFrame)
+    await waitFor(() => expect(requests.filter((request) => request.command === 'ping')).toHaveLength(2))
+    await waitFor(() => expect(requests.some((request) => request.command === 'load-api')).toBe(true))
+    await waitFor(() => expect(within(editorDialog).getByRole('button', { name: 'Save from ComfyUI' })).toBeEnabled())
   })
 })

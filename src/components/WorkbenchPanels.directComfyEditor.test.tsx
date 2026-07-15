@@ -21,7 +21,7 @@ afterEach(() => {
   document.querySelectorAll('form').forEach((form) => form.remove())
 })
 
-describe('top-level ComfyUI editor launcher', () => {
+describe('separate ComfyUI editor launcher', () => {
   it('opens a non-password endpoint directly while removing every token URL parameter', () => {
     const popup = {} as WindowProxy
     const openSpy = vi.spyOn(window, 'open').mockReturnValue(popup)
@@ -37,13 +37,13 @@ describe('top-level ComfyUI editor launcher', () => {
     expect(openedUrl.pathname).toBe('/custom/ui/')
     expect(openedUrl.searchParams.get('theme')).toBe('dark')
     expect([...openedUrl.searchParams.keys()].filter((key) => key.toLowerCase() === 'token')).toEqual([])
-    expect(openedUrl.hash).toBe('#canvas')
+    expect(openedUrl.hash).toBe('')
     expect(openedUrl.href).not.toContain('/__comfy_proxy/')
     expect(fetchSpy).not.toHaveBeenCalled()
     expect(popup.opener).toBeNull()
   })
 
-  it('submits only the password to the endpoint login route in the new top-level tab', () => {
+  it('never submits a stored password and leaves login to the user in the new top-level tab', () => {
     const popup = {} as WindowProxy
     const openSpy = vi.spyOn(window, 'open').mockReturnValue(popup)
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
@@ -58,25 +58,23 @@ describe('top-level ComfyUI editor launcher', () => {
     }
 
     const error = openComfyEditorInBrowser(endpoint)
-    const submittedForm = submitSpy.mock.contexts[0] as HTMLFormElement | undefined
-
     expect(error).toBeUndefined()
     expect(openSpy).toHaveBeenCalledTimes(1)
-    expect(openSpy.mock.calls[0]?.[0]).toBe('')
-    expect(openSpy.mock.calls[0]?.[1]).toMatch(/^infinity-comfy-/)
-    expect(submittedForm?.method.toLowerCase()).toBe('post')
-    expect(submittedForm?.action).toBe('https://comfyui.example.test:8443/custom/ui/login')
-    expect(submittedForm?.target).toBe(openSpy.mock.calls[0]?.[1])
-    const body = new FormData(submittedForm)
-    expect(body.get('password')).toBe('fixture-ui-password')
-    expect(body.get('token')).toBeNull()
-    expect(submittedForm?.outerHTML).not.toContain('/__comfy_proxy/')
-    expect(submittedForm?.isConnected).toBe(false)
+    expect(openSpy.mock.calls[0]?.[1]).toBe('_blank')
+    const openedUrl = new URL(String(openSpy.mock.calls[0]?.[0]))
+    expect(openedUrl.origin).toBe('https://comfyui.example.test:8443')
+    expect(openedUrl.pathname).toBe('/custom/ui/')
+    expect(openedUrl.searchParams.get('theme')).toBe('dark')
+    expect(openedUrl.searchParams.has('token')).toBe(false)
+    expect(openedUrl.href).not.toContain('fixture-ui-password')
+    expect(openedUrl.href).not.toContain('fixture-fallback-token')
+    expect(openedUrl.href).not.toContain('/__comfy_proxy/')
+    expect(submitSpy).not.toHaveBeenCalled()
     expect(fetchSpy).not.toHaveBeenCalled()
     expect(popup.opener).toBeNull()
   })
 
-  it('removes the hidden password form and closes its popup when submission throws', () => {
+  it('does not construct a hidden password form even when form submission would throw', () => {
     const close = vi.fn()
     const popup = { close } as unknown as WindowProxy
     vi.spyOn(window, 'open').mockReturnValue(popup)
@@ -88,14 +86,10 @@ describe('top-level ComfyUI editor launcher', () => {
       auth: { type: 'password', password: 'fixture-ui-password' },
     }
 
-    const error = openComfyEditorInBrowser(endpoint)
-    const submittedForm = submitSpy.mock.contexts[0] as HTMLFormElement | undefined
-
-    expect(error).toMatch(/could not open/i)
-    expect(submittedForm).toBeDefined()
-    expect(submittedForm?.isConnected).toBe(false)
-    expect(document.body.contains(submittedForm ?? null)).toBe(false)
-    expect(close).toHaveBeenCalledTimes(1)
+    expect(openComfyEditorInBrowser(endpoint)).toBeUndefined()
+    expect(submitSpy).not.toHaveBeenCalled()
+    expect(document.querySelector('form')).toBeNull()
+    expect(close).not.toHaveBeenCalled()
   })
 
   it('opens an endpoint with no configured authentication directly for interactive login', () => {
@@ -127,4 +121,5 @@ describe('top-level ComfyUI editor launcher', () => {
     expect(openComfyEditorInBrowser({ ...directEndpoint, baseUrl })).toMatch(/valid.*https?|https?.*URL|credentials/i)
     expect(openSpy).not.toHaveBeenCalled()
   })
+
 })
