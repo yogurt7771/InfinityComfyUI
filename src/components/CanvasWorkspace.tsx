@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -208,6 +209,7 @@ const nodeTypes: NodeTypes = {
   group: GroupNodeView,
   default: EmptyNodeView,
 }
+const EMPTY_NODE_REFERENCES: never[] = []
 
 const builtInFunctionMenuOrder = [
   REQUEST_FUNCTION_ID,
@@ -511,6 +513,26 @@ const applyStableNodeChanges = (changes: NodeChange[], current: Node[]) => {
   return sameLocalFlowNodeState(current, next) ? current : next
 }
 
+const sameShallowNodeData = (left: Node['data'], right: Node['data']) => {
+  if (left === right) return true
+  const leftKeys = Object.keys(left)
+  const rightKeys = Object.keys(right)
+  return leftKeys.length === rightKeys.length && leftKeys.every((key) => Object.is(left[key], right[key]))
+}
+
+export const stabilizeFlowNodeData = (previous: Node[], next: Node[]) => {
+  if (previous.length === 0 || next.length === 0) return next
+  const previousById = new Map(previous.map((node) => [node.id, node]))
+  let reusedData = false
+  const stabilized = next.map((node) => {
+    const prior = previousById.get(node.id)
+    if (!prior || !sameShallowNodeData(prior.data, node.data) || prior.data === node.data) return node
+    reusedData = true
+    return { ...node, data: prior.data }
+  })
+  return reusedData ? stabilized : next
+}
+
 const selectionGroupChildNodeIds = (node: SelectionHighlightNodeLike, nodeIds: Set<string>) =>
   Array.isArray(node.data?.childNodeIds)
     ? node.data.childNodeIds.filter((childNodeId): childNodeId is string => typeof childNodeId === 'string' && nodeIds.has(childNodeId))
@@ -648,11 +670,13 @@ export type ComfyMinimapLayout = {
   viewportRect: MinimapRect
 }
 
-const COMFY_MINIMAP_MIN_WIDTH = 260
-const COMFY_MINIMAP_MAX_WIDTH = 380
-const COMFY_MINIMAP_MIN_HEIGHT = 160
-const COMFY_MINIMAP_MAX_HEIGHT = 250
-const COMFY_MINIMAP_PADDING = 24
+export type ComfyMinimapGeometry = Omit<ComfyMinimapLayout, 'viewportRect'>
+
+const COMFY_MINIMAP_MIN_WIDTH = 230
+const COMFY_MINIMAP_MAX_WIDTH = 330
+const COMFY_MINIMAP_MIN_HEIGHT = 140
+const COMFY_MINIMAP_MAX_HEIGHT = 210
+const COMFY_MINIMAP_PADDING = 20
 const MINIMAP_NODE_DEFAULT_WIDTH = 230
 const MINIMAP_NODE_DEFAULT_HEIGHT = 180
 
@@ -727,21 +751,12 @@ const mapFlowRectToMinimap = (rect: MinimapRect, layout: Pick<ComfyMinimapLayout
   height: rect.height * layout.scale,
 })
 
-export function buildComfyMinimapLayout(
+export function buildComfyMinimapGeometry(
   nodes: MinimapNodeLike[],
   edges: MinimapEdgeLike[],
-  viewport: { x: number; y: number; zoom: number },
-  canvasSize: { width: number; height: number },
-): ComfyMinimapLayout {
+): ComfyMinimapGeometry {
   const flowNodeRects = minimapNodeFlowRects(nodes)
-  const zoom = viewport.zoom || 1
-  const visibleFlowRect = {
-    x: -viewport.x / zoom,
-    y: -viewport.y / zoom,
-    width: canvasSize.width / zoom,
-    height: canvasSize.height / zoom,
-  }
-  const content = minimapContentRect(flowNodeRects.length > 0 ? [...flowNodeRects, visibleFlowRect] : [visibleFlowRect])
+  const content = minimapContentRect(flowNodeRects)
   const panelSize = comfyMinimapPanelSize(content, nodes.length)
   const innerWidth = Math.max(1, panelSize.width - COMFY_MINIMAP_PADDING * 2)
   const innerHeight = Math.max(1, panelSize.height - COMFY_MINIMAP_PADDING * 2)
@@ -765,8 +780,6 @@ export function buildComfyMinimapLayout(
     )
     return [{ id: edge.id, x1: sourceCenter.x, y1: sourceCenter.y, x2: targetCenter.x, y2: targetCenter.y }]
   })
-  const viewportRect = mapFlowRectToMinimap(visibleFlowRect, layoutBase)
-
   return {
     ...panelSize,
     padding: COMFY_MINIMAP_PADDING,
@@ -776,11 +789,40 @@ export function buildComfyMinimapLayout(
     offsetY,
     nodeRects,
     edgeLines,
-    viewportRect,
   }
 }
 
-export function minimapPointToFlowPosition(point: MinimapPoint, layout: ComfyMinimapLayout) {
+export function buildComfyMinimapViewportRect(
+  viewport: { x: number; y: number; zoom: number },
+  canvasSize: { width: number; height: number },
+  geometry: ComfyMinimapGeometry,
+) {
+  const zoom = viewport.zoom || 1
+  return mapFlowRectToMinimap(
+    {
+      x: -viewport.x / zoom,
+      y: -viewport.y / zoom,
+      width: canvasSize.width / zoom,
+      height: canvasSize.height / zoom,
+    },
+    geometry,
+  )
+}
+
+export function buildComfyMinimapLayout(
+  nodes: MinimapNodeLike[],
+  edges: MinimapEdgeLike[],
+  viewport: { x: number; y: number; zoom: number },
+  canvasSize: { width: number; height: number },
+): ComfyMinimapLayout {
+  const geometry = buildComfyMinimapGeometry(nodes, edges)
+  return {
+    ...geometry,
+    viewportRect: buildComfyMinimapViewportRect(viewport, canvasSize, geometry),
+  }
+}
+
+export function minimapPointToFlowPosition(point: MinimapPoint, layout: ComfyMinimapGeometry) {
   return {
     x: layout.content.x + (point.x - layout.offsetX) / layout.scale,
     y: layout.content.y + (point.y - layout.offsetY) / layout.scale,
@@ -947,6 +989,32 @@ function CompareRunResultsModal({ pair, onClose }: { pair: CompareImagePair; onC
   )
 }
 
+const ComfyMinimapGraphLayer = memo(({ geometry }: { geometry: ComfyMinimapGeometry }) => (
+  <>
+    {geometry.edgeLines.map((edge) => (
+      <line
+        key={edge.id}
+        className="comfy-minimap-edge"
+        x1={edge.x1}
+        y1={edge.y1}
+        x2={edge.x2}
+        y2={edge.y2}
+      />
+    ))}
+    {geometry.nodeRects.map((node) => (
+      <rect
+        key={node.id}
+        className="comfy-minimap-node"
+        x={node.x}
+        y={node.y}
+        width={Math.max(3, node.width)}
+        height={Math.max(3, node.height)}
+        rx={1.5}
+      />
+    ))}
+  </>
+))
+
 function ComfyMinimap({
   nodes,
   edges,
@@ -990,34 +1058,35 @@ function ComfyMinimap({
     }
   }, [canvasRef])
 
-  const layout = useMemo(
-    () => buildComfyMinimapLayout(nodes, edges, viewport, canvasSize),
-    [canvasSize, edges, nodes, viewport],
+  const geometry = useMemo(() => buildComfyMinimapGeometry(nodes, edges), [edges, nodes])
+  const viewportRect = useMemo(
+    () => buildComfyMinimapViewportRect(viewport, canvasSize, geometry),
+    [canvasSize, geometry, viewport],
   )
   const viewportDisplayRect = useMemo(() => {
-    const width = Math.max(10, layout.viewportRect.width)
-    const height = Math.max(10, layout.viewportRect.height)
+    const width = Math.max(10, viewportRect.width)
+    const height = Math.max(10, viewportRect.height)
     return {
-      ...layout.viewportRect,
-      x: layout.viewportRect.x + (layout.viewportRect.width - width) / 2,
-      y: layout.viewportRect.y + (layout.viewportRect.height - height) / 2,
+      ...viewportRect,
+      x: viewportRect.x + (viewportRect.width - width) / 2,
+      y: viewportRect.y + (viewportRect.height - height) / 2,
       width,
       height,
     }
-  }, [layout.viewportRect])
+  }, [viewportRect])
 
   const setViewportFromClientPoint = useCallback(
     (clientX: number, clientY: number, dragOffset: MinimapPoint = { x: 0, y: 0 }) => {
       const rect = minimapRef.current?.getBoundingClientRect()
       if (!rect) return
       const point = {
-        x: clamp(((clientX - rect.left) / Math.max(1, rect.width)) * layout.width, 0, layout.width),
-        y: clamp(((clientY - rect.top) / Math.max(1, rect.height)) * layout.height, 0, layout.height),
+        x: clamp(((clientX - rect.left) / Math.max(1, rect.width)) * geometry.width, 0, geometry.width),
+        y: clamp(((clientY - rect.top) / Math.max(1, rect.height)) * geometry.height, 0, geometry.height),
       }
-      const flowPoint = minimapPointToFlowPosition({ x: point.x - dragOffset.x, y: point.y - dragOffset.y }, layout)
+      const flowPoint = minimapPointToFlowPosition({ x: point.x - dragOffset.x, y: point.y - dragOffset.y }, geometry)
       setCenter(flowPoint.x, flowPoint.y, { zoom: viewport.zoom, duration: 0 })
     },
-    [layout, setCenter, viewport.zoom],
+    [geometry, setCenter, viewport.zoom],
   )
 
   const handlePointerDown = (event: ReactPointerEvent<SVGSVGElement>) => {
@@ -1026,8 +1095,8 @@ function ComfyMinimap({
     const rect = minimapRef.current?.getBoundingClientRect()
     if (!rect) return
     const point = {
-      x: clamp(((event.clientX - rect.left) / Math.max(1, rect.width)) * layout.width, 0, layout.width),
-      y: clamp(((event.clientY - rect.top) / Math.max(1, rect.height)) * layout.height, 0, layout.height),
+      x: clamp(((event.clientX - rect.left) / Math.max(1, rect.width)) * geometry.width, 0, geometry.width),
+      y: clamp(((event.clientY - rect.top) / Math.max(1, rect.height)) * geometry.height, 0, geometry.height),
     }
     const viewportCenter = {
       x: viewportDisplayRect.x + viewportDisplayRect.width / 2,
@@ -1055,7 +1124,7 @@ function ComfyMinimap({
   }
 
   return (
-    <div className="comfy-minimap nodrag nopan" style={{ width: layout.width, height: layout.height }}>
+    <div className="comfy-minimap nodrag nopan" style={{ width: geometry.width, height: geometry.height }}>
       <div className="comfy-minimap-header" aria-hidden="true">
         <span />
         <span />
@@ -1064,35 +1133,15 @@ function ComfyMinimap({
         ref={minimapRef}
         aria-label="Workflow minimap"
         className="comfy-minimap-map"
-        height={layout.height}
+        height={geometry.height}
         role="img"
-        viewBox={`0 0 ${layout.width} ${layout.height}`}
-        width={layout.width}
+        viewBox={`0 0 ${geometry.width} ${geometry.height}`}
+        width={geometry.width}
         onPointerDown={handlePointerDown}
       >
-        <rect className="comfy-minimap-bg" x={0} y={0} width={layout.width} height={layout.height} rx={14} />
+        <rect className="comfy-minimap-bg" x={0} y={0} width={geometry.width} height={geometry.height} rx={12} />
         <g className="comfy-minimap-content">
-          {layout.edgeLines.map((edge) => (
-            <line
-              key={edge.id}
-              className="comfy-minimap-edge"
-              x1={edge.x1}
-              y1={edge.y1}
-              x2={edge.x2}
-              y2={edge.y2}
-            />
-          ))}
-          {layout.nodeRects.map((node) => (
-            <rect
-              key={node.id}
-              className="comfy-minimap-node"
-              x={node.x}
-              y={node.y}
-              width={Math.max(3, node.width)}
-              height={Math.max(3, node.height)}
-              rx={1.5}
-            />
-          ))}
+          <ComfyMinimapGraphLayer geometry={geometry} />
           <rect
             className="comfy-minimap-viewport"
             x={viewportDisplayRect.x}
@@ -2243,9 +2292,8 @@ function CanvasSurface() {
     return () => window.removeEventListener('infinity-focus-node', focusNode)
   }, [project.canvas.nodes, setCenter])
 
-  const flowNodes = useMemo<Node[]>(
-    () =>
-      visibleNodes.map((node) => ({
+  const flowNodes = useMemo<Node[]>(() => {
+    return visibleNodes.map((node) => ({
         id: node.id,
         type: node.type,
         position: node.position,
@@ -2262,17 +2310,13 @@ function CanvasSurface() {
         style: flowNodeStyle(node, flowNodeLayoutContext),
         data: {
           ...node.data,
-          nodeReferences: nodeReferenceMap[node.id] ?? [],
+          nodeReferences: nodeReferenceMap[node.id] ?? EMPTY_NODE_REFERENCES,
           resourcesById: project.resources,
           functionsById: project.functions,
           tasksById: project.tasks,
           onFocusReferenceNode: focusCanvasNode,
-          onRunFunction: (nodeId: string) => {
-            void runFunctionNodeWithComfy(nodeId)
-          },
-          onRerunResultNode: (nodeId: string) => {
-            void rerunResultNode(nodeId)
-          },
+          onRunFunction: runFunctionNodeWithComfy,
+          onRerunResultNode: rerunResultNode,
           onCancelResultRun: cancelResultRun,
           onUpdateFunctionRunCount: updateFunctionNodeRunCount,
           onUpdateFunctionInputValue: updateFunctionNodeInputValue,
@@ -2292,8 +2336,8 @@ function CanvasSurface() {
           onOpenFunctionRunForResource: openFunctionRunForResource,
           onResizeNode: updateNodeSize,
         },
-      })),
-    [
+      }))
+  }, [
       deleteNode,
       focusCanvasNode,
       flowNodeLayoutContext,
@@ -2326,8 +2370,7 @@ function CanvasSurface() {
       updateTextResourceValue,
       selectionHighlights.nodeClassNamesById,
       visibleNodes,
-    ],
-  )
+    ])
 
   const flowEdges = useMemo<Edge[]>(() => {
     return visibleEdges.map((edge) => ({
@@ -2352,7 +2395,7 @@ function CanvasSurface() {
 
   useEffect(() => {
     if (selectionBoxActive.current) return
-    setNodes(flowNodes)
+    setNodes((current) => stabilizeFlowNodeData(current, flowNodes))
   }, [flowNodes, setNodes])
 
   useEffect(() => {

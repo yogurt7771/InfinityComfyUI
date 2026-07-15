@@ -1,17 +1,20 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
+  Braces,
   Check,
   Copy,
   Download,
   FileInput,
   History,
   Image as ImageIcon,
+  KeyRound,
   Network,
   Pencil,
   Plus,
   Route,
   RotateCcw,
   RotateCw,
+  Server,
   Settings,
   Trash2,
   Upload,
@@ -2981,29 +2984,49 @@ function EndpointManager({
   const saveDisabled = !draft.name.trim() || !draft.baseUrl.trim()
 
   return (
-    <ModalShell label={title} onClose={onClose}>
+    <ModalShell label={title} modalClassName="endpoint-manager-modal" onClose={onClose}>
       <div className="endpoint-editor">
-        <div className="manager-editor-title">
-          <div>
-            <strong>{draft.name || title}</strong>
-            <span>
-              {status} · queue {queueCount}
+        <div className="manager-editor-title endpoint-editor-summary">
+          <div className="endpoint-editor-identity">
+            <span className="endpoint-editor-glyph" aria-hidden="true">
+              <Server size={18} />
             </span>
+            <div>
+              <strong>{draft.name || title}</strong>
+              <span className="endpoint-editor-address">{draft.baseUrl || 'Server URL not set'}</span>
+            </div>
           </div>
-          {endpoint ? (
-            <button
-              type="button"
-              className="danger-button"
-              aria-label="Delete endpoint"
-              onClick={deleteEndpoint}
-            >
-              <Trash2 size={14} />
-              Delete
-            </button>
-          ) : null}
+          <div className="endpoint-summary-actions">
+            <div className={`endpoint-signal endpoint-signal-${status}`} aria-label={`Server status ${status}, queue ${queueCount}`}>
+              <span className={`status-dot ${status}`} />
+              <span>{status}</span>
+              <span className="endpoint-signal-divider" aria-hidden="true" />
+              <span>{queueCount} queued</span>
+            </div>
+            {endpoint ? (
+              <button
+                type="button"
+                className="danger-button"
+                aria-label="Delete endpoint"
+                onClick={deleteEndpoint}
+              >
+                <Trash2 size={14} />
+                Delete
+              </button>
+            ) : null}
+          </div>
         </div>
+        <div className="endpoint-editor-scroll">
+        <section className="endpoint-section endpoint-connection-section" aria-labelledby="endpoint-connection-heading">
+          <div className="endpoint-section-heading">
+            <span className="endpoint-section-icon" aria-hidden="true"><Server size={16} /></span>
+            <div>
+              <h4 id="endpoint-connection-heading">Connection</h4>
+              <p>Where jobs run and how this server participates in the queue.</p>
+            </div>
+          </div>
         <div className="manager-grid endpoint-grid">
-          <label className="field">
+          <label className="field endpoint-name-field">
             <span>Name</span>
             <input
               aria-label="Endpoint name"
@@ -3011,15 +3034,17 @@ function EndpointManager({
               onChange={(event) => updateDraft({ name: event.target.value })}
             />
           </label>
-          <label className="field">
-            <span>URL</span>
+          <label className="field endpoint-url-field">
+            <span>Server URL</span>
             <input
+              className="endpoint-url-input"
               aria-label="Endpoint URL"
+              spellCheck={false}
               value={draft.baseUrl}
               onChange={(event) => updateDraft({ baseUrl: event.target.value })}
             />
           </label>
-          <label className="field">
+          <label className="field endpoint-number-field">
             <span>Max jobs</span>
             <input
               aria-label="Max jobs"
@@ -3029,7 +3054,7 @@ function EndpointManager({
               onChange={(event) => updateDraft({ maxConcurrentJobs: Math.max(1, Number(event.target.value) || 1) })}
             />
           </label>
-          <label className="field">
+          <label className="field endpoint-number-field">
             <span>Priority</span>
             <input
               aria-label="Priority"
@@ -3038,7 +3063,7 @@ function EndpointManager({
               onChange={(event) => updateDraft({ priority: Number(event.target.value) || 0 })}
             />
           </label>
-          <label className="field">
+          <label className="field endpoint-timeout-field">
             <span>Timeout ms</span>
             <input
               aria-label="Timeout"
@@ -3047,28 +3072,6 @@ function EndpointManager({
               value={draft.timeoutMs}
               onChange={(event) => updateDraft({ timeoutMs: Math.max(1000, Number(event.target.value) || 1000) })}
             />
-          </label>
-          <label className="field endpoint-credential-field endpoint-password-field">
-            <span>ComfyUI password</span>
-            <input
-              aria-label="ComfyUI password"
-              type="password"
-              autoComplete="current-password"
-              value={draft.auth?.type === 'password' ? (draft.auth.password ?? '') : ''}
-              onChange={(event) => updatePassword(event.target.value)}
-            />
-            <small>Saved with this project and removed from exports unless secret export is explicitly enabled.</small>
-          </label>
-          <label className="field endpoint-credential-field endpoint-api-token-field">
-            <span>ComfyUI API token</span>
-            <input
-              aria-label="ComfyUI API token"
-              type="password"
-              autoComplete="off"
-              value={draft.auth?.token ?? ''}
-              onChange={(event) => updateApiToken(event.target.value)}
-            />
-            <small>Used for API calls when this server does not accept its login cookie.</small>
           </label>
           <label className="inline-check endpoint-enabled">
             <input
@@ -3081,18 +3084,57 @@ function EndpointManager({
           </label>
         </div>
         <div className="endpoint-actions">
-          <span className={`status-dot ${status}`} />
           <button type="button" disabled={!canTestEndpoint} onClick={() => endpoint && onTestEndpoint(endpoint)}>
             <Route size={14} />
-            Test
+            Test connection
           </button>
           {endpoint?.health?.message ? <span className="endpoint-message">{endpoint.health.message}</span> : null}
-          {!canTestEndpoint ? <span className="endpoint-message">Save before testing</span> : null}
+          {!canTestEndpoint ? <span className="endpoint-message">Save changes before testing</span> : null}
         </div>
-        <div className="endpoint-function-editor">
-          <div className="binding-header">
-            <h4>Available Functions</h4>
-            <span>{endpointFunctionScopeLabel(draft, workflowFunctionIds)}</span>
+        </section>
+
+        <section className="endpoint-section endpoint-credentials-section" aria-labelledby="endpoint-credentials-heading">
+          <div className="endpoint-section-heading">
+            <span className="endpoint-section-icon" aria-hidden="true"><KeyRound size={16} /></span>
+            <div>
+              <h4 id="endpoint-credentials-heading">Credentials</h4>
+              <p>Secrets stay with this project and are omitted from normal exports.</p>
+            </div>
+          </div>
+          <div className="endpoint-credential-grid">
+            <label className="field endpoint-credential-field endpoint-password-field">
+              <span>ComfyUI password</span>
+              <input
+                aria-label="ComfyUI password"
+                type="password"
+                autoComplete="current-password"
+                value={draft.auth?.type === 'password' ? (draft.auth.password ?? '') : ''}
+                onChange={(event) => updatePassword(event.target.value)}
+              />
+              <small>Use the password configured by ComfyUI authentication.</small>
+            </label>
+            <label className="field endpoint-credential-field endpoint-api-token-field">
+              <span>API token</span>
+              <input
+                aria-label="ComfyUI API token"
+                type="password"
+                autoComplete="off"
+                value={draft.auth?.token ?? ''}
+                onChange={(event) => updateApiToken(event.target.value)}
+              />
+              <small>Used when API calls cannot reuse the server login cookie.</small>
+            </label>
+          </div>
+        </section>
+
+        <section className="endpoint-section endpoint-function-editor" aria-labelledby="endpoint-workflow-heading">
+          <div className="endpoint-section-heading endpoint-section-heading-split">
+            <span className="endpoint-section-icon" aria-hidden="true"><Workflow size={16} /></span>
+            <div>
+              <h4 id="endpoint-workflow-heading">Workflow access</h4>
+              <p>Choose which saved workflows may dispatch jobs here.</p>
+            </div>
+            <span className="endpoint-section-count">{endpointFunctionScopeLabel(draft, workflowFunctionIds)}</span>
           </div>
           <label className="inline-check endpoint-all-functions">
             <input
@@ -3124,28 +3166,41 @@ function EndpointManager({
               <div className="empty-list">No ComfyUI workflow functions</div>
             )}
           </div>
-        </div>
-        <div className="header-editor">
-          <div className="binding-header">
-            <h4>Headers</h4>
-            <button type="button" onClick={addHeader}>
+        </section>
+
+        <section className="endpoint-section header-editor" aria-labelledby="endpoint-headers-heading">
+          <div className="endpoint-section-heading endpoint-section-heading-split">
+            <span className="endpoint-section-icon" aria-hidden="true"><Braces size={16} /></span>
+            <div>
+              <h4 id="endpoint-headers-heading">Custom headers</h4>
+              <p>Attach proxy or gateway headers to every request.</p>
+            </div>
+            <button type="button" aria-label="Add header" onClick={addHeader}>
               <Plus size={14} />
-              Header
+              Add header
             </button>
           </div>
           <div className="header-list">
             {endpointHeaders(draft).map(([key, value], index) => (
               <div className="header-row" key={`${draft.id}_${index}`}>
-                <input
-                  aria-label={`Header name ${index + 1}`}
-                  value={key}
-                  onChange={(event) => updateHeader(index, event.target.value, value)}
-                />
-                <input
-                  aria-label={`Header value ${index + 1}`}
-                  value={value}
-                  onChange={(event) => updateHeader(index, key, event.target.value)}
-                />
+                <label>
+                  <span>Header name</span>
+                  <input
+                    aria-label={`Header name ${index + 1}`}
+                    spellCheck={false}
+                    value={key}
+                    onChange={(event) => updateHeader(index, event.target.value, value)}
+                  />
+                </label>
+                <label>
+                  <span>Value</span>
+                  <input
+                    aria-label={`Header value ${index + 1}`}
+                    spellCheck={false}
+                    value={value}
+                    onChange={(event) => updateHeader(index, key, event.target.value)}
+                  />
+                </label>
                 <button
                   type="button"
                   className="icon-button"
@@ -3157,14 +3212,18 @@ function EndpointManager({
               </div>
             ))}
           </div>
+        </section>
         </div>
         <div className="project-info-actions endpoint-editor-actions">
-          <button type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="button" className="primary-action" disabled={saveDisabled} onClick={saveEndpoint}>
-            Save
-          </button>
+          <span className="endpoint-save-hint">Changes apply to future jobs.</span>
+          <div>
+            <button type="button" onClick={onClose}>
+              Cancel
+            </button>
+            <button type="button" className="primary-action" disabled={saveDisabled} onClick={saveEndpoint}>
+              {endpoint ? 'Save changes' : 'Add server'}
+            </button>
+          </div>
         </div>
       </div>
     </ModalShell>
