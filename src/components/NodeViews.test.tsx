@@ -1138,6 +1138,68 @@ describe('NodeViews', () => {
     renderSelected(<EmptyNodeView {...({ id: 'node_empty', selected: true, data: baseNodeData } as unknown as ComponentProps<typeof EmptyNodeView>)} />)
   })
 
+  it('keeps a selected failed resource resize control to one compact bottom-right handle without an active top strip', () => {
+    const failedOutput: Resource = {
+      ...outputResource,
+      id: 'res_failed_resize',
+      value: {
+        ...(outputResource.value as MediaResourceValue),
+        assetId: 'pending_res_failed_resize',
+        url: '',
+      },
+      source: {
+        ...outputResource.source,
+        taskId: 'task_failed_resize',
+      },
+    }
+    const props = {
+      id: 'node_failed_resize',
+      selected: true,
+      data: {
+        ...baseNodeData,
+        resourcesById: { res_failed_resize: failedOutput },
+        resourceId: 'res_failed_resize',
+        resourceType: 'image',
+        title: 'Failed image',
+        status: 'failed',
+        taskId: 'task_failed_resize',
+        tasksById: {
+          task_failed_resize: {
+            id: 'task_failed_resize',
+            functionNodeId: 'node_fn',
+            functionId: 'fn_render',
+            runIndex: 1,
+            runTotal: 1,
+            status: 'failed',
+            inputRefs: {},
+            inputSnapshot: {},
+            paramsSnapshot: {},
+            workflowTemplateSnapshot: {},
+            compiledWorkflowSnapshot: {},
+            seedPatchLog: [],
+            outputRefs: { image: [{ resourceId: 'res_failed_resize', type: 'image' }] },
+            error: { code: 'generation_failed', message: 'Sampler rejected the prompt' },
+            createdAt: '2026-05-09T00:00:00.000Z',
+            updatedAt: '2026-05-09T00:00:01.000Z',
+          },
+        },
+      },
+    } as unknown as ComponentProps<typeof ResourceNodeView>
+
+    const { container } = render(
+      <ReactFlowProvider>
+        <ResourceNodeView {...props} />
+      </ReactFlowProvider>,
+    )
+
+    const resizeControls = container.querySelectorAll('.react-flow__resize-control')
+    expect(resizeControls).toHaveLength(1)
+    expect(resizeControls[0]).toHaveClass('handle')
+    expect(resizeControls[0]).toHaveClass('bottom', 'right')
+    expect(resizeControls[0]).not.toHaveClass('line')
+    expect(container.querySelector('.resource-node')).not.toHaveClass('resource-node-active')
+  })
+
   it('marks missing required function inputs in red', () => {
     const props = {
       id: 'node_fn',
@@ -2063,6 +2125,204 @@ describe('NodeViews', () => {
     expect(within(resultNode as HTMLElement).getByRole('alert')).toBeVisible()
     fireEvent.click(within(resultNode as HTMLElement).getByRole('button', { name: 'Rerun result' }))
     expect(onRerunResultNode).toHaveBeenCalledWith('node_result')
+  })
+
+  it('shows the associated task error and a copy action inside failed function-output media resources', () => {
+    const failedOutput: Resource = {
+      ...outputResource,
+      id: 'res_failed_image',
+      value: {
+        ...(outputResource.value as MediaResourceValue),
+        assetId: 'pending_res_failed_image',
+        url: '',
+      },
+      source: {
+        ...outputResource.source,
+        taskId: 'task_failed_image',
+      },
+    }
+    const props = {
+      id: 'node_failed_image',
+      selected: false,
+      data: {
+        ...baseNodeData,
+        resourcesById: { res_failed_image: failedOutput },
+        resourceId: 'res_failed_image',
+        resourceType: 'image',
+        title: 'Failed image',
+        status: 'failed',
+        taskId: 'task_failed_image',
+        tasksById: {
+          task_failed_image: {
+            id: 'task_failed_image',
+            functionNodeId: 'node_fn',
+            functionId: 'fn_render',
+            runIndex: 1,
+            runTotal: 1,
+            status: 'failed',
+            inputRefs: {},
+            inputSnapshot: {},
+            paramsSnapshot: {},
+            workflowTemplateSnapshot: {},
+            compiledWorkflowSnapshot: {},
+            seedPatchLog: [],
+            outputRefs: { image: [{ resourceId: 'res_failed_image', type: 'image' }] },
+            error: {
+              code: 'comfy_execution_failed',
+              message: 'ComfyUI rejected node 6: prompt input is invalid',
+            },
+            createdAt: '2026-05-09T00:00:00.000Z',
+            updatedAt: '2026-05-09T00:00:01.000Z',
+          },
+        },
+      },
+    } as unknown as ComponentProps<typeof ResourceNodeView>
+
+    const { container } = render(
+      <ReactFlowProvider>
+        <ResourceNodeView {...props} />
+      </ReactFlowProvider>,
+    )
+
+    const resourceNode = container.querySelector('.resource-node') as HTMLElement
+    const alert = within(resourceNode).getByRole('alert')
+    expect(alert).toHaveTextContent('ComfyUI rejected node 6: prompt input is invalid')
+    expect(within(resourceNode).getByRole('button', { name: 'Copy error' })).toBeVisible()
+    expect(within(resourceNode).getByText('Failed to generate image')).toBeVisible()
+  })
+
+  it('shows an actionable fallback error inside failed function-output media resources without task details', () => {
+    const failedOutput: Resource = {
+      ...outputResource,
+      id: 'res_failed_without_details',
+      value: {
+        ...(outputResource.value as MediaResourceValue),
+        assetId: 'pending_res_failed_without_details',
+        url: '',
+      },
+      source: {
+        ...outputResource.source,
+        taskId: 'task_failed_without_details',
+      },
+    }
+    const props = {
+      id: 'node_failed_without_details',
+      selected: false,
+      data: {
+        ...baseNodeData,
+        resourcesById: { res_failed_without_details: failedOutput },
+        resourceId: 'res_failed_without_details',
+        resourceType: 'image',
+        title: 'Failed image without details',
+        status: 'failed',
+        taskId: 'task_failed_without_details',
+        tasksById: {
+          task_failed_without_details: {
+            id: 'task_failed_without_details',
+            functionNodeId: 'node_fn',
+            functionId: 'fn_render',
+            runIndex: 1,
+            runTotal: 1,
+            status: 'failed',
+            inputRefs: {},
+            inputSnapshot: {},
+            paramsSnapshot: {},
+            workflowTemplateSnapshot: {},
+            compiledWorkflowSnapshot: {},
+            seedPatchLog: [],
+            outputRefs: { image: [{ resourceId: 'res_failed_without_details', type: 'image' }] },
+            createdAt: '2026-05-09T00:00:00.000Z',
+            updatedAt: '2026-05-09T00:00:01.000Z',
+          },
+        },
+      },
+    } as unknown as ComponentProps<typeof ResourceNodeView>
+
+    const { container } = render(
+      <ReactFlowProvider>
+        <ResourceNodeView {...props} />
+      </ReactFlowProvider>,
+    )
+
+    const resourceNode = container.querySelector('.resource-node') as HTMLElement
+    const alert = within(resourceNode).getByRole('alert')
+    expect(alert).not.toHaveTextContent(/^\s*$/)
+    expect(alert).not.toHaveTextContent(/^\s*Failed to generate image\s*$/)
+    expect(alert).toHaveTextContent(/run queue/i)
+    expect(within(resourceNode).getByText('Failed to generate image')).toBeVisible()
+  })
+
+  it.each([
+    ['text', ''],
+    ['number', 0],
+    ['boolean', false],
+  ] as const)('shows the true associated task error and copy action inside failed function-output %s resources', (resourceType, value) => {
+    const taskId = `task_failed_${resourceType}`
+    const resourceId = `res_failed_${resourceType}`
+    const failedOutput = {
+      id: resourceId,
+      type: resourceType,
+      name: `Failed ${resourceType}`,
+      value,
+      source: {
+        kind: 'function_output',
+        outputKey: 'value',
+        functionNodeId: 'node_fn',
+        taskId,
+      },
+    } as Resource
+    const props = {
+      id: `node_failed_${resourceType}`,
+      selected: false,
+      data: {
+        ...baseNodeData,
+        resourcesById: { [resourceId]: failedOutput },
+        resourceId,
+        resourceType,
+        title: `Failed ${resourceType}`,
+        status: 'failed',
+        taskId,
+        error: {
+          code: 'stale_node_error',
+          message: 'Stale canvas error that must not be shown',
+        },
+        tasksById: {
+          [taskId]: {
+            id: taskId,
+            functionNodeId: 'node_fn',
+            functionId: 'fn_render',
+            runIndex: 1,
+            runTotal: 1,
+            status: 'failed',
+            inputRefs: {},
+            inputSnapshot: {},
+            paramsSnapshot: {},
+            workflowTemplateSnapshot: {},
+            compiledWorkflowSnapshot: {},
+            seedPatchLog: [],
+            outputRefs: { value: [{ resourceId, type: resourceType }] },
+            error: {
+              code: 'true_task_error',
+              message: `True ${resourceType} task failure`,
+            },
+            createdAt: '2026-05-09T00:00:00.000Z',
+            updatedAt: '2026-05-09T00:00:01.000Z',
+          },
+        },
+      },
+    } as unknown as ComponentProps<typeof ResourceNodeView>
+
+    const { container } = render(
+      <ReactFlowProvider>
+        <ResourceNodeView {...props} />
+      </ReactFlowProvider>,
+    )
+
+    const resourceNode = container.querySelector('.resource-node') as HTMLElement
+    const alert = within(resourceNode).getByRole('alert')
+    expect(alert).toHaveTextContent(`True ${resourceType} task failure`)
+    expect(alert).not.toHaveTextContent('Stale canvas error that must not be shown')
+    expect(within(resourceNode).getByRole('button', { name: 'Copy error' })).toBeVisible()
   })
 
   it('confirms a succeeded-result rerun in an accessible in-app dialog without invoking browser confirm', () => {

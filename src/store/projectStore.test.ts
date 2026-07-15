@@ -4418,7 +4418,10 @@ describe('project store actions', () => {
     await Promise.all([firstRun, secondRun])
   })
 
-  it('fails a temporary ComfyUI draft instead of falling back from an ineligible selected endpoint', async () => {
+  it.each([
+    ['does not exist', false],
+    ['is disabled', true],
+  ] as const)('fails a temporary ComfyUI draft with an actionable error when the selected endpoint %s', async (_reason, includeDisabledEndpoint) => {
     const ids = ['task_draft', 'res_draft']
     const queuedEndpointIds: string[] = []
     const createComfyClient = vi.fn((endpoint: { id: string }) => {
@@ -4487,12 +4490,16 @@ describe('project store actions', () => {
         comfy: {
           ...state.project.comfy,
           endpoints: [
-            {
-              ...state.project.comfy.endpoints[0]!,
-              id: 'endpoint_selected',
-              name: 'Selected Disabled',
-              enabled: false,
-            },
+            ...(includeDisabledEndpoint
+              ? [
+                  {
+                    ...state.project.comfy.endpoints[0]!,
+                    id: 'endpoint_selected',
+                    name: 'Selected Disabled',
+                    enabled: false,
+                  },
+                ]
+              : []),
             {
               ...state.project.comfy.endpoints[0]!,
               id: 'endpoint_fallback',
@@ -4511,23 +4518,22 @@ describe('project store actions', () => {
     const resource = Object.values(slice.getState().project.resources).find(
       (item) => item.metadata?.workflowFunctionId === temporaryComfyFunction.id,
     )
-    expect(task).toMatchObject({
-      status: 'failed',
-      error: { code: 'endpoint_unavailable', message: 'No eligible ComfyUI endpoint' },
-    })
+    expect(task).toMatchObject({ status: 'failed', error: { code: 'endpoint_unavailable' } })
+    expect(task?.error?.message).toContain('endpoint_selected')
+    expect(task?.error?.message).toMatch(/unavailable|disabled|not found|enable/i)
     expect(resource).toMatchObject({
       source: { taskId: task!.id },
       metadata: { endpointId: undefined },
     })
     expect(slice.getState().project.canvas.nodes.find((node) => node.type === 'resource' && node.data.taskId === task!.id)?.data).toMatchObject({
       status: 'failed',
-      error: { code: 'endpoint_unavailable', message: 'No eligible ComfyUI endpoint' },
+      error: { code: 'endpoint_unavailable', message: task!.error!.message },
     })
     expect(createComfyClient).not.toHaveBeenCalled()
     expect(queuedEndpointIds).toEqual([])
   })
 
-  it('fails a temporary ComfyUI draft when the selected endpoint does not support the draft function', async () => {
+  it('runs a temporary ComfyUI draft on its selected endpoint despite a persistent-function whitelist', async () => {
     const ids = ['task_draft', 'res_draft']
     const queuedEndpointIds: string[] = []
     const createComfyClient = vi.fn((endpoint: { id: string }) => {
@@ -4623,22 +4629,207 @@ describe('project store actions', () => {
     const resource = Object.values(slice.getState().project.resources).find(
       (item) => item.metadata?.workflowFunctionId === temporaryComfyFunction.id,
     )
-    expect(task).toMatchObject({
-      status: 'failed',
-      endpointId: undefined,
-      error: { code: 'endpoint_unavailable', message: 'No eligible ComfyUI endpoint' },
-    })
+    expect(task).toMatchObject({ status: 'succeeded', endpointId: 'endpoint_selected' })
     expect(resource).toMatchObject({
       source: { taskId: task!.id },
-      metadata: { endpointId: undefined },
+      metadata: { endpointId: 'endpoint_selected' },
     })
     expect(slice.getState().project.canvas.nodes.find((node) => node.type === 'resource' && node.data.taskId === task!.id)?.data).toMatchObject({
-      status: 'failed',
-      endpointId: undefined,
-      error: { code: 'endpoint_unavailable', message: 'No eligible ComfyUI endpoint' },
+      status: 'succeeded',
+      endpointId: 'endpoint_selected',
     })
+    expect(createComfyClient).toHaveBeenCalledTimes(1)
+    expect(queuedEndpointIds).toEqual(['endpoint_selected'])
+  })
+
+  it('fails a temporary ComfyUI draft without a selected endpoint instead of falling back to an enabled server', async () => {
+    const ids = ['task_draft_without_endpoint', 'res_draft_without_endpoint']
+    const createComfyClient = vi.fn(() => ({
+      queuePrompt: async () => ({ prompt_id: 'prompt_fallback', number: 1 }),
+      getHistory: async () => ({}),
+    }))
+    const now = () => '2026-05-08T09:00:00.000Z'
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now,
+      randomInt: () => 7,
+      createComfyClient,
+      comfyRunOptions: { maxPollAttempts: 1, pollIntervalMs: 1 },
+    })
+    const temporaryComfyFunction: GenerationFunction = {
+      id: 'temp_comfy_without_endpoint',
+      name: 'Temporary ComfyUI Draft Without Endpoint',
+      category: 'ComfyUI',
+      workflow: {
+        format: 'comfyui_api_json',
+        rawJson: {
+          '9': {
+            class_type: 'SaveImage',
+            _meta: { title: 'Save Image' },
+            inputs: { filename_prefix: 'result' },
+          },
+        },
+        editor: {
+          kind: 'comfyui_embedded',
+          baseUrl: 'http://127.0.0.1:8188',
+          savedAt: now(),
+        },
+      },
+      inputs: [],
+      outputs: [
+        {
+          key: 'image',
+          label: 'Image',
+          type: 'image',
+          bind: { nodeId: '9', nodeTitle: 'Save Image' },
+          extract: { source: 'history', multiple: true },
+        },
+      ],
+      runtimeDefaults: { runCount: 1, seedPolicy: { mode: 'randomize_all_before_submit' } },
+      createdAt: now(),
+      updatedAt: now(),
+    }
+
+    slice.setState((state) => ({
+      project: {
+        ...state.project,
+        comfy: {
+          ...state.project.comfy,
+          endpoints: [
+            {
+              ...state.project.comfy.endpoints[0]!,
+              id: 'endpoint_available',
+              name: 'Available Fallback',
+              enabled: true,
+              health: { status: 'online' },
+              capabilities: { supportedFunctions: [temporaryComfyFunction.id] },
+            },
+          ],
+        },
+      },
+    }))
+
+    await slice.getState().runTemporaryFunctionAtPosition(temporaryComfyFunction, {}, { x: 100, y: 100 }, 1)
+
+    const task = Object.values(slice.getState().project.tasks).find((item) => item.functionId === temporaryComfyFunction.id)
+    expect(task).toMatchObject({ status: 'failed', endpointId: undefined, error: { code: 'endpoint_unavailable' } })
+    expect(task?.error?.message).toMatch(/select.*(?:server|endpoint)|(?:server|endpoint).*select/i)
     expect(createComfyClient).not.toHaveBeenCalled()
-    expect(queuedEndpointIds).toEqual([])
+  })
+
+  it('restores normal endpoint capability scheduling after a previously temporary function becomes persistent', async () => {
+    const ids = ['task_temporary', 'res_temporary', 'task_persistent', 'res_persistent']
+    const queuedEndpointIds: string[] = []
+    let promptIndex = 0
+    const createComfyClient = vi.fn((endpoint: { id: string }) => ({
+      queuePrompt: async () => {
+        promptIndex += 1
+        queuedEndpointIds.push(endpoint.id)
+        return { prompt_id: `prompt_${promptIndex}`, number: promptIndex }
+      },
+      getHistory: async (promptId: string) => ({
+        [promptId]: {
+          outputs: {
+            '9': {
+              images: [{ filename: `${promptId}.png`, subfolder: '', type: 'output' }],
+            },
+          },
+        },
+      }),
+      viewFile: async () => new Blob(['image-bytes'], { type: 'image/png' }),
+    }))
+    const now = () => '2026-05-08T09:00:00.000Z'
+    const slice = createProjectSlice({
+      idFactory: () => ids.shift() ?? 'fallback',
+      now,
+      randomInt: () => 7,
+      createComfyClient,
+      comfyRunOptions: { maxPollAttempts: 1, pollIntervalMs: 1 },
+    })
+    const functionId = 'shared_temporary_then_persistent'
+    const temporaryComfyFunction: GenerationFunction = {
+      id: functionId,
+      name: 'Temporary Then Persistent Workflow',
+      category: 'ComfyUI',
+      workflow: {
+        format: 'comfyui_api_json',
+        rawJson: {
+          '9': {
+            class_type: 'SaveImage',
+            _meta: { title: 'Save Image' },
+            inputs: { filename_prefix: 'result' },
+          },
+        },
+        editor: {
+          kind: 'comfyui_embedded',
+          endpointId: 'endpoint_draft',
+          baseUrl: 'http://127.0.0.1:8188',
+          savedAt: now(),
+        },
+      },
+      inputs: [],
+      outputs: [
+        {
+          key: 'image',
+          label: 'Image',
+          type: 'image',
+          bind: { nodeId: '9', nodeTitle: 'Save Image' },
+          extract: { source: 'history', multiple: true },
+        },
+      ],
+      runtimeDefaults: { runCount: 1, seedPolicy: { mode: 'randomize_all_before_submit' } },
+      createdAt: now(),
+      updatedAt: now(),
+    }
+
+    slice.setState((state) => ({
+      project: {
+        ...state.project,
+        comfy: {
+          ...state.project.comfy,
+          endpoints: [
+            {
+              ...state.project.comfy.endpoints[0]!,
+              id: 'endpoint_draft',
+              name: 'Draft Endpoint',
+              enabled: true,
+              health: { status: 'online' },
+              capabilities: { supportedFunctions: ['some_other_function'] },
+            },
+            {
+              ...state.project.comfy.endpoints[0]!,
+              id: 'endpoint_persistent',
+              name: 'Persistent Endpoint',
+              enabled: true,
+              health: { status: 'online' },
+              capabilities: { supportedFunctions: [functionId] },
+            },
+          ],
+        },
+      },
+    }))
+
+    await slice.getState().runTemporaryFunctionAtPosition(temporaryComfyFunction, {}, { x: 100, y: 100 }, 1)
+    const temporaryTask = Object.values(slice.getState().project.tasks).find((task) => task.functionId === functionId)
+    expect(temporaryTask).toMatchObject({ status: 'succeeded', endpointId: 'endpoint_draft' })
+
+    slice.setState((state) => ({
+      project: {
+        ...state.project,
+        functions: {
+          ...state.project.functions,
+          [functionId]: temporaryComfyFunction,
+        },
+      },
+    }))
+
+    await slice.getState().runFunctionAtPosition(functionId, {}, { x: 100, y: 300 }, 1)
+
+    const persistentTask = Object.values(slice.getState().project.tasks).find(
+      (task) => task.functionId === functionId && task.id !== temporaryTask!.id,
+    )
+    expect(persistentTask).toMatchObject({ status: 'succeeded', endpointId: 'endpoint_persistent' })
+    expect(queuedEndpointIds).toEqual(['endpoint_draft', 'endpoint_persistent'])
   })
 
   it('uploads selected image resources before running image-edit ComfyUI workflows', async () => {

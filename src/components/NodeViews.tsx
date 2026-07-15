@@ -821,6 +821,31 @@ function PendingAssetPreview({ type, status }: { type: ResourceType; status: str
   )
 }
 
+function ResourceErrorDetails({ errorMessage }: { errorMessage: string }) {
+  return (
+    <div className="result-error resource-error" role="alert">
+      <strong>Error</strong>
+      <p>{errorMessage}</p>
+      <button
+        type="button"
+        aria-label="Copy error"
+        onClick={() => void navigator.clipboard?.writeText(errorMessage).catch(() => undefined)}
+      >
+        Copy
+      </button>
+    </div>
+  )
+}
+
+function FailedAssetPreview({ errorMessage, type }: { errorMessage: string; type: ResourceType }) {
+  return (
+    <div className="resource-failed-preview">
+      <ResourceErrorDetails errorMessage={errorMessage} />
+      <PendingAssetPreview type={type} status="failed" />
+    </div>
+  )
+}
+
 function NumberResourceEditor({
   resource,
   onUpdate,
@@ -2099,6 +2124,11 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
   const taskStatus = task?.status
   const assetStatus = resource?.source.kind === 'function_output' ? taskStatus ?? nodeData.status : undefined
   const showAssetStatus = typeof assetStatus === 'string' && visibleAssetStatuses.has(assetStatus)
+  const isAssetActive = typeof assetStatus === 'string' && liveAssetDurationStatuses.has(assetStatus)
+  const assetErrorMessage =
+    assetStatus === 'failed'
+      ? task?.error?.message ?? nodeData.error?.message ?? 'Generation failed. Open Run Queue for details.'
+      : undefined
   const [liveDurationNow, setLiveDurationNow] = useState(() => new Date().toISOString())
   const showLiveDuration =
     Boolean(task?.startedAt) && typeof assetStatus === 'string' && liveAssetDurationStatuses.has(assetStatus)
@@ -2146,7 +2176,7 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
         'canvas-node',
         'resource-node',
         newNodeHighlightClass(nodeData),
-        showAssetStatus ? 'resource-node-active' : undefined,
+        isAssetActive ? 'resource-node-active' : undefined,
         showAssetStatus ? `resource-node-${assetStatus}` : undefined,
       ]
         .filter(Boolean)
@@ -2239,22 +2269,31 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
       {resource?.type === 'text' ? (
         <>
           <ResourceActions canUpload={false} resource={resource} />
-          <TextResourceEditor
-            resource={resource}
-            title={title}
-            onUpdateDisplayMode={nodeData.onUpdateTextResourceDisplayMode}
-            onUpdateValue={nodeData.onUpdateTextResourceValue}
-          />
+          <div className={assetErrorMessage ? 'resource-failed-value' : undefined}>
+            {assetErrorMessage ? <ResourceErrorDetails errorMessage={assetErrorMessage} /> : null}
+            <TextResourceEditor
+              resource={resource}
+              title={title}
+              onUpdateDisplayMode={nodeData.onUpdateTextResourceDisplayMode}
+              onUpdateValue={nodeData.onUpdateTextResourceValue}
+            />
+          </div>
         </>
       ) : resource?.type === 'number' ? (
         <>
           <ResourceActions canUpload={false} resource={resource} />
-          <NumberResourceEditor resource={resource} onUpdate={nodeData.onUpdateNumberResourceValue} />
+          <div className={assetErrorMessage ? 'resource-failed-value' : undefined}>
+            {assetErrorMessage ? <ResourceErrorDetails errorMessage={assetErrorMessage} /> : null}
+            <NumberResourceEditor resource={resource} onUpdate={nodeData.onUpdateNumberResourceValue} />
+          </div>
         </>
       ) : resource?.type === 'boolean' ? (
         <>
           <ResourceActions canUpload={false} resource={resource} />
-          <BooleanResourceEditor resource={resource} title={title} onUpdate={nodeData.onUpdateBooleanResourceValue} />
+          <div className={assetErrorMessage ? 'resource-failed-value' : undefined}>
+            {assetErrorMessage ? <ResourceErrorDetails errorMessage={assetErrorMessage} /> : null}
+            <BooleanResourceEditor resource={resource} title={title} onUpdate={nodeData.onUpdateBooleanResourceValue} />
+          </div>
         </>
       ) : resource && isMediaResource(resource) ? (
         <>
@@ -2282,6 +2321,8 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
             >
               <ResourcePreview resource={resource} />
             </div>
+          ) : assetErrorMessage ? (
+            <FailedAssetPreview errorMessage={assetErrorMessage} type={resource.type} />
           ) : showAssetStatus ? (
             <PendingAssetPreview type={resource.type} status={assetStatus} />
           ) : (

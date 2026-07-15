@@ -1748,6 +1748,44 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
     const functionDefinitionForTask = (task: ExecutionTask) =>
       task.functionSnapshot ?? functionDefinitionById(task.functionId)
 
+    const isTemporaryFunctionDefinition = (functionDef: GenerationFunction) =>
+      !get().project.functions[functionDef.id] && temporaryFunctionDrafts.has(functionDef.id)
+
+    const isTemporaryComfyFunctionDefinition = (functionDef: GenerationFunction) =>
+      isTemporaryFunctionDefinition(functionDef) && functionDef.workflow.format === 'comfyui_api_json'
+
+    const temporaryComfyEndpointId = (functionDef: GenerationFunction) =>
+      isTemporaryComfyFunctionDefinition(functionDef)
+        ? functionDef.workflow.editor?.endpointId
+        : undefined
+
+    const endpointCanRunFunctionDefinition = (endpoint: ComfyEndpointConfig, functionDef: GenerationFunction) => {
+      if (isTemporaryComfyFunctionDefinition(functionDef)) {
+        const requiredEndpointId = temporaryComfyEndpointId(functionDef)
+        return Boolean(requiredEndpointId) && endpoint.id === requiredEndpointId
+      }
+      return endpointSupportsFunction(endpoint, functionDef.id)
+    }
+
+    const endpointUnavailableMessageForFunction = (functionDef: GenerationFunction) => {
+      const requiredEndpointId = temporaryComfyEndpointId(functionDef)
+      if (isTemporaryComfyFunctionDefinition(functionDef) && !requiredEndpointId) {
+        return 'Temporary ComfyUI workflow has no selected endpoint. Choose a ComfyUI server and retry.'
+      }
+      if (!requiredEndpointId) {
+        return 'No eligible ComfyUI endpoint'
+      }
+
+      const selectedEndpoint = get().project.comfy.endpoints.find((endpoint) => endpoint.id === requiredEndpointId)
+      if (!selectedEndpoint) {
+        return `Selected ComfyUI endpoint "${requiredEndpointId}" was not found. Choose an available server and retry.`
+      }
+      if (!selectedEndpoint.enabled) {
+        return `Selected ComfyUI endpoint "${requiredEndpointId}" is disabled. Enable it in ComfyUI Servers and retry.`
+      }
+      return `Selected ComfyUI endpoint "${requiredEndpointId}" is unavailable. Check the server status and retry.`
+    }
+
     const markMissingInputs = (nodeId: string, missingInputKeys: string[]) => {
       const now = runtime.now()
       set((current) => ({
@@ -2010,10 +2048,10 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       void resolvePendingDependencyTasks()
     }
 
-    const endpointCanRunQueuedComfyItem = (endpoint: ComfyEndpointConfig, item: QueuedComfyRun) =>
-      item.kind === 'command' && item.requiredEndpointId
-        ? endpoint.id === item.requiredEndpointId && endpointSupportsFunction(endpoint, item.functionId)
-        : endpointSupportsFunction(endpoint, item.functionId)
+    const endpointCanRunQueuedComfyItem = (endpoint: ComfyEndpointConfig, item: QueuedComfyRun) => {
+      if (item.kind === 'command' && item.requiredEndpointId && endpoint.id !== item.requiredEndpointId) return false
+      return endpointCanRunFunctionDefinition(endpoint, item.functionDef)
+    }
 
     const takeNextQueuedRun = (endpoint: ComfyEndpointConfig) => {
       const index = comfyQueue.findIndex((item) => endpointCanRunQueuedComfyItem(endpoint, item))
@@ -4312,10 +4350,10 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       }
 
       const workerEndpoints = get().project.comfy.endpoints.filter(
-        (endpoint) => endpointIsWorkerEligible(endpoint) && endpointSupportsFunction(endpoint, task.functionId),
+        (endpoint) => endpointIsWorkerEligible(endpoint) && endpointCanRunFunctionDefinition(endpoint, functionDef),
       )
       if (workerEndpoints.length === 0) {
-        failResultRunInPlace(resultNodeId, task.id, 'endpoint_unavailable', 'No eligible ComfyUI endpoint')
+        failResultRunInPlace(resultNodeId, task.id, 'endpoint_unavailable', endpointUnavailableMessageForFunction(functionDef))
         return
       }
 
@@ -5049,9 +5087,18 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         if (endpoints.some((endpoint) => endpointCanRunQueuedComfyItem(endpoint, queuedRun))) continue
         comfyQueue.splice(index, 1)
         if (queuedRun.kind === 'command') {
-          failComfyCommandRunInPlace(queuedRun, 'endpoint_unavailable', 'No eligible ComfyUI endpoint')
+          failComfyCommandRunInPlace(
+            queuedRun,
+            'endpoint_unavailable',
+            endpointUnavailableMessageForFunction(queuedRun.functionDef),
+          )
         } else {
-          failResultRunInPlace(queuedRun.resultNodeId, queuedRun.taskId, 'endpoint_unavailable', 'No eligible ComfyUI endpoint')
+          failResultRunInPlace(
+            queuedRun.resultNodeId,
+            queuedRun.taskId,
+            'endpoint_unavailable',
+            endpointUnavailableMessageForFunction(queuedRun.functionDef),
+          )
         }
         queuedRun.resolveCompletion()
       }
@@ -6087,13 +6134,14 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       }
 
       const hasPendingDependencies = hasPendingInputRefs(runtimeInputValues)
+      const isTemporaryComfyFunction = isTemporaryComfyFunctionDefinition(functionDef)
       const preferredComfyEndpointId =
-        functionDef.workflow.format === 'comfyui_api_json' && !state.project.functions[functionId]
+        isTemporaryComfyFunction && functionDef.workflow.format === 'comfyui_api_json'
           ? functionDef.workflow.editor?.endpointId
           : undefined
       const queuedComfyEndpointId =
         !hasPendingDependencies && functionDef.workflow.format === 'comfyui_api_json'
-          ? preferredComfyEndpointId
+          ? isTemporaryComfyFunction
             ? preferredComfyEndpointId
             : (() => {
                 const workerEndpoints = state.project.comfy.endpoints.filter(
@@ -7940,10 +7988,10 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       }
 
       const workerEndpoints = get().project.comfy.endpoints.filter(
-        (endpoint) => endpointIsWorkerEligible(endpoint) && endpointSupportsFunction(endpoint, task.functionId),
+        (endpoint) => endpointIsWorkerEligible(endpoint) && endpointCanRunFunctionDefinition(endpoint, functionDef),
       )
       if (workerEndpoints.length === 0) {
-        failResultRunInPlace(resultNodeId, taskId, 'endpoint_unavailable', 'No eligible ComfyUI endpoint')
+        failResultRunInPlace(resultNodeId, taskId, 'endpoint_unavailable', endpointUnavailableMessageForFunction(functionDef))
         return
       }
 

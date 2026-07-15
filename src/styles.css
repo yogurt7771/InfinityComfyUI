@@ -4010,6 +4010,19 @@ textarea[aria-invalid="true"] {
     rgba(255, 241, 242, 0.64);
 }
 
+.resource-failed-preview,
+.resource-failed-value {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
+  min-height: 0;
+}
+
+.resource-failed-preview .result-error,
+.resource-failed-value .result-error {
+  margin-top: 10px;
+}
+
 .result-meta {
   display: flex;
   align-items: center;
