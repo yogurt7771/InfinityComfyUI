@@ -6,7 +6,6 @@ import { EmptyNodeView, FunctionNodeView, GroupNodeView, ResourceNodeView, Resul
 import { projectStore } from '../store/projectStore'
 import { createRequestFunction, REQUEST_FUNCTION_ID } from '../domain/requestFunction'
 import { createOpenAILlmFunction } from '../domain/openaiLlm'
-import { comfyProxyUrl } from '../domain/comfyProxy'
 import type {
   FunctionOutputDef,
   GeminiImageConfig,
@@ -2497,13 +2496,13 @@ describe('NodeViews', () => {
 
     fireEvent.click(within(container).getByRole('button', { name: 'Copy asset' }))
 
-    const proxyBaseUrl = new URL(comfyProxyUrl('http://127.0.0.1:27707'), window.location.origin).toString()
     await waitFor(() =>
-      expect(fetch).toHaveBeenCalledWith(`${proxyBaseUrl}view?filename=render.png&subfolder=&type=output`, {
+      expect(fetch).toHaveBeenCalledWith('http://127.0.0.1:27707/view?filename=render.png&subfolder=&type=output', {
         method: 'GET',
         headers: { 'X-Workspace': 'infinity' },
       }),
     )
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes('/__comfy_proxy/'))).toBe(false)
     expect(write).toHaveBeenCalledTimes(1)
     expect(write.mock.calls[0]?.[0][0]).toMatchObject({
       items: {

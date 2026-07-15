@@ -59,6 +59,50 @@ describe('CanvasWorkspace', () => {
     source: { kind: 'user_upload' },
   }
 
+  const configureTemporaryComfyProject = (
+    auth: NonNullable<ProjectState['comfy']['endpoints'][number]['auth']> = {
+      type: 'token',
+      token: 'fixture-canvas-token',
+    },
+    baseUrl = 'https://comfyui.example.test:8443/custom/ui?theme=dark',
+  ) => {
+    const endpoint = {
+      id: 'endpoint_temporary_workflow',
+      name: 'Temporary Workflow ComfyUI',
+      baseUrl,
+      enabled: true,
+      maxConcurrentJobs: 2,
+      priority: 10,
+      timeoutMs: 600000,
+      auth,
+      health: { status: 'online' as const },
+    }
+    const project: ProjectState = {
+      ...originalProject,
+      project: { ...originalProject.project, id: 'project_temporary_comfy_workflow' },
+      canvas: {
+        nodes: [
+          {
+            id: 'node_reference_image',
+            type: 'resource',
+            position: { x: 0, y: 0 },
+            data: { resourceId: imageResource.id, resourceType: 'image', title: 'Reference image' },
+          },
+        ],
+        edges: [],
+        viewport: { x: 0, y: 0, zoom: 1 },
+      },
+      resources: { [imageResource.id]: imageResource },
+      comfy: { ...originalProject.comfy, endpoints: [endpoint] },
+    }
+    projectStore.setState({
+      project,
+      selectedNodeId: 'node_reference_image',
+      selectedNodeIds: ['node_reference_image'],
+    } as Partial<ReturnType<typeof projectStore.getState>>)
+    return endpoint
+  }
+
   const renderFunctionRunDialog = (
     initialFunction: GenerationFunction,
     options: { onEditComfyWorkflow?: () => void; canReplaceCurrent?: boolean } = {},
@@ -286,14 +330,156 @@ describe('CanvasWorkspace', () => {
     expect(within(dialog).getByRole('textbox', { name: 'Gemini prompt' })).toBeInTheDocument()
   })
 
-  it('opens the one-off ComfyUI workflow runner from the built-in menu', () => {
+  it('opens the selected one-off ComfyUI endpoint in a top-level tab without iframe, proxy, or token URL leakage', () => {
+    const endpoint = configureTemporaryComfyProject()
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue({} as WindowProxy)
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
     const menu = openAddMenu()
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'ComfyUI Workflow' }))
 
     const dialog = screen.getByRole('dialog', { name: 'ComfyUI workflow runner' })
     expect(within(dialog).getByRole('combobox', { name: 'ComfyUI server for temporary workflow' })).toBeInTheDocument()
-    expect(within(dialog).getByRole('button', { name: 'Edit temporary workflow in ComfyUI' })).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Edit temporary workflow in ComfyUI' }))
+
+    expect(openSpy).toHaveBeenCalledTimes(1)
+    expect(openSpy.mock.calls[0]?.[0]).toBe(endpoint.baseUrl)
+    expect(openSpy.mock.calls[0]?.[1]).toBe('_blank')
+    const openedUrl = new URL(String(openSpy.mock.calls[0]?.[0]))
+    expect(openedUrl.searchParams.has('token')).toBe(false)
+    expect(openedUrl.href).not.toContain('/__comfy_proxy/')
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: 'ComfyUI workflow runner' })).toBeVisible()
+    expect(screen.queryByRole('dialog', { name: 'ComfyUI Workflow Editor' })).not.toBeInTheDocument()
+    expect(document.querySelector('iframe')).toBeNull()
     expect(screen.queryByRole('menu', { name: 'Add node' })).not.toBeInTheDocument()
+  })
+
+  it('submits a one-off endpoint password directly from the browser without exposing its fallback token', () => {
+    configureTemporaryComfyProject(
+      { type: 'password', password: 'fixture-ui-password', token: 'fixture-fallback-token' },
+      'https://comfyui.example.test:8443',
+    )
+    vi.spyOn(window, 'open').mockReturnValue({} as WindowProxy)
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    const submitSpy = vi.spyOn(HTMLFormElement.prototype, 'submit').mockImplementation(() => undefined)
+
+    const menu = openAddMenu()
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'ComfyUI Workflow' }))
+    const dialog = screen.getByRole('dialog', { name: 'ComfyUI workflow runner' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Edit temporary workflow in ComfyUI' }))
+
+    const submittedForm = submitSpy.mock.contexts[0] as HTMLFormElement | undefined
+    expect(submittedForm).toBeDefined()
+    expect(submittedForm?.method.toLowerCase()).toBe('post')
+    expect(submittedForm?.action).toBe('https://comfyui.example.test:8443/login')
+    expect(submittedForm?.target).not.toBe('_self')
+    const body = new FormData(submittedForm)
+    expect(body.get('password')).toBe('fixture-ui-password')
+    expect(body.get('token')).toBeNull()
+    expect(submittedForm?.outerHTML).not.toContain('/__comfy_proxy/')
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: 'ComfyUI workflow runner' })).toBeVisible()
+    expect(screen.queryByRole('dialog', { name: 'ComfyUI Workflow Editor' })).not.toBeInTheDocument()
+    expect(document.querySelector('iframe')).toBeNull()
+  })
+
+  it('shows an accessible popup-blocked error and keeps the one-off workflow dialog open', () => {
+    configureTemporaryComfyProject()
+    vi.spyOn(window, 'open').mockReturnValue(null)
+
+    const menu = openAddMenu()
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'ComfyUI Workflow' }))
+    const dialog = screen.getByRole('dialog', { name: 'ComfyUI workflow runner' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Edit temporary workflow in ComfyUI' }))
+
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(/allow pop-ups/i)
+    expect(screen.getByRole('dialog', { name: 'ComfyUI workflow runner' })).toBeVisible()
+    expect(screen.queryByRole('dialog', { name: 'ComfyUI Workflow Editor' })).not.toBeInTheDocument()
+    expect(document.querySelector('iframe')).toBeNull()
+  })
+
+  it('accepts pasted ComfyUI API workflow JSON and enters the existing run configuration with endpoint and candidates intact', () => {
+    const endpoint = configureTemporaryComfyProject()
+    const runTemporaryFunctionAtPosition = vi.fn().mockResolvedValue('task_temporary_comfy')
+    projectStore.setState({
+      runTemporaryFunctionAtPosition,
+    } as Partial<ReturnType<typeof projectStore.getState>>)
+    const initialFunctionIds = Object.keys(projectStore.getState().project.functions).sort()
+    const apiWorkflow = {
+      '10': {
+        class_type: 'LoadImage',
+        _meta: { title: 'Reference Image' },
+        inputs: { image: 'reference.png' },
+      },
+      '20': {
+        class_type: 'SaveImage',
+        _meta: { title: 'Result' },
+        inputs: { images: ['10', 0] },
+      },
+    }
+
+    const menu = openAddMenu()
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'ComfyUI Workflow' }))
+    const workflowDialog = screen.getByRole('dialog', { name: 'ComfyUI workflow runner' })
+    fireEvent.change(within(workflowDialog).getByRole('textbox', { name: 'ComfyUI API workflow JSON' }), {
+      target: { value: JSON.stringify(apiWorkflow) },
+    })
+    fireEvent.click(within(workflowDialog).getByRole('button', { name: 'Use workflow JSON' }))
+
+    const runDialog = screen.getByRole('dialog', { name: 'Run ComfyUI Workflow' })
+    const inputPreview = within(runDialog).getByRole('button', { name: 'Preview Image input' })
+    expect(inputPreview).toBeEnabled()
+    expect(within(inputPreview).getByRole('img', { name: 'reference.png' })).toBeInTheDocument()
+    expect(Object.keys(projectStore.getState().project.functions).sort()).toEqual(initialFunctionIds)
+
+    fireEvent.click(within(runDialog).getByRole('button', { name: 'Run function from popup' }))
+
+    expect(runTemporaryFunctionAtPosition).toHaveBeenCalledTimes(1)
+    expect(runTemporaryFunctionAtPosition.mock.calls[0]?.[0]).toMatchObject({
+      id: expect.stringMatching(/^temp_comfy_/),
+      workflow: {
+        format: 'comfyui_api_json',
+        rawJson: apiWorkflow,
+        editor: { endpointId: endpoint.id },
+      },
+    })
+    expect(runTemporaryFunctionAtPosition.mock.calls[0]?.[1]).toEqual({
+      image: { resourceId: imageResource.id, type: 'image' },
+    })
+  })
+
+  it.each([
+    ['invalid JSON', '{not-json', /valid JSON/i],
+    ['an array', '[]', /JSON object/i],
+    ['null', 'null', /JSON object/i],
+    ['an empty object', '{}', /at least one|non-empty|node/i],
+    ['a ComfyUI UI workflow', '{"nodes":[],"links":[]}', /API workflow|node mapping/i],
+    ['an array-valued node', '{"10":[]}', /node.*object/i],
+    ['a node without class_type', '{"10":{"inputs":{}}}', /class_type/i],
+    ['a node with blank class_type', '{"10":{"class_type":"   ","inputs":{}}}', /class_type/i],
+    ['a node without inputs', '{"10":{"class_type":"SaveImage"}}', /inputs/i],
+    ['a node with array inputs', '{"10":{"class_type":"SaveImage","inputs":[]}}', /inputs.*object/i],
+  ])('rejects %s without creating a temporary function or leaving the workflow dialog', (_label, value, message) => {
+    configureTemporaryComfyProject()
+    const runTemporaryFunctionAtPosition = vi.fn().mockResolvedValue('unexpected_task')
+    projectStore.setState({
+      runTemporaryFunctionAtPosition,
+    } as Partial<ReturnType<typeof projectStore.getState>>)
+    const initialFunctionIds = Object.keys(projectStore.getState().project.functions).sort()
+
+    const menu = openAddMenu()
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'ComfyUI Workflow' }))
+    const workflowDialog = screen.getByRole('dialog', { name: 'ComfyUI workflow runner' })
+    fireEvent.change(within(workflowDialog).getByRole('textbox', { name: 'ComfyUI API workflow JSON' }), {
+      target: { value },
+    })
+    fireEvent.click(within(workflowDialog).getByRole('button', { name: 'Use workflow JSON' }))
+
+    expect(within(workflowDialog).getByRole('alert')).toHaveTextContent(message)
+    expect(screen.getByRole('dialog', { name: 'ComfyUI workflow runner' })).toBeVisible()
+    expect(screen.queryByRole('dialog', { name: 'Run ComfyUI Workflow' })).not.toBeInTheDocument()
+    expect(Object.keys(projectStore.getState().project.functions).sort()).toEqual(initialFunctionIds)
+    expect(runTemporaryFunctionAtPosition).not.toHaveBeenCalled()
   })
 
   it('shows media input previews inside the function run slots', () => {

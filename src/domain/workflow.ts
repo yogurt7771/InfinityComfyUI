@@ -23,6 +23,43 @@ export type WorkflowInputCandidate = FunctionInputDef
 
 type InputValues = Record<string, PrimitiveInputValue | ResourceRef>
 
+const workflowObject = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+
+export function assertComfyApiWorkflow(value: unknown): asserts value is ComfyWorkflow {
+  if (!workflowObject(value)) {
+    throw new TypeError('ComfyUI API workflow must be a JSON object of nodes.')
+  }
+
+  const nodes = Object.entries(value)
+  if (nodes.length === 0) {
+    throw new TypeError('ComfyUI API workflow must contain at least one node.')
+  }
+
+  for (const [nodeId, node] of nodes) {
+    if (!workflowObject(node)) {
+      throw new TypeError(`ComfyUI API workflow node "${nodeId}" must be an object.`)
+    }
+    if (typeof node.class_type !== 'string' || !node.class_type.trim()) {
+      throw new TypeError(`ComfyUI API workflow node "${nodeId}" must include a class_type.`)
+    }
+    if (!workflowObject(node.inputs)) {
+      throw new TypeError(`ComfyUI API workflow node "${nodeId}" must include an inputs object.`)
+    }
+  }
+}
+
+export function parseComfyApiWorkflowJson(source: string): ComfyWorkflow {
+  let value: unknown
+  try {
+    value = JSON.parse(source) as unknown
+  } catch (error) {
+    throw new TypeError(`Enter valid JSON${error instanceof Error ? `: ${error.message}` : '.'}`, { cause: error })
+  }
+  assertComfyApiWorkflow(value)
+  return value
+}
+
 const cloneWorkflow = (workflow: ComfyWorkflow): ComfyWorkflow =>
   structuredClone(workflow) as ComfyWorkflow
 

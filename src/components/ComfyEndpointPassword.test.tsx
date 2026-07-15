@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ComfyWorkflowEditorDialog, LeftPanel } from './WorkbenchPanels'
+import { LeftPanel, openComfyEditorInBrowser } from './WorkbenchPanels'
 import { projectStore } from '../store/projectStore'
 
 const endpointPasswordLabel = /^comfyui password$/i
@@ -70,7 +70,7 @@ describe('ComfyUI server password configuration', () => {
 
     fireEvent.change(passwordInput, { target: { value: 'fixture-edited-password' } })
     fireEvent.change(tokenInput, { target: { value: 'fixture-edited-token' } })
-    fireEvent.click(within(dialog).getByRole('button', { name: /save/i }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }))
 
     expect(projectStore.getState().project.comfy.endpoints[0]?.auth).toEqual({
       type: 'password',
@@ -143,7 +143,7 @@ describe('ComfyUI server password configuration', () => {
     fireEvent.change(within(dialog).getByLabelText(endpointPasswordLabel), {
       target: { value: 'fixture-created-ui-password' },
     })
-    fireEvent.click(within(dialog).getByRole('button', { name: /save/i }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add server' }))
 
     expect(projectStore.getState().project.comfy.endpoints.at(-1)).toMatchObject({
       name: 'Created Password ComfyUI',
@@ -152,8 +152,11 @@ describe('ComfyUI server password configuration', () => {
     })
   })
 
-  it('bootstraps the isolated ComfyUI editor with a saved password and optional bearer fallback', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
+  it('submits a saved password directly to the ComfyUI login route without exposing its bearer fallback', () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    const popup = {} as WindowProxy
+    vi.spyOn(window, 'open').mockReturnValue(popup)
+    const submitSpy = vi.spyOn(HTMLFormElement.prototype, 'submit').mockImplementation(() => undefined)
     const endpoint = {
       ...projectStore.getState().project.comfy.endpoints[0]!,
       auth: {
@@ -163,25 +166,18 @@ describe('ComfyUI server password configuration', () => {
       },
     }
 
-    render(<ComfyWorkflowEditorDialog endpoint={endpoint} onClose={vi.fn()} onSave={vi.fn()} />)
+    const error = openComfyEditorInBrowser(endpoint)
+    const submittedForm = submitSpy.mock.contexts[0] as HTMLFormElement | undefined
 
-    await screen.findByTitle('ComfyUI editor Password Test ComfyUI')
-    const [authInput, authInit] = fetchMock.mock.calls[0] ?? []
-    expect(authInit).toEqual(expect.objectContaining({
-      body: JSON.stringify({
-        bearerToken: 'fixture-editor-fallback-token',
-        password: 'fixture-editor-ui-password',
-      }),
-      credentials: 'include',
-      method: 'POST',
-    }))
-    const visibleArtifacts = JSON.stringify({
-      authUrl: String(authInput),
-      dom: document.documentElement.outerHTML,
-      localStorage: Object.fromEntries(Object.entries(window.localStorage)),
-      sessionStorage: Object.fromEntries(Object.entries(window.sessionStorage)),
-    })
-    expect(visibleArtifacts).not.toContain('fixture-editor-ui-password')
-    expect(visibleArtifacts).not.toContain('fixture-editor-fallback-token')
+    expect(error).toBeUndefined()
+    expect(submittedForm?.method.toLowerCase()).toBe('post')
+    expect(submittedForm?.action).toBe('http://127.0.0.1:27707/login')
+    const body = new FormData(submittedForm)
+    expect(body.get('password')).toBe('fixture-editor-ui-password')
+    expect(body.get('token')).toBeNull()
+    expect(submittedForm?.action).not.toContain('fixture-editor-fallback-token')
+    expect(submittedForm?.outerHTML).not.toContain('/__comfy_proxy/')
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(popup.opener).toBeNull()
   })
 })

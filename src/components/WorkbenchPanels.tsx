@@ -40,6 +40,8 @@ import { defaultGeminiLlmConfig, isGeminiLlmFunction, mergedGeminiLlmConfig } fr
 import { getProjectRunHistory, getSelectedNodesRunHistory } from '../domain/runHistory'
 import { formatDurationMs, formatHistoryTimestamp, runDurationMs } from '../domain/runTiming'
 import { downloadConfigPackage, downloadProjectPackage, readPackageFile } from '../domain/projectTransfer'
+import { parseComfyEndpointUrl } from '../domain/comfyEndpoint'
+import { parseComfyApiWorkflowJson } from '../domain/workflow'
 import type {
   ComfyEndpointConfig,
   ComfyUiWorkflow,
@@ -57,14 +59,6 @@ import type {
   Resource,
   ResourceType,
 } from '../domain/types'
-import {
-  ComfyFrameLoginRequiredError,
-  exportWorkflowFromComfyFrame,
-  loadApiWorkflowIntoComfyFrame,
-  loadUiWorkflowIntoComfyFrame,
-  waitForComfyFrameBridge,
-} from '../domain/comfyFrameBridge'
-import { comfyProxyUrl, prepareIsolatedComfyProxySession } from '../domain/comfyProxy'
 import { projectStore, useProjectStore } from '../store/projectStore'
 import { ResourcePreview } from './ResourcePreview'
 import { FullResourcePreviewModal } from './ResourcePreviewModal'
@@ -358,7 +352,7 @@ const safeInspectorFilePart = (value: string) => {
 }
 
 const downloadTextSnapshot = (filename: string, content: string, mimeType = 'application/json') => {
-  const objectUrl = URL.createObjectURL(new Blob([content], { type: `${mimeType};charset=utf-8` }))
+  const objectUrl = URL.createObjectURL(new Blob([content], { type: mimeType }))
   const anchor = document.createElement('a')
   anchor.href = objectUrl
   anchor.download = filename
@@ -1251,12 +1245,6 @@ const parseHeaderJson = (value: string) => {
   return Object.fromEntries(Object.entries(parsed).map(([key, headerValue]) => [key, String(headerValue)]))
 }
 
-export type EmbeddedComfySave = {
-  rawJson: ComfyWorkflow
-  uiJson?: ComfyUiWorkflow
-  editor: ComfyWorkflowEditorMetadata
-}
-
 const isComfyWorkflowFunction = (fn: GenerationFunction) => fn.workflow.format === 'comfyui_api_json'
 
 const endpointSupportsWorkflowFunction = (endpoint: ComfyEndpointConfig, functionId: string) => {
@@ -1298,194 +1286,63 @@ const setEndpointFunctionAvailability = (
   onUpdateEndpoint(endpoint.id, endpointCapabilitiesPatch(endpoint, nextFunctions))
 }
 
-export function ComfyWorkflowEditorDialog({
-  open = true,
-  endpoint,
-  initialUiJson,
-  initialApiJson,
-  onSave,
-  onClose,
-}: {
-  open?: boolean
-  endpoint?: ComfyEndpointConfig
-  initialUiJson?: ComfyUiWorkflow
-  initialApiJson?: ComfyWorkflow
-  onSave: (value: EmbeddedComfySave) => void
-  onClose: () => void
-}) {
-  const frameRef = useRef<HTMLIFrameElement>(null)
-  const wasOpenRef = useRef(false)
-  const initializingRef = useRef<Promise<void> | undefined>(undefined)
-  const [status, setStatus] = useState(endpoint ? 'Loading ComfyUI editor' : 'No ComfyUI endpoint configured')
-  const [error, setError] = useState<string>()
-  const [saving, setSaving] = useState(false)
-  const [frameReady, setFrameReady] = useState(false)
-  const [frameSrc, setFrameSrc] = useState<string>()
-  const [frameOrigin, setFrameOrigin] = useState<string>()
-  const endpointId = endpoint?.id
-  const endpointBaseUrl = endpoint?.baseUrl
-  const proxyUrl = endpointBaseUrl ? comfyProxyUrl(endpointBaseUrl) : undefined
-  const proxyBearerToken =
-    endpoint?.auth?.type === 'token' || endpoint?.auth?.type === 'password' ? endpoint.auth.token : undefined
-  const proxyPassword = endpoint?.auth?.type === 'password' ? endpoint.auth.password : undefined
-
-  /* eslint-disable react-hooks/set-state-in-effect -- A changed endpoint invalidates the iframe readiness state immediately. */
-  useEffect(() => {
-    setFrameReady(false)
-    setFrameSrc(undefined)
-    setFrameOrigin(undefined)
-    setStatus(endpointId ? 'Loading ComfyUI editor' : 'No ComfyUI endpoint configured')
-    setError(undefined)
-    wasOpenRef.current = false
-    if (!open || !endpointBaseUrl || !proxyUrl) return
-
-    let cancelled = false
-    setStatus('Preparing secure ComfyUI session')
-    void prepareIsolatedComfyProxySession(endpointBaseUrl, {
-      bearerToken: proxyBearerToken,
-      password: proxyPassword,
-    })
-      .then((session) => {
-        if (cancelled) return
-        setFrameOrigin(session.frameOrigin)
-        setFrameSrc(session.proxyUrl)
-        setStatus('Loading ComfyUI editor')
-      })
-      .catch((err) => {
-        if (cancelled) return
-        setError(err instanceof Error ? err.message : 'Failed to prepare the ComfyUI proxy session')
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [endpointBaseUrl, endpointId, open, proxyBearerToken, proxyPassword, proxyUrl])
-  /* eslint-enable react-hooks/set-state-in-effect */
-
-  const initializeFrame = useCallback(async () => {
-    if (initializingRef.current) {
-      try {
-        await initializingRef.current
-      } catch {
-        // The active initializer owns error/status reporting. Concurrent iframe load events must not leak its rejection.
-      }
-      return
-    }
-    const frame = frameRef.current
-    if (!frame || !endpointId || !frameOrigin) return
-    const run = (async () => {
-      setStatus('Loading ComfyUI editor')
-      await waitForComfyFrameBridge(frame, frameOrigin)
-      if (initialUiJson) {
-        await loadUiWorkflowIntoComfyFrame(frame, frameOrigin, initialUiJson)
-        setStatus('Loaded editable ComfyUI workflow')
-      } else if (initialApiJson) {
-        await loadApiWorkflowIntoComfyFrame(frame, frameOrigin, initialApiJson)
-        setStatus('Loaded API workflow into ComfyUI editor')
-      } else {
-        setStatus(initialUiJson ? 'ComfyUI editor ready' : 'ComfyUI editor ready. No editable UI workflow is stored yet.')
-      }
-      setFrameReady(true)
-      setError(undefined)
-    })()
-    initializingRef.current = run
-    try {
-      await run
-    } catch (err) {
-      if (err instanceof ComfyFrameLoginRequiredError) {
-        setStatus('ComfyUI login page opened. Log in to continue.')
-        setError(undefined)
-        return
-      }
-      setFrameReady(false)
-      setError(err instanceof Error ? err.message : 'Failed to initialize ComfyUI editor')
-    } finally {
-      if (initializingRef.current === run) initializingRef.current = undefined
-    }
-  }, [endpointId, frameOrigin, initialApiJson, initialUiJson])
-
-  useEffect(() => {
-    if (!open) {
-      wasOpenRef.current = false
-      return
-    }
-    if (wasOpenRef.current) return
-    wasOpenRef.current = true
-    void initializeFrame()
-  }, [initializeFrame, open])
-
-  const saveFromComfy = async () => {
-    if (!frameRef.current || !endpoint || !frameOrigin) return
-    setSaving(true)
-    try {
-      const { rawJson, uiJson } = await exportWorkflowFromComfyFrame(frameRef.current, frameOrigin)
-      onSave({
-        rawJson,
-        uiJson,
-        editor: {
-          kind: 'comfyui_embedded',
-          endpointId: endpoint.id,
-          baseUrl: endpoint.baseUrl,
-          savedAt: new Date().toISOString(),
-        },
-      })
-      setError(undefined)
-      onClose()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to export workflow from ComfyUI')
-    } finally {
-      setSaving(false)
-    }
+const directComfyEditorUrl = (baseUrl: string) => {
+  const url = parseComfyEndpointUrl(baseUrl)
+  for (const key of Array.from(url.searchParams.keys())) {
+    if (key.toLowerCase() === 'token') url.searchParams.delete(key)
   }
+  return url.toString()
+}
 
-  const showLoadingFallback = Boolean(open && endpoint && proxyUrl && !frameReady && !error && !status.includes('login page'))
+const directComfyLoginUrl = (baseUrl: string) => {
+  const url = new URL(directComfyEditorUrl(baseUrl))
+  url.pathname = `${url.pathname.replace(/\/+$/, '')}/login`
+  url.search = ''
+  url.hash = ''
+  return url.toString()
+}
 
-  return (
-    <ModalShell label="ComfyUI Workflow Editor" modalClassName="comfy-editor-modal" hidden={!open} onClose={onClose}>
-      <div className="comfy-editor-shell">
-        <div className="comfy-editor-toolbar">
-          <div>
-            <strong>{endpoint?.name ?? 'ComfyUI'}</strong>
-            <span>{endpoint?.baseUrl ?? 'Configure a ComfyUI server first'}</span>
-          </div>
-          <div className="comfy-editor-actions">
-            <span className={error ? 'field-error' : 'comfy-editor-status'}>{error ?? status}</span>
-            <button type="button" onClick={saveFromComfy} disabled={!endpoint || saving || !frameReady}>
-              {saving ? 'Saving...' : 'Save from ComfyUI'}
-            </button>
-          </div>
-        </div>
-        {proxyUrl ? (
-          <div className="comfy-editor-frame-wrap">
-            {frameSrc ? (
-              <iframe
-                ref={frameRef}
-                title={`ComfyUI editor ${endpoint?.name ?? ''}`.trim()}
-                className="comfy-editor-frame"
-                src={frameSrc}
-                sandbox="allow-downloads allow-forms allow-modals allow-popups allow-same-origin allow-scripts"
-                onLoad={() => {
-                  if (open) void initializeFrame()
-                }}
-              />
-            ) : null}
-            {showLoadingFallback ? (
-              <div className="comfy-editor-loading" role="status" aria-label="ComfyUI editor loading">
-                <strong>{frameSrc ? 'Waiting for ComfyUI' : 'Loading ComfyUI editor'}</strong>
-                <span>
-                  {frameSrc
-                    ? 'Log in inside ComfyUI if prompted. Extensions and custom nodes will continue loading automatically.'
-                    : 'Initializing ComfyUI, extensions, and custom nodes.'}
-                </span>
-              </div>
-            ) : null}
-          </div>
-        ) : (
-          <div className="comfy-editor-empty">No ComfyUI endpoint is available.</div>
-        )}
-      </div>
-    </ModalShell>
-  )
+const comfyEditorPopupBlockedMessage = 'ComfyUI could not open. Allow pop-ups for this site and try again.'
+
+export const openComfyEditorInBrowser = (endpoint: ComfyEndpointConfig) => {
+  const password = endpoint.auth?.type === 'password' ? endpoint.auth.password : undefined
+  let passwordPopup: Window | null = null
+  let passwordForm: HTMLFormElement | undefined
+
+  try {
+    if (!password?.trim()) {
+      const popup = window.open(directComfyEditorUrl(endpoint.baseUrl), '_blank')
+      if (!popup) return comfyEditorPopupBlockedMessage
+      popup.opener = null
+      return undefined
+    }
+
+    const popupTarget = `infinity-comfy-${crypto.randomUUID()}`
+    passwordPopup = window.open('', popupTarget)
+    if (!passwordPopup) return comfyEditorPopupBlockedMessage
+    passwordPopup.opener = null
+
+    passwordForm = document.createElement('form')
+    passwordForm.method = 'POST'
+    passwordForm.action = directComfyLoginUrl(endpoint.baseUrl)
+    passwordForm.target = popupTarget
+
+    const passwordInput = document.createElement('input')
+    passwordInput.type = 'hidden'
+    passwordInput.name = 'password'
+    passwordInput.value = password
+    passwordForm.append(passwordInput)
+    document.body.append(passwordForm)
+    passwordForm.submit()
+    return undefined
+  } catch (error) {
+    passwordPopup?.close()
+    return error instanceof TypeError
+      ? error.message
+      : 'ComfyUI could not open. Check the server URL and try again.'
+  } finally {
+    passwordForm?.remove()
+  }
 }
 
 function NewFunctionDialog({
@@ -1512,9 +1369,8 @@ function NewFunctionDialog({
   const [functionType, setFunctionType] = useState<NewFunctionType>('comfyui')
   const [functionName, setFunctionName] = useState('')
   const [workflowRawJson, setWorkflowRawJson] = useState<ComfyWorkflow>()
-  const [workflowUiJson, setWorkflowUiJson] = useState<ComfyUiWorkflow>()
-  const [workflowEditor, setWorkflowEditor] = useState<ComfyWorkflowEditorMetadata>()
-  const [comfyEditorOpen, setComfyEditorOpen] = useState(false)
+  const [workflowJson, setWorkflowJson] = useState('')
+  const [comfyEditorLaunchError, setComfyEditorLaunchError] = useState<string>()
   const [requestUrl, setRequestUrl] = useState('https://example.com/api')
   const [requestMethod, setRequestMethod] = useState('GET')
   const [requestHeaders, setRequestHeaders] = useState('{\n}')
@@ -1548,9 +1404,16 @@ function NewFunctionDialog({
   const changeSelectedComfyEndpoint = (endpointId: string) => {
     setSelectedComfyEndpointId(endpointId)
     setWorkflowRawJson(undefined)
-    setWorkflowUiJson(undefined)
-    setWorkflowEditor(undefined)
+    setWorkflowJson('')
     setError(undefined)
+  }
+
+  const importComfyWorkflowJson = () => {
+    const workflow = parseComfyApiWorkflowJson(workflowJson)
+    setWorkflowRawJson(workflow)
+    setWorkflowJson(JSON.stringify(workflow, null, 2))
+    setError(undefined)
+    return workflow
   }
 
   const formatWorkflowJson = () => {
@@ -1577,7 +1440,11 @@ function NewFunctionDialog({
       return
     }
 
-    setError(workflowRawJson ? undefined : 'Save a workflow from ComfyUI first')
+    try {
+      importComfyWorkflowJson()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Invalid ComfyUI API workflow JSON')
+    }
   }
 
   const saveFunction = () => {
@@ -1616,13 +1483,14 @@ function NewFunctionDialog({
           messages: JSON.parse(geminiMessagesJson) as GeminiLlmConfig['messages'],
         })
       } else {
-        if (!workflowRawJson) {
-          setError('Save a workflow from ComfyUI first')
-          return
-        }
-        functionId = onSaveComfy(name, workflowRawJson, {
-          ...(workflowUiJson !== undefined ? { uiJson: workflowUiJson } : {}),
-          ...(workflowEditor !== undefined ? { editor: workflowEditor } : {}),
+        const workflow = importComfyWorkflowJson()
+        functionId = onSaveComfy(name, workflow, {
+          editor: {
+            kind: 'comfyui_browser',
+            endpointId: selectedComfyEndpoint?.id,
+            baseUrl: selectedComfyEndpoint?.baseUrl,
+            savedAt: new Date().toISOString(),
+          },
         })
         if (functionId && selectedComfyEndpoint) onBindComfyEndpoint?.(functionId, selectedComfyEndpoint.id)
       }
@@ -1633,14 +1501,8 @@ function NewFunctionDialog({
     }
   }
 
-  const saveEmbeddedWorkflow = (value: EmbeddedComfySave) => {
-    setWorkflowRawJson(value.rawJson)
-    setWorkflowUiJson(value.uiJson)
-    setWorkflowEditor(value.editor)
-    setError(undefined)
-  }
   const savedComfyNodeCount = workflowRawJson ? Object.keys(workflowRawJson).length : 0
-  const canSaveFunction = functionType !== 'comfyui' || workflowRawJson !== undefined
+  const canSaveFunction = functionType !== 'comfyui' || Boolean(workflowJson.trim())
 
   return (
     <Fragment>
@@ -1686,15 +1548,58 @@ function NewFunctionDialog({
               </select>
             </label>
             <div className="workflow-authoring-actions">
-              <button type="button" onClick={() => setComfyEditorOpen(true)} disabled={!selectedComfyEndpoint}>
+              <button
+                type="button"
+                onClick={() =>
+                  selectedComfyEndpoint
+                    ? setComfyEditorLaunchError(openComfyEditorInBrowser(selectedComfyEndpoint))
+                    : undefined
+                }
+                disabled={!selectedComfyEndpoint}
+              >
                 <Network size={14} />
                 Edit in ComfyUI
               </button>
               <span>
                 {workflowRawJson
-                  ? 'Workflow saved from ComfyUI'
-                  : 'Build or open the workflow in ComfyUI, then save it back here'}
+                  ? 'Runnable API workflow imported'
+                  : 'Build the workflow in ComfyUI, export API JSON, then paste it below'}
               </span>
+            </div>
+            {comfyEditorLaunchError ? (
+              <span className="field-error" role="alert">
+                {comfyEditorLaunchError}
+              </span>
+            ) : null}
+            <label className="field">
+              <span>ComfyUI API workflow JSON</span>
+              <textarea
+                aria-invalid={error ? true : undefined}
+                aria-label="New function ComfyUI API workflow JSON"
+                className="workflow-json-textarea"
+                rows={10}
+                value={workflowJson}
+                onChange={(event) => {
+                  setWorkflowJson(event.target.value)
+                  setWorkflowRawJson(undefined)
+                  setError(undefined)
+                }}
+              />
+            </label>
+            <div className="workflow-json-import-actions">
+              <button
+                type="button"
+                disabled={!workflowJson.trim()}
+                onClick={() => {
+                  try {
+                    importComfyWorkflowJson()
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : 'Invalid ComfyUI API workflow JSON')
+                  }
+                }}
+              >
+                Use workflow JSON
+              </button>
             </div>
             <div
               className={`comfy-workflow-capture ${workflowRawJson ? 'is-saved' : 'is-empty'}`}
@@ -1703,15 +1608,13 @@ function NewFunctionDialog({
               <strong>{workflowRawJson ? `${savedComfyNodeCount} API nodes saved` : 'No workflow saved yet'}</strong>
               <span>
                 {workflowRawJson
-                  ? workflowUiJson
-                    ? 'Editable UI workflow and runnable API workflow are stored.'
-                    : 'Runnable API workflow is stored.'
+                  ? 'Runnable API workflow is ready to save.'
                   : selectedComfyEndpoint
-                    ? 'Use the ComfyUI editor button above to create or import the workflow.'
+                    ? 'Paste the API-format workflow exported by ComfyUI.'
                     : 'Configure and enable a ComfyUI endpoint before creating a workflow function.'}
               </span>
             </div>
-            {error ? <span className="field-error">{error}</span> : null}
+            {error ? <span className="field-error" role="alert">{error}</span> : null}
           </div>
         ) : functionType === 'request' ? (
           <>
@@ -1894,14 +1797,6 @@ function NewFunctionDialog({
         </div>
       </div>
     </ModalShell>
-    <ComfyWorkflowEditorDialog
-      open={comfyEditorOpen}
-      endpoint={selectedComfyEndpoint}
-      initialUiJson={workflowUiJson}
-      initialApiJson={workflowRawJson}
-      onSave={saveEmbeddedWorkflow}
-      onClose={() => setComfyEditorOpen(false)}
-    />
     </Fragment>
   )
 }
@@ -1924,8 +1819,9 @@ export function FunctionManager({
 }: FunctionManagerProps) {
   const selectedFunction = functions.find((fn) => fn.id === selectedFunctionId) ?? functions[0]
   const [createFunctionOpen, setCreateFunctionOpen] = useState(false)
-  const [comfyEditorOpen, setComfyEditorOpen] = useState(false)
+  const [comfyEditorLaunchError, setComfyEditorLaunchError] = useState<string>()
   const [selectedWorkflowDraft, setSelectedWorkflowDraft] = useState<WorkflowJsonDraft>({ value: '' })
+  const [workflowImportOpen, setWorkflowImportOpen] = useState(false)
   const [requestHeaderError, setRequestHeaderError] = useState<string>()
   const selectedWorkflowSource = selectedFunction ? JSON.stringify(selectedFunction.workflow.rawJson, null, 2) : ''
   const selectedWorkflowJson =
@@ -2054,40 +1950,55 @@ export function FunctionManager({
     })
   }
 
-  const formatSelectedWorkflowJson = () => {
+  const saveSelectedWorkflowJson = (source: string, imported: boolean) => {
     if (!selectedFunction) return
 
     try {
-      const rawJson = JSON.parse(selectedWorkflowJson) as ComfyWorkflow
+      const rawJson = parseComfyApiWorkflowJson(source)
       const formatted = JSON.stringify(rawJson, null, 2)
+      const workflow: GenerationFunction['workflow'] = {
+        ...selectedFunction.workflow,
+        rawJson,
+      }
+      if (imported) {
+        workflow.editor = {
+          kind: 'comfyui_browser',
+          endpointId: selectedEditorComfyEndpoint?.id,
+          baseUrl: selectedEditorComfyEndpoint?.baseUrl,
+          savedAt: new Date().toISOString(),
+        }
+        delete workflow.uiJson
+      }
       onUpdateFunction(selectedFunction.id, {
-        workflow: {
-          ...selectedFunction.workflow,
-          rawJson,
-        },
+        workflow,
       })
-      setSelectedWorkflowDraft({ functionId: selectedFunction.id, value: formatted })
+      setSelectedWorkflowDraft(imported ? { value: '' } : { functionId: selectedFunction.id, value: formatted })
+      if (imported) setWorkflowImportOpen(false)
     } catch (err) {
       setSelectedWorkflowDraft({
         functionId: selectedFunction.id,
-        value: selectedWorkflowJson,
-        error: `Invalid workflow JSON: ${err instanceof Error ? err.message : 'Invalid JSON'}`,
+        value: source,
+        error: err instanceof Error ? err.message : 'Invalid ComfyUI API workflow JSON',
       })
     }
   }
 
-  const saveSelectedEmbeddedWorkflow = (value: EmbeddedComfySave) => {
-    if (!selectedFunction) return
-    const formatted = JSON.stringify(value.rawJson, null, 2)
-    onUpdateFunction(selectedFunction.id, {
-      workflow: {
-        ...selectedFunction.workflow,
-        rawJson: value.rawJson,
-        uiJson: value.uiJson,
-        editor: value.editor,
-      },
-    })
-    setSelectedWorkflowDraft({ functionId: selectedFunction.id, value: formatted })
+  const formatSelectedWorkflowJson = () => saveSelectedWorkflowJson(selectedWorkflowSource, false)
+  const importSelectedWorkflowJson = () => saveSelectedWorkflowJson(selectedWorkflowJson, true)
+
+  const closeWorkflowImport = () => {
+    setSelectedWorkflowDraft({ value: '' })
+    setWorkflowImportOpen(false)
+  }
+
+  const copySelectedWorkflowJson = async () => {
+    if (!selectedWorkflowSource) return
+    await navigator.clipboard?.writeText(selectedWorkflowSource)
+  }
+
+  const downloadSelectedWorkflowJson = () => {
+    if (!selectedFunction || !selectedWorkflowSource) return
+    downloadTextSnapshot(`${safeInspectorFilePart(selectedFunction.name)}-workflow.json`, selectedWorkflowSource)
   }
 
   const updateRequestConfig = (patch: Partial<RequestFunctionConfig>) => {
@@ -2462,23 +2373,53 @@ export function FunctionManager({
                   <div className="binding-header">
                     <h4>Workflow JSON</h4>
                     <div className="json-toolbar compact-json-toolbar">
-                      {selectedWorkflowJsonError ? <span className="field-error">{selectedWorkflowJsonError}</span> : null}
-                      <button type="button" onClick={() => setComfyEditorOpen(true)} disabled={!selectedEditorComfyEndpoint}>
+                      {selectedWorkflowJsonError ? <span className="field-error" role="alert">{selectedWorkflowJsonError}</span> : null}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          selectedEditorComfyEndpoint
+                            ? setComfyEditorLaunchError(openComfyEditorInBrowser(selectedEditorComfyEndpoint))
+                            : undefined
+                        }
+                        disabled={!selectedEditorComfyEndpoint}
+                      >
                         <Network size={14} />
                         Edit in ComfyUI
+                      </button>
+                      <button type="button" aria-label="Copy workflow JSON" onClick={() => void copySelectedWorkflowJson()}>
+                        <Copy size={14} />
+                        Copy
+                      </button>
+                      <button type="button" aria-label="Download workflow JSON" onClick={downloadSelectedWorkflowJson}>
+                        <Download size={14} />
+                        Download
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!selectedFunction) return
+                          setSelectedWorkflowDraft({ functionId: selectedFunction.id, value: selectedWorkflowSource })
+                          setWorkflowImportOpen(true)
+                        }}
+                      >
+                        Import workflow JSON
                       </button>
                       <button type="button" onClick={formatSelectedWorkflowJson}>
                         Format selected JSON
                       </button>
                     </div>
                   </div>
+                  {comfyEditorLaunchError ? (
+                    <span className="field-error" role="alert">
+                      {comfyEditorLaunchError}
+                    </span>
+                  ) : null}
                   <div className="workflow-editor-grid">
                     <pre
                       className="json-preview selected-workflow-preview"
-                      aria-invalid={selectedWorkflowJsonError ? true : undefined}
                       aria-label="Selected workflow JSON"
                     >
-                      <code>{highlightedJson(selectedWorkflowJson)}</code>
+                      <code>{highlightedJson(selectedWorkflowSource)}</code>
                     </pre>
                   </div>
                 </div>
@@ -2806,15 +2747,34 @@ export function FunctionManager({
           onBindComfyEndpoint={bindNewWorkflowFunctionToEndpoint}
         />
       ) : null}
-      {selectedFunction && !selectedIsRequest && !selectedIsProvider ? (
-        <ComfyWorkflowEditorDialog
-          open={comfyEditorOpen}
-          endpoint={selectedEditorComfyEndpoint}
-          initialUiJson={selectedFunction.workflow.uiJson}
-          initialApiJson={selectedFunction.workflow.rawJson}
-          onSave={saveSelectedEmbeddedWorkflow}
-          onClose={() => setComfyEditorOpen(false)}
-        />
+      {workflowImportOpen && selectedFunction ? (
+        <ModalShell label="Import ComfyUI API workflow JSON" onClose={closeWorkflowImport}>
+          <div className="new-workflow-dialog">
+            <p>Paste the API-format workflow JSON exported by ComfyUI.</p>
+            <label className="field">
+              <span>ComfyUI API workflow JSON</span>
+              <textarea
+                aria-invalid={selectedWorkflowJsonError ? true : undefined}
+                aria-label="ComfyUI API workflow JSON"
+                className="workflow-json-textarea"
+                rows={14}
+                value={selectedWorkflowJson}
+                onChange={(event) =>
+                  setSelectedWorkflowDraft({ functionId: selectedFunction.id, value: event.target.value })
+                }
+              />
+            </label>
+            {selectedWorkflowJsonError ? (
+              <span className="field-error" role="alert">{selectedWorkflowJsonError}</span>
+            ) : null}
+            <div className="new-workflow-actions">
+              <button type="button" onClick={closeWorkflowImport}>Cancel</button>
+              <button type="button" className="primary-action" onClick={importSelectedWorkflowJson}>
+                Use workflow JSON
+              </button>
+            </div>
+          </div>
+        </ModalShell>
       ) : null}
     </ModalShell>
   )
@@ -2898,10 +2858,12 @@ function EndpointManager({
   const [draft, setDraft] = useState<ComfyEndpointConfig>(() =>
     endpoint ? cloneEndpointDraft(endpoint) : createEndpointDraft(endpointCount, workflowFunctionIds),
   )
+  const [endpointUrlError, setEndpointUrlError] = useState<string>()
 
   /* eslint-disable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps -- Reset an unsaved draft only when endpoint identity or compatible functions change. */
   useEffect(() => {
     setDraft(endpoint ? cloneEndpointDraft(endpoint) : createEndpointDraft(endpointCount, workflowFunctionIds))
+    setEndpointUrlError(undefined)
   }, [endpoint?.id, endpointCount, workflowFunctionKey])
   /* eslint-enable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
 
@@ -2959,6 +2921,13 @@ function EndpointManager({
   }
   const saveEndpoint = () => {
     if (!draft.name.trim() || !draft.baseUrl.trim()) return
+    try {
+      parseComfyEndpointUrl(draft.baseUrl)
+      setEndpointUrlError(undefined)
+    } catch (error) {
+      setEndpointUrlError(error instanceof Error ? error.message : 'Invalid ComfyUI server URL')
+      return
+    }
     const patch = endpointSavePatch({
       ...draft,
       name: draft.name.trim(),
@@ -3039,10 +3008,15 @@ function EndpointManager({
             <input
               className="endpoint-url-input"
               aria-label="Endpoint URL"
+              aria-invalid={endpointUrlError ? true : undefined}
               spellCheck={false}
               value={draft.baseUrl}
-              onChange={(event) => updateDraft({ baseUrl: event.target.value })}
+              onChange={(event) => {
+                updateDraft({ baseUrl: event.target.value })
+                setEndpointUrlError(undefined)
+              }}
             />
+            {endpointUrlError ? <small className="field-error" role="alert">{endpointUrlError}</small> : null}
           </label>
           <label className="field endpoint-number-field">
             <span>Max jobs</span>

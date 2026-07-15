@@ -35,13 +35,16 @@ export class ComfyClient {
   private readonly fetchImpl: FetchLike
 
   constructor(options: ComfyClientOptions) {
-    this.baseUrl = options.baseUrl.replace(/\/+$/, '')
+    const baseUrl = new URL(options.baseUrl)
+    baseUrl.search = ''
+    baseUrl.hash = ''
+    this.baseUrl = baseUrl.toString().replace(/\/+$/, '')
     this.clientId = options.clientId
     this.token = options.token
     this.headers = Object.fromEntries(
       Object.entries(options.headers ?? {})
         .map(([key, value]) => [key.trim(), value] as const)
-        .filter(([key]) => key),
+        .filter(([key]) => key && (!this.token || key.toLowerCase() !== 'authorization')),
     )
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis)
   }
@@ -119,7 +122,10 @@ export class ComfyClient {
     const url = new URL(this.baseUrl)
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
     url.pathname = `${url.pathname.replace(/\/+$/, '')}/ws`
-    url.search = new URLSearchParams({ clientId: this.clientId }).toString()
+    url.search = new URLSearchParams({
+      clientId: this.clientId,
+      ...(this.token ? { token: this.token } : {}),
+    }).toString()
     return url.toString()
   }
 

@@ -125,7 +125,7 @@ export type ComfyUiWorkflow = {
 }
 
 export type ComfyWorkflowEditorMetadata = {
-  kind: 'comfyui_embedded'
+  kind: 'comfyui_embedded' | 'comfyui_browser'
   endpointId?: string
   baseUrl?: string
   savedAt: string

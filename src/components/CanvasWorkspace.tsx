@@ -55,7 +55,7 @@ import {
   X,
 } from 'lucide-react'
 import { EmptyNodeView, FunctionNodeView, GroupNodeView, ResourceNodeView, ResultGroupNodeView } from './NodeViews'
-import { ComfyWorkflowEditorDialog, FunctionManager, RunInspector, highlightedJson, type EmbeddedComfySave } from './WorkbenchPanels'
+import { FunctionManager, RunInspector, highlightedJson, openComfyEditorInBrowser } from './WorkbenchPanels'
 import { ResourcePreview } from './ResourcePreview'
 import { FullResourcePreviewModal } from './ResourcePreviewModal'
 import { hasActiveModal, ModalFrame } from './ModalFrame'
@@ -84,6 +84,7 @@ import {
 import {
   createGenerationFunctionFromWorkflow,
   isMediaResourceType,
+  parseComfyApiWorkflowJson,
   workflowInputBindingExists,
   workflowInputCandidates,
   workflowPrimitiveInputValue,
@@ -93,6 +94,7 @@ import { shouldIgnoreCanvasShortcut } from './canvasKeyboard'
 import type {
   CanvasNode,
   ExecutionTask,
+  ComfyWorkflow,
   FunctionInputDef,
   GenerationFunction,
   ComfyEndpointConfig,
@@ -176,7 +178,8 @@ type FunctionRunDialogState = {
 type TemporaryComfyWorkflowState = {
   position: { x: number; y: number }
   endpointId?: string
-  editorOpen: boolean
+  dialogOpen: boolean
+  workflowJson?: string
   candidateRefs: ResourceRef[]
 }
 
@@ -1831,18 +1834,33 @@ export function FunctionRunDialog({
 function TemporaryComfyWorkflowDialog({
   endpoints,
   endpointId,
+  initialWorkflowJson,
   onEndpointChange,
-  onEdit,
+  onUseWorkflow,
   onClose,
 }: {
   endpoints: ComfyEndpointConfig[]
   endpointId?: string
+  initialWorkflowJson?: string
   onEndpointChange: (endpointId: string) => void
-  onEdit: () => void
+  onUseWorkflow: (workflow: ComfyWorkflow) => void
   onClose: () => void
 }) {
   const enabledEndpoints = endpoints.filter((endpoint) => endpoint.enabled !== false)
   const selectedEndpoint = enabledEndpoints.find((endpoint) => endpoint.id === endpointId) ?? enabledEndpoints[0]
+  const [workflowJson, setWorkflowJson] = useState(initialWorkflowJson ?? '')
+  const [error, setError] = useState<string>()
+  const [launchError, setLaunchError] = useState<string>()
+
+  const useWorkflow = () => {
+    try {
+      const workflow = parseComfyApiWorkflowJson(workflowJson)
+      setError(undefined)
+      onUseWorkflow(workflow)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Invalid ComfyUI API workflow JSON')
+    }
+  }
 
   return (
     <ModalFrame
@@ -1879,15 +1897,38 @@ function TemporaryComfyWorkflowDialog({
           </select>
         </label>
         <div className="temporary-comfy-panel">
-          <strong>No workflow saved yet</strong>
-          <span>Open ComfyUI, create or import the workflow, then save it back here.</span>
+          <strong>{workflowJson.trim() ? 'API workflow ready to update' : 'No workflow imported yet'}</strong>
+          <span>Open ComfyUI in a browser tab, export the API workflow JSON, then paste it below.</span>
         </div>
+        <label className="field">
+          <span>ComfyUI API workflow JSON</span>
+          <textarea
+            aria-invalid={error ? true : undefined}
+            aria-label="ComfyUI API workflow JSON"
+            rows={10}
+            value={workflowJson}
+            onChange={(event) => {
+              setWorkflowJson(event.target.value)
+              setError(undefined)
+            }}
+          />
+        </label>
+        {launchError ? <span className="field-error" role="alert">{launchError}</span> : null}
+        {error ? <span className="field-error" role="alert">{error}</span> : null}
         <div className="local-action-footer">
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button type="button" aria-label="Edit temporary workflow in ComfyUI" className="primary" disabled={!selectedEndpoint} onClick={onEdit}>
+          <button
+            type="button"
+            aria-label="Edit temporary workflow in ComfyUI"
+            disabled={!selectedEndpoint}
+            onClick={() => setLaunchError(selectedEndpoint ? openComfyEditorInBrowser(selectedEndpoint) : undefined)}
+          >
             Edit in ComfyUI
+          </button>
+          <button type="button" className="primary" disabled={!workflowJson.trim()} onClick={useWorkflow}>
+            Use workflow JSON
           </button>
         </div>
     </ModalFrame>
@@ -3396,7 +3437,7 @@ function CanvasSurface() {
       setTemporaryComfyWorkflow({
         position: placedNodePosition(DEFAULT_ASSET_NODE_WIDTH) ?? addMenu.flow,
         endpointId: enabledEndpoint?.id,
-        editorOpen: false,
+        dialogOpen: true,
         candidateRefs: resourceRefsForFunctionMenu(),
       })
       setAddMenu(null)
@@ -3427,9 +3468,10 @@ function CanvasSurface() {
     setAddMenu(null)
   }
 
-  const saveTemporaryComfyWorkflow = (value: EmbeddedComfySave) => {
+  const saveTemporaryComfyWorkflow = (rawJson: ComfyWorkflow) => {
     if (!temporaryComfyWorkflow) return
-    const createdAt = value.editor.savedAt || new Date().toISOString()
+    const createdAt = new Date().toISOString()
+    const endpoint = project.comfy.endpoints.find((candidate) => candidate.id === temporaryComfyWorkflow.endpointId)
     const currentTemporaryFunction =
       functionRunDialog?.temporaryFunction?.workflow.format === 'comfyui_api_json'
         ? functionRunDialog.temporaryFunction
@@ -3437,11 +3479,15 @@ function CanvasSurface() {
     const generatedFunction = createGenerationFunctionFromWorkflow(
       `temp_comfy_${createdAt.replace(/\W/g, '')}`,
       'ComfyUI Workflow',
-      value.rawJson,
+      rawJson,
       createdAt,
       {
-        uiJson: value.uiJson,
-        editor: value.editor,
+        editor: {
+          kind: 'comfyui_browser',
+          endpointId: endpoint?.id,
+          baseUrl: endpoint?.baseUrl,
+          savedAt: createdAt,
+        },
       },
     )
     const temporaryFunction = currentTemporaryFunction
@@ -3474,8 +3520,8 @@ function CanvasSurface() {
     })
     setTemporaryComfyWorkflow({
       ...temporaryComfyWorkflow,
-      endpointId: value.editor.endpointId,
-      editorOpen: false,
+      dialogOpen: false,
+      workflowJson: JSON.stringify(rawJson, null, 2),
     })
   }
 
@@ -4297,27 +4343,23 @@ function CanvasSurface() {
           onCancel={() => setInputPickMode(undefined)}
         />
       ) : null}
-      {temporaryComfyWorkflow && !temporaryComfyWorkflow.editorOpen && !functionRunDialog ? (
+      {temporaryComfyWorkflow?.dialogOpen ? (
         <TemporaryComfyWorkflowDialog
           endpoints={project.comfy.endpoints}
           endpointId={temporaryComfyWorkflow.endpointId}
+          initialWorkflowJson={temporaryComfyWorkflow.workflowJson}
           onEndpointChange={(endpointId) =>
             setTemporaryComfyWorkflow((current) => (current ? { ...current, endpointId } : current))
           }
-          onEdit={() => setTemporaryComfyWorkflow((current) => (current ? { ...current, editorOpen: true } : current))}
-          onClose={() => setTemporaryComfyWorkflow(undefined)}
+          onUseWorkflow={saveTemporaryComfyWorkflow}
+          onClose={() =>
+            setTemporaryComfyWorkflow((current) =>
+              functionRunDialog && current ? { ...current, dialogOpen: false } : undefined,
+            )
+          }
         />
       ) : null}
-      {temporaryComfyWorkflow?.editorOpen ? (
-        <ComfyWorkflowEditorDialog
-          endpoint={project.comfy.endpoints.find((endpoint) => endpoint.id === temporaryComfyWorkflow.endpointId)}
-          initialUiJson={functionRunDialog?.temporaryFunction?.workflow.uiJson}
-          initialApiJson={functionRunDialog?.temporaryFunction?.workflow.rawJson}
-          onSave={saveTemporaryComfyWorkflow}
-          onClose={() => setTemporaryComfyWorkflow((current) => (current ? { ...current, editorOpen: false } : current))}
-        />
-      ) : null}
-      {functionRunDialog && activeFunctionRunFunction && !inputPickMode && !temporaryComfyWorkflow?.editorOpen ? (
+      {functionRunDialog && activeFunctionRunFunction && !inputPickMode && !temporaryComfyWorkflow?.dialogOpen ? (
         <FunctionRunDialog
           functionDef={activeFunctionRunFunction}
           values={functionRunDialog.inputValues}
@@ -4372,7 +4414,8 @@ function CanvasSurface() {
                   setTemporaryComfyWorkflow((current) => ({
                     position: current?.position ?? functionRunDialog.position,
                     endpointId,
-                    editorOpen: true,
+                    dialogOpen: true,
+                    workflowJson: JSON.stringify(functionRunDialog.temporaryFunction?.workflow.rawJson ?? {}, null, 2),
                     candidateRefs: current?.candidateRefs ?? [],
                   }))
                 }

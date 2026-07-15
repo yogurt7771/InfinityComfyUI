@@ -1850,6 +1850,20 @@ div.server-list-item {
   line-height: 1.45;
 }
 
+.workflow-json-textarea {
+  width: 100%;
+  min-height: 180px;
+  resize: vertical;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.workflow-json-import-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .comfy-editor-modal {
   width: min(1540px, calc(100vw - 28px));
   max-height: min(940px, calc(100dvh - 28px));
@@ -2266,6 +2280,7 @@ textarea[aria-invalid="true"] {
 }
 
 .selected-workflow-preview {
+  width: 100%;
   max-height: 252px;
   min-height: 220px;
   margin: 0;

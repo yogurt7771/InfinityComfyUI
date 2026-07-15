@@ -4,7 +4,6 @@ import { ResourcePreview } from './ResourcePreview'
 import { FullResourcePreviewModal } from './ResourcePreviewModal'
 import type { Resource } from '../domain/types'
 import { projectStore } from '../store/projectStore'
-import { comfyProxyUrl } from '../domain/comfyProxy'
 
 const mediaResource = (type: 'image' | 'video' | 'audio', url: string, endpointId?: string): Resource => ({
   id: `res_${type}`,
@@ -47,7 +46,7 @@ describe('ResourcePreview', () => {
     projectStore.setState(projectStore.getInitialState(), true)
   })
 
-  it('renders image resources through the ComfyUI server proxy when endpoint headers are configured', async () => {
+  it('renders image resources directly from the ComfyUI server when endpoint headers are configured', async () => {
     const resource = mediaResource('image', 'http://127.0.0.1:27707/view?filename=image.png&subfolder=renders&type=output', 'endpoint_secure')
     projectStore.setState((state) => ({
       ...state,
@@ -76,13 +75,13 @@ describe('ResourcePreview', () => {
 
     render(<ResourcePreview resource={resource} />)
 
-    const proxyBaseUrl = new URL(comfyProxyUrl('http://127.0.0.1:27707'), window.location.origin).toString()
     await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(`${proxyBaseUrl}view?filename=image.png&subfolder=renders&type=output`, {
+      expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:27707/view?filename=image.png&subfolder=renders&type=output', {
         method: 'GET',
         headers: { 'X-Workspace': 'infinity' },
       }),
     )
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/__comfy_proxy/'))).toBe(false)
     await waitFor(() => expect(screen.getByRole('img', { name: 'image.png' })).toHaveAttribute('src', 'blob:preview'))
   })
 
