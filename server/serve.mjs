@@ -10,6 +10,7 @@ import comfyProxyBridgeModule from './comfyProxyBridge.cjs'
 
 const COMFY_PROXY_PREFIX = '/__comfy_proxy/'
 const COMFY_PROXY_AUTH_PREFIX = '/__comfy_proxy/auth/'
+const COMFY_PROXY_SERVICE_WORKER_PREFIX = '/__comfy_proxy_sw/'
 const COMFY_PROXY_LEGACY_TOKEN_PARAM = '__infinity_comfy_token'
 const COMFY_PROXY_SESSION_COOKIE_PREFIX = '__infinity_comfy_session_'
 const COMFY_PROXY_SESSION_TTL_MS = 8 * 60 * 60 * 1000
@@ -564,21 +565,40 @@ function proxiedTargetUrl(targetUrl) {
   return parsed
 }
 
+function comfyProxyServiceWorkerTargetId(targetBase) {
+  return Buffer.from(normalizedComfyBaseUrl(targetBase), 'utf8').toString('base64url')
+}
+
+function comfyProxyServiceWorkerBase(targetBase) {
+  return `${COMFY_PROXY_SERVICE_WORKER_PREFIX}${comfyProxyServiceWorkerTargetId(targetBase)}/`
+}
+
 function comfyProxyRequestParts(rawUrl) {
   const requestUrl = new URL(rawUrl ?? '/', 'http://infinity.local')
-  if (!requestUrl.pathname.startsWith(COMFY_PROXY_PREFIX)) return undefined
+  const serviceWorkerRoute = requestUrl.pathname.startsWith(COMFY_PROXY_SERVICE_WORKER_PREFIX)
+  const prefix = serviceWorkerRoute ? COMFY_PROXY_SERVICE_WORKER_PREFIX : COMFY_PROXY_PREFIX
+  if (!requestUrl.pathname.startsWith(prefix)) return undefined
 
-  const pathAfterPrefix = requestUrl.pathname.slice(COMFY_PROXY_PREFIX.length)
+  const pathAfterPrefix = requestUrl.pathname.slice(prefix.length)
   const slashIndex = pathAfterPrefix.indexOf('/')
   const encodedBaseUrl = slashIndex === -1 ? pathAfterPrefix : pathAfterPrefix.slice(0, slashIndex)
   const targetPath = slashIndex === -1 ? '/' : pathAfterPrefix.slice(slashIndex) || '/'
-  const targetBase = normalizedComfyBaseUrl(decodeURIComponent(encodedBaseUrl))
+  if (serviceWorkerRoute && !/^[A-Za-z0-9_-]+$/.test(encodedBaseUrl)) {
+    throw new ComfyProxyTargetError('ComfyUI Service Worker proxy target is invalid')
+  }
+  const decodedBaseUrl = serviceWorkerRoute
+    ? Buffer.from(encodedBaseUrl, 'base64url').toString('utf8')
+    : decodeURIComponent(encodedBaseUrl)
+  const targetBase = normalizedComfyBaseUrl(decodedBaseUrl)
+  if (serviceWorkerRoute && comfyProxyServiceWorkerTargetId(targetBase) !== encodedBaseUrl) {
+    throw new ComfyProxyTargetError('ComfyUI Service Worker proxy target is invalid')
+  }
   return {
     requestUrl,
     encodedBaseUrl,
     targetBase,
     targetPath,
-    proxyBase: `${COMFY_PROXY_PREFIX}${encodedBaseUrl}/`,
+    proxyBase: `${prefix}${encodedBaseUrl}/`,
   }
 }
 
@@ -599,6 +619,7 @@ function comfyProxyRootResourceRedirect(request) {
     if (!configuredComfyProxyAppOrigins().has(requestOrigin) && session?.frameOrigin !== requestOrigin) return undefined
 
     const requestUrl = new URL(request.url ?? '/', requestOrigin)
+    if (requestUrl.pathname.startsWith(COMFY_PROXY_SERVICE_WORKER_PREFIX)) return undefined
     if (requestUrl.pathname.startsWith(referrerParts.proxyBase)) return undefined
 
     let relativePath
@@ -818,12 +839,20 @@ function scriptSafeJson(value) {
 }
 
 function comfyProxyBridge(proxyBase, targetBase, parentOrigin) {
+  const serviceWorkerProxyBase = comfyProxyServiceWorkerBase(targetBase)
   if (parentOrigin) {
-    return comfyProxyBridgeModule.comfyProxyBridge(proxyBase, targetBase, COMFY_PROXY_LEGACY_TOKEN_PARAM, parentOrigin)
+    return comfyProxyBridgeModule.comfyProxyBridge(
+      proxyBase,
+      targetBase,
+      COMFY_PROXY_LEGACY_TOKEN_PARAM,
+      parentOrigin,
+      serviceWorkerProxyBase,
+    )
   }
   return `<script>
 (() => {
   const proxyBase = ${scriptSafeJson(proxyBase)};
+  const serviceWorkerProxyBase = ${scriptSafeJson(serviceWorkerProxyBase)};
   const targetBase = ${scriptSafeJson(targetBase)};
   const legacyTokenParam = ${scriptSafeJson(COMFY_PROXY_LEGACY_TOKEN_PARAM)};
   const currentUrl = new URL(location.href);
@@ -862,6 +891,16 @@ function comfyProxyBridge(proxyBase, targetBase, parentOrigin) {
     const raw = String(value);
     if (raw.startsWith('data:') || raw.startsWith('blob:')) return raw;
     if (raw.startsWith(proxyBase)) return withinProxy(raw);
+    if (raw.startsWith('//')) {
+      try {
+        const parsed = new URL(raw, location.href);
+        const target = new URL(targetBase);
+        if (parsed.origin === location.origin || parsed.origin === target.origin) {
+          return proxiedPath(parsed.pathname, parsed.search, parsed.hash);
+        }
+      } catch {}
+      return raw;
+    }
     if (raw.startsWith('/')) return withinProxy(proxyBase + raw.slice(1));
     try {
       const parsed = new URL(raw, location.href);
@@ -953,6 +992,47 @@ function comfyProxyBridge(proxyBase, targetBase, parentOrigin) {
       return new NativeSharedWorker(route(url), options);
     };
     window.SharedWorker.prototype = NativeSharedWorker.prototype;
+  }
+  const withinServiceWorkerProxy = (value) => {
+    try {
+      const parsed = new URL(value, location.href);
+      if (parsed.origin !== location.origin || !parsed.pathname.startsWith(serviceWorkerProxyBase)) return value;
+      parsed.searchParams.delete(legacyTokenParam);
+      return parsed.pathname + parsed.search + parsed.hash;
+    } catch {
+      return value;
+    }
+  };
+  const routeServiceWorker = (value) => {
+    const raw = String(value);
+    try {
+      const parsed = new URL(raw, location.href);
+      if (parsed.origin === location.origin && parsed.pathname.startsWith(serviceWorkerProxyBase)) {
+        return withinServiceWorkerProxy(parsed.pathname + parsed.search + parsed.hash);
+      }
+    } catch {}
+    const routed = route(raw);
+    try {
+      const parsed = new URL(routed, location.href);
+      if (parsed.origin === location.origin && parsed.pathname.startsWith(proxyBase)) {
+        return withinServiceWorkerProxy(
+          serviceWorkerProxyBase + parsed.pathname.slice(proxyBase.length) + parsed.search + parsed.hash,
+        );
+      }
+    } catch {}
+    return routed;
+  };
+  if (navigator.serviceWorker?.register) {
+    const serviceWorker = navigator.serviceWorker;
+    const nativeServiceWorkerRegister = serviceWorker.register.bind(serviceWorker);
+    serviceWorker.register = (scriptURL, options) => {
+      const routedScriptURL = routeServiceWorker(scriptURL);
+      const routedScope = options?.scope === undefined ? undefined : routeServiceWorker(options.scope);
+      return nativeServiceWorkerRegister(
+        routedScriptURL,
+        routedScope === undefined ? options : { ...options, scope: routedScope },
+      );
+    };
   }
   document.addEventListener('submit', (event) => {
     const form = event.target;
@@ -1137,7 +1217,10 @@ const server = createServer((request, response) => {
     return
   }
   if (redirectComfyProxyRootResource(request, response)) return
-  if (request.url?.startsWith(COMFY_PROXY_PREFIX)) {
+  if (
+    request.url?.startsWith(COMFY_PROXY_PREFIX) ||
+    request.url?.startsWith(COMFY_PROXY_SERVICE_WORKER_PREFIX)
+  ) {
     void handleComfyProxy(request, response)
     return
   }

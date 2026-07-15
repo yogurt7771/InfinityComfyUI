@@ -2,7 +2,7 @@ import { useStore } from 'zustand'
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import { get as getIdb, set as setIdb } from 'idb-keyval'
 import { ComfyClient, type ComfyUploadImageOptions, type ComfyUploadImageResult } from '../domain/comfyClient'
-import { comfyProxyUrl, prepareComfyProxySession } from '../domain/comfyProxy'
+import { comfyProxyUrl, normalizedComfyBaseUrl, prepareComfyProxySession } from '../domain/comfyProxy'
 import { ComfyServer, comfyFileFromResource } from '../domain/comfyServer'
 import { extractComfyOutputs, type ComfyFileRef } from '../domain/comfyOutputs'
 import { runComfyPrompt, type ComfyPromptClient } from '../domain/comfyRunner'
@@ -372,6 +372,73 @@ export type ProjectStoreState = {
   importConfig: (payload: ImportableConfig) => void
 }
 
+type BrowserComfyProxyEndpointGeneration = {
+  endpointId: string
+  targetBase: string
+  auth: ComfyEndpointConfig['auth']
+  generation: number
+}
+
+const browserComfyProxyEndpointGenerations = new Map<string, BrowserComfyProxyEndpointGeneration>()
+const browserComfyProxyGenerationCounters = new Map<string, number>()
+const browserComfyProxyActiveSessions = new Map<string, BrowserComfyProxyEndpointGeneration>()
+const browserComfyProxyLocks = new Map<string, Promise<void>>()
+
+const registerBrowserComfyProxyEndpoint = (endpoint: ComfyEndpointConfig) => {
+  const targetBase = normalizedComfyBaseUrl(endpoint.baseUrl)
+  const current = browserComfyProxyEndpointGenerations.get(endpoint.id)
+  if (current && current.targetBase === targetBase && current.auth === endpoint.auth) return current
+
+  const generation = (browserComfyProxyGenerationCounters.get(endpoint.id) ?? 0) + 1
+  browserComfyProxyGenerationCounters.set(endpoint.id, generation)
+  const next: BrowserComfyProxyEndpointGeneration = {
+    endpointId: endpoint.id,
+    targetBase,
+    auth: endpoint.auth,
+    generation,
+  }
+  browserComfyProxyEndpointGenerations.set(endpoint.id, next)
+  return next
+}
+
+const invalidateBrowserComfyProxyEndpoint = (endpointId: string) => {
+  browserComfyProxyGenerationCounters.set(endpointId, (browserComfyProxyGenerationCounters.get(endpointId) ?? 0) + 1)
+  browserComfyProxyEndpointGenerations.delete(endpointId)
+}
+
+const assertCurrentBrowserComfyProxyEndpoint = (endpoint: BrowserComfyProxyEndpointGeneration) => {
+  if (browserComfyProxyEndpointGenerations.get(endpoint.endpointId) !== endpoint) {
+    throw new Error('ComfyUI endpoint configuration changed; retry with the current server settings')
+  }
+}
+
+const withBrowserComfyProxyLock = <T>(targetBase: string, action: () => Promise<T>) => {
+  const previous = browserComfyProxyLocks.get(targetBase) ?? Promise.resolve()
+  const run = previous.catch(() => undefined).then(action)
+  const tail = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  browserComfyProxyLocks.set(targetBase, tail)
+  return run.finally(() => {
+    if (browserComfyProxyLocks.get(targetBase) === tail) browserComfyProxyLocks.delete(targetBase)
+  })
+}
+
+const ensureBrowserComfyProxySession = async (
+  endpoint: BrowserComfyProxyEndpointGeneration,
+  credentials: { bearerToken?: string; password?: string },
+  force = false,
+) => {
+  assertCurrentBrowserComfyProxyEndpoint(endpoint)
+  if (!force && browserComfyProxyActiveSessions.get(endpoint.targetBase) === endpoint) return
+
+  browserComfyProxyActiveSessions.delete(endpoint.targetBase)
+  await prepareComfyProxySession(endpoint.targetBase, credentials)
+  assertCurrentBrowserComfyProxyEndpoint(endpoint)
+  browserComfyProxyActiveSessions.set(endpoint.targetBase, endpoint)
+}
+
 const defaultDeps: ProjectStoreDeps = {
   idFactory: () => crypto.randomUUID(),
   now: () => new Date().toISOString(),
@@ -381,7 +448,8 @@ const defaultDeps: ProjectStoreDeps = {
     const bearerToken =
       endpoint.auth?.type === 'token' || endpoint.auth?.type === 'password' ? endpoint.auth.token : undefined
     const password = endpoint.auth?.type === 'password' ? endpoint.auth.password : undefined
-    let sessionPromise: Promise<void> | undefined
+    const credentials = { bearerToken, password }
+    const endpointGeneration = browserProxyAvailable ? registerBrowserComfyProxyEndpoint(endpoint) : undefined
     return new ComfyClient({
       baseUrl: browserProxyAvailable
         ? new URL(comfyProxyUrl(endpoint.baseUrl), window.location.origin).toString()
@@ -391,9 +459,24 @@ const defaultDeps: ProjectStoreDeps = {
       headers: endpoint.customHeaders,
       fetchImpl: browserProxyAvailable
         ? async (input, init) => {
-            sessionPromise ??= prepareComfyProxySession(endpoint.baseUrl, { bearerToken, password })
-            await sessionPromise
-            return fetch(input, init)
+            if (!endpointGeneration) throw new Error('ComfyUI browser proxy session is unavailable')
+            return withBrowserComfyProxyLock(endpointGeneration.targetBase, async () => {
+              assertCurrentBrowserComfyProxyEndpoint(endpointGeneration)
+              await ensureBrowserComfyProxySession(endpointGeneration, credentials)
+              const retryInput = input instanceof Request ? input.clone() : input
+              const response = await fetch(input, init)
+              if (response.status !== 401) return response
+
+              await ensureBrowserComfyProxySession(endpointGeneration, credentials, true)
+              const retryResponse = await fetch(retryInput, init)
+              if (
+                retryResponse.status === 401 &&
+                browserComfyProxyActiveSessions.get(endpointGeneration.targetBase) === endpointGeneration
+              ) {
+                browserComfyProxyActiveSessions.delete(endpointGeneration.targetBase)
+              }
+              return retryResponse
+            })
           }
         : undefined,
     })
@@ -9051,6 +9134,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
     },
 
     updateEndpoint: (endpointId, patch) => {
+      invalidateBrowserComfyProxyEndpoint(endpointId)
       const now = runtime.now()
       set((state) => ({
         project: {
@@ -9068,6 +9152,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
     },
 
     deleteEndpoint: (endpointId) => {
+      invalidateBrowserComfyProxyEndpoint(endpointId)
       const now = runtime.now()
       set((state) => ({
         project: {

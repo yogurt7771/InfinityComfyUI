@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EmptyNodeView, FunctionNodeView, GroupNodeView, ResourceNodeView, ResultGroupNodeView } from './NodeViews'
 import { projectStore } from '../store/projectStore'
 import { createRequestFunction, REQUEST_FUNCTION_ID } from '../domain/requestFunction'
+import { createOpenAILlmFunction } from '../domain/openaiLlm'
 import { comfyProxyUrl } from '../domain/comfyProxy'
 import type {
   FunctionOutputDef,
@@ -356,6 +357,105 @@ describe('NodeViews', () => {
 
     const resourceNode = container.querySelector('.resource-node')
     expect(within(resourceNode as HTMLElement).getByLabelText('Run duration 4.5s')).toBeVisible()
+  })
+
+  it('exposes a generated asset source as a function or workflow view instead of a replacement runner', () => {
+    const onOpenFunctionRunForResource = vi.fn()
+    const linkedOutput: Resource = {
+      ...outputResource,
+      source: {
+        ...outputResource.source,
+        taskId: 'task_source_function',
+      },
+    }
+    const props = {
+      id: 'node_source_image',
+      selected: false,
+      data: {
+        ...baseNodeData,
+        resourcesById: { res_image: linkedOutput },
+        resourceId: 'res_image',
+        resourceType: 'image',
+        title: 'Render Image',
+        tasksById: {
+          task_source_function: {
+            id: 'task_source_function',
+            functionNodeId: 'node_fn',
+            functionId: 'fn_render',
+            runIndex: 1,
+            runTotal: 1,
+            status: 'succeeded',
+            inputRefs: {},
+            inputSnapshot: {},
+            paramsSnapshot: {},
+            workflowTemplateSnapshot: renderFunction.workflow.rawJson,
+            compiledWorkflowSnapshot: renderFunction.workflow.rawJson,
+            seedPatchLog: [],
+            outputRefs: { image: [{ resourceId: 'res_image', type: 'image' }] },
+            createdAt: '2026-05-09T00:00:00.000Z',
+            updatedAt: '2026-05-09T00:00:04.500Z',
+            completedAt: '2026-05-09T00:00:04.500Z',
+          },
+        },
+        onOpenFunctionRunForResource,
+      },
+    } as unknown as ComponentProps<typeof ResourceNodeView>
+
+    const { container } = render(
+      <ReactFlowProvider>
+        <ResourceNodeView {...props} />
+      </ReactFlowProvider>,
+    )
+
+    const sourceLink = within(container).getByRole('button', {
+      name: /view.*(?:function|workflow).*Flux2 Text To Image/i,
+    })
+    expect(within(container).queryByRole('button', { name: 'Edit and run Flux2 Text To Image' })).not.toBeInTheDocument()
+
+    fireEvent.click(sourceLink)
+
+    expect(onOpenFunctionRunForResource).toHaveBeenCalledWith('res_image')
+  })
+
+  it.each([
+    createRequestFunction('fn_request_source', 'Historical Request', '2026-05-09T00:00:00.000Z'),
+    createOpenAILlmFunction('2026-05-09T00:00:00.000Z', {
+      id: 'fn_openai_source',
+      name: 'Historical OpenAI',
+    }),
+  ])('keeps Edit and run behavior for non-Comfy source function $name', (sourceFunction) => {
+    const onOpenFunctionRunForResource = vi.fn()
+    const linkedOutput: Resource = {
+      ...outputResource,
+      metadata: {
+        workflowFunctionId: sourceFunction.id,
+        createdAt: '2026-05-09T00:00:04.500Z',
+      },
+    }
+    const props = {
+      id: `node_${sourceFunction.id}`,
+      selected: false,
+      data: {
+        ...baseNodeData,
+        resourcesById: { res_image: linkedOutput },
+        functionsById: { [sourceFunction.id]: sourceFunction },
+        resourceId: 'res_image',
+        resourceType: 'image',
+        title: 'Historical Output',
+        onOpenFunctionRunForResource,
+      },
+    } as unknown as ComponentProps<typeof ResourceNodeView>
+
+    const { container } = render(
+      <ReactFlowProvider>
+        <ResourceNodeView {...props} />
+      </ReactFlowProvider>,
+    )
+
+    const sourceLink = within(container).getByRole('button', { name: `Edit and run ${sourceFunction.name}` })
+    fireEvent.click(sourceLink)
+
+    expect(onOpenFunctionRunForResource).toHaveBeenCalledWith('res_image')
   })
 
   it('shows node reference counts and locates referenced nodes from the popover', () => {

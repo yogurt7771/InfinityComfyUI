@@ -2310,6 +2310,10 @@ textarea[aria-invalid="true"] {
   grid-template-columns: minmax(120px, 1fr) minmax(220px, 1.5fr) 96px 96px 120px auto;
 }
 
+.endpoint-credential-field {
+  grid-column: span 3;
+}
+
 .endpoint-enabled {
   align-self: end;
 }

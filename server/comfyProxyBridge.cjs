@@ -1,9 +1,10 @@
 const scriptSafeJson = (value) =>
   JSON.stringify(value).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
 
-const comfyProxyBridge = (proxyBase, targetBase, legacyTokenParam, parentOrigin) => `<script>
+const comfyProxyBridge = (proxyBase, targetBase, legacyTokenParam, parentOrigin, serviceWorkerProxyBase) => `<script>
 (() => {
   const proxyBase = ${scriptSafeJson(proxyBase)};
+  const serviceWorkerProxyBase = ${scriptSafeJson(serviceWorkerProxyBase)};
   const targetBase = ${scriptSafeJson(targetBase)};
   const legacyTokenParam = ${scriptSafeJson(legacyTokenParam)};
   const parentOrigin = ${scriptSafeJson(parentOrigin)};
@@ -51,6 +52,16 @@ const comfyProxyBridge = (proxyBase, targetBase, legacyTokenParam, parentOrigin)
     const raw = String(value);
     if (raw.startsWith('data:') || raw.startsWith('blob:')) return raw;
     if (raw.startsWith(proxyBase)) return withinProxy(raw);
+    if (raw.startsWith('//')) {
+      try {
+        const parsed = new URL(raw, location.href);
+        const target = new URL(targetBase);
+        if (parsed.origin === location.origin || parsed.origin === target.origin) {
+          return proxiedPath(parsed.pathname, parsed.search, parsed.hash);
+        }
+      } catch {}
+      return raw;
+    }
     if (raw.startsWith('/')) return proxiedPath(raw);
     try {
       const parsed = new URL(raw, location.href);
@@ -137,6 +148,47 @@ const comfyProxyBridge = (proxyBase, targetBase, legacyTokenParam, parentOrigin)
       return new NativeSharedWorker(route(url), options);
     };
     window.SharedWorker.prototype = NativeSharedWorker.prototype;
+  }
+  const withinServiceWorkerProxy = (value) => {
+    try {
+      const parsed = new URL(value, location.href);
+      if (parsed.origin !== location.origin || !parsed.pathname.startsWith(serviceWorkerProxyBase)) return value;
+      parsed.searchParams.delete(legacyTokenParam);
+      return parsed.pathname + parsed.search + parsed.hash;
+    } catch {
+      return value;
+    }
+  };
+  const routeServiceWorker = (value) => {
+    const raw = String(value);
+    try {
+      const parsed = new URL(raw, location.href);
+      if (parsed.origin === location.origin && parsed.pathname.startsWith(serviceWorkerProxyBase)) {
+        return withinServiceWorkerProxy(parsed.pathname + parsed.search + parsed.hash);
+      }
+    } catch {}
+    const routed = route(raw);
+    try {
+      const parsed = new URL(routed, location.href);
+      if (parsed.origin === location.origin && parsed.pathname.startsWith(proxyBase)) {
+        return withinServiceWorkerProxy(
+          serviceWorkerProxyBase + parsed.pathname.slice(proxyBase.length) + parsed.search + parsed.hash,
+        );
+      }
+    } catch {}
+    return routed;
+  };
+  if (navigator.serviceWorker?.register) {
+    const serviceWorker = navigator.serviceWorker;
+    const nativeServiceWorkerRegister = serviceWorker.register.bind(serviceWorker);
+    serviceWorker.register = (scriptURL, options) => {
+      const routedScriptURL = routeServiceWorker(scriptURL);
+      const routedScope = options?.scope === undefined ? undefined : routeServiceWorker(options.scope);
+      return nativeServiceWorkerRegister(
+        routedScriptURL,
+        routedScope === undefined ? options : { ...options, scope: routedScope },
+      );
+    };
   }
   document.addEventListener('submit', (event) => {
     const form = event.target;

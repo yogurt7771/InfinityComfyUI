@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ComfyWorkflowEditorDialog, LeftPanel } from './WorkbenchPanels'
 import { projectStore } from '../store/projectStore'
 
-const endpointPasswordLabel = /comfyui password/i
-const endpointTokenFallbackLabel = /comfyui api token fallback/i
+const endpointPasswordLabel = /^comfyui password$/i
+const endpointTokenLabel = /^comfyui api token$/i
 
 describe('ComfyUI server password configuration', () => {
   beforeEach(() => {
@@ -35,7 +35,51 @@ describe('ComfyUI server password configuration', () => {
     vi.restoreAllMocks()
   })
 
-  it('keeps an existing legacy token as an optional masked fallback when a password is saved', () => {
+  it('shows and saves password and API token together without expanding advanced controls', () => {
+    const project = structuredClone(projectStore.getState().project)
+    project.comfy.endpoints[0]!.auth = {
+      type: 'password',
+      password: 'fixture-existing-password',
+      token: 'fixture-existing-token',
+    }
+    projectStore.setState({
+      project,
+      projectLibrary: { [project.project.id]: project },
+    } as unknown as Partial<ReturnType<typeof projectStore.getState>>)
+
+    render(<LeftPanel />)
+    fireEvent.click(screen.getByRole('button', { name: 'ComfyUI Servers' }))
+    const popover = screen.getByLabelText('ComfyUI Servers popover')
+    const serverList = within(popover).getByLabelText('ComfyUI server list')
+    fireEvent.click(within(serverList).getByRole('button', { name: /edit (server|endpoint) password test comfyui/i }))
+
+    const dialog = screen.getByRole('dialog', { name: /edit comfyui server/i })
+    const passwordInput = within(dialog).getByLabelText(endpointPasswordLabel)
+    const tokenInput = within(dialog).queryByLabelText(endpointTokenLabel)
+    expect.soft(within(dialog).queryByText(/api token fallback.*optional/i)).not.toBeInTheDocument()
+    expect(tokenInput).not.toBeNull()
+    if (!(tokenInput instanceof HTMLInputElement)) return
+
+    expect(passwordInput).not.toBe(tokenInput)
+    expect(passwordInput).toBeVisible()
+    expect(passwordInput).toHaveAttribute('type', 'password')
+    expect(passwordInput).toHaveValue('fixture-existing-password')
+    expect(tokenInput).toBeVisible()
+    expect(tokenInput).toHaveAttribute('type', 'password')
+    expect(tokenInput).toHaveValue('fixture-existing-token')
+
+    fireEvent.change(passwordInput, { target: { value: 'fixture-edited-password' } })
+    fireEvent.change(tokenInput, { target: { value: 'fixture-edited-token' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: /save/i }))
+
+    expect(projectStore.getState().project.comfy.endpoints[0]?.auth).toEqual({
+      type: 'password',
+      password: 'fixture-edited-password',
+      token: 'fixture-edited-token',
+    })
+  })
+
+  it('keeps an existing legacy token when a password is saved', () => {
     render(<LeftPanel />)
     fireEvent.click(screen.getByRole('button', { name: 'ComfyUI Servers' }))
     const popover = screen.getByLabelText('ComfyUI Servers popover')
@@ -44,7 +88,7 @@ describe('ComfyUI server password configuration', () => {
 
     let dialog = screen.getByRole('dialog', { name: /edit comfyui server/i })
     const passwordInput = within(dialog).getByLabelText(endpointPasswordLabel)
-    const tokenFallbackInput = within(dialog).getByLabelText(endpointTokenFallbackLabel)
+    const tokenFallbackInput = within(dialog).getByLabelText(endpointTokenLabel)
     expect(passwordInput).toHaveAttribute('type', 'password')
     expect(passwordInput).toHaveValue('')
     expect(tokenFallbackInput).toHaveAttribute('type', 'password')
@@ -86,7 +130,10 @@ describe('ComfyUI server password configuration', () => {
     fireEvent.click(within(popover).getByRole('button', { name: /new|新建/i }))
     const dialog = screen.getByRole('dialog', { name: /new comfyui server|create comfyui server/i })
 
-    expect(within(dialog).getByLabelText(endpointTokenFallbackLabel)).toHaveValue('')
+    const tokenInput = within(dialog).getByLabelText(endpointTokenLabel)
+    expect(tokenInput).toBeVisible()
+    expect(tokenInput).toHaveAttribute('type', 'password')
+    expect(tokenInput).toHaveValue('')
     fireEvent.change(within(dialog).getByLabelText(/(server|endpoint) name/i), {
       target: { value: 'Created Password ComfyUI' },
     })

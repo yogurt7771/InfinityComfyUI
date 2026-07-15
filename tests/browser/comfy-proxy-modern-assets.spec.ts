@@ -260,6 +260,63 @@ try {
   return { requests, server }
 }
 
+const serviceWorkerUpstream = () => {
+  const requests: ObservedRequest[] = []
+  const server = createServer((request, response) => {
+    const url = request.url ?? '/'
+    const requestUrl = new URL(url, 'http://127.0.0.1')
+    requests.push({ authorization: request.headers.authorization, url })
+    if (requestUrl.pathname === '/comfy/' || requestUrl.pathname === '/comfy') {
+      response.setHeader('content-type', 'text/html; charset=utf-8')
+      response.end(`<!doctype html><html><head></head><body><main id="service-worker-status">registering</main><script>
+const serviceWorkerResult = { settled: false, registrations: {} };
+window.__serviceWorkerResult = serviceWorkerResult;
+const recordRegistration = async (label, scriptUrl, options) => {
+  try {
+    const registration = options === undefined
+      ? await navigator.serviceWorker.register(scriptUrl)
+      : await navigator.serviceWorker.register(scriptUrl, options);
+    const worker = registration.installing || registration.waiting || registration.active;
+    serviceWorkerResult.registrations[label] = {
+      scope: registration.scope,
+      scriptUrl: worker ? worker.scriptURL : null,
+    };
+  } catch (error) {
+    serviceWorkerResult.registrations[label] = { error: String(error) };
+  }
+};
+const blobUrl = URL.createObjectURL(new Blob(['self.addEventListener("fetch", () => {});'], { type: 'text/javascript' }));
+Promise.all([
+  recordRegistration('root', '/root-service-worker.js'),
+  recordRegistration('sameOrigin', new URL('/comfy/scoped-service-worker.js', location.origin).href, { scope: '/comfy/custom-scope/' }),
+  recordRegistration('alreadyProxied', location.pathname + 'existing-service-worker.js', { scope: location.pathname + 'existing-scope/' }),
+  recordRegistration('data', 'data:text/javascript,self.addEventListener("fetch",()=>{})'),
+  recordRegistration('blob', blobUrl),
+  recordRegistration('external', 'https://foreign.invalid/service-worker.js'),
+  recordRegistration('protocolRelativeExternal', '//foreign.invalid/protocol-relative-service-worker.js', { scope: '//foreign.invalid/protocol-relative-scope/' }),
+]).finally(() => {
+  URL.revokeObjectURL(blobUrl);
+  serviceWorkerResult.settled = true;
+  document.querySelector('#service-worker-status').textContent = 'settled';
+});
+</script></body></html>`)
+      return
+    }
+    if (
+      requestUrl.pathname === '/comfy/root-service-worker.js' ||
+      requestUrl.pathname === '/comfy/scoped-service-worker.js' ||
+      requestUrl.pathname === '/comfy/existing-service-worker.js'
+    ) {
+      response.setHeader('content-type', 'text/javascript; charset=utf-8')
+      response.end(`self.addEventListener('install', () => self.skipWaiting());`)
+      return
+    }
+    response.statusCode = 404
+    response.end('not found')
+  })
+  return { requests, server }
+}
+
 const startRuntime = async (kind: RuntimeKind, mainTarget: string, options: { appOrigins?: string } = {}) => {
   const port = await reservePort()
   const tempRoot = mkdtempSync(join(tmpdir(), 'infinity-modern-assets-'))
@@ -584,6 +641,131 @@ for (const kind of ['production server', 'Vite dev proxy', 'Electron proxy'] as 
     }
   })
 }
+
+test('production proxy registers Service Worker scripts and scopes directly under the isolated proxy path', async ({
+  page,
+}) => {
+  const upstream = serviceWorkerUpstream()
+  const upstreamPort = await listen(upstream.server)
+  const targetBase = `http://127.0.0.1:${upstreamPort}/comfy`
+  const runtime = await startRuntime('production server', targetBase)
+
+  try {
+    await page.addInitScript(() => {
+      const state = window as Window & {
+        __nativeServiceWorkerRegistrations?: Array<{ scope: string | null; scriptUrl: string }>
+      }
+      state.__nativeServiceWorkerRegistrations = []
+      const serviceWorkerPrototype = Object.getPrototypeOf(navigator.serviceWorker) as ServiceWorkerContainer
+      const nativeRegister = serviceWorkerPrototype.register
+      serviceWorkerPrototype.register = function register(scriptUrl, options) {
+        state.__nativeServiceWorkerRegistrations?.push({
+          scope: options && Object.prototype.hasOwnProperty.call(options, 'scope') ? String(options.scope) : null,
+          scriptUrl: String(scriptUrl),
+        })
+        return options === undefined
+          ? nativeRegister.call(this, scriptUrl)
+          : nativeRegister.call(this, scriptUrl, options)
+      }
+    })
+
+    const source = proxyBase(runtime.origin, targetBase)
+    await page.goto(source, { waitUntil: 'domcontentloaded' })
+    await page.waitForFunction(() => {
+      const state = window as Window & { __serviceWorkerResult?: { settled?: boolean } }
+      return state.__serviceWorkerResult?.settled === true
+    })
+
+    const browserState = await page.evaluate(() => {
+      const state = window as Window & {
+        __nativeServiceWorkerRegistrations?: Array<{ scope: string | null; scriptUrl: string }>
+        __serviceWorkerResult?: {
+          registrations?: Record<string, { error?: string; scope?: string; scriptUrl?: string | null }>
+        }
+      }
+      return {
+        nativeCalls: state.__nativeServiceWorkerRegistrations ?? [],
+        registrations: state.__serviceWorkerResult?.registrations ?? {},
+      }
+    })
+    const legacyProxyPathname = new URL(source).pathname
+    expect([
+      browserState.registrations.root,
+      browserState.registrations.sameOrigin,
+      browserState.registrations.alreadyProxied,
+    ]).toEqual([
+      expect.objectContaining({ scope: expect.any(String), scriptUrl: expect.any(String) }),
+      expect.objectContaining({ scope: expect.any(String), scriptUrl: expect.any(String) }),
+      expect.objectContaining({ scope: expect.any(String), scriptUrl: expect.any(String) }),
+    ])
+    const registrationUrl = (label: string, field: 'scope' | 'scriptUrl') =>
+      new URL(String(browserState.registrations[label]?.[field]), runtime.origin)
+    const nativeCallFor = (suffix: string) =>
+      browserState.nativeCalls.find((call) => new URL(call.scriptUrl, runtime.origin).pathname.endsWith(suffix))
+    const rootRegistrationScript = registrationUrl('root', 'scriptUrl')
+    const rootRegistrationScope = registrationUrl('root', 'scope')
+    const scopedRegistrationScript = registrationUrl('sameOrigin', 'scriptUrl')
+    const scopedRegistrationScope = registrationUrl('sameOrigin', 'scope')
+    const existingRegistrationScript = registrationUrl('alreadyProxied', 'scriptUrl')
+    const existingRegistrationScope = registrationUrl('alreadyProxied', 'scope')
+    const safeProxyBase = `/__comfy_proxy_sw/${Buffer.from(targetBase).toString('base64url')}/`
+    const rootNativeCall = nativeCallFor('/root-service-worker.js')
+    const scopedNativeCall = nativeCallFor('/scoped-service-worker.js')
+    const existingNativeCall = nativeCallFor('/existing-service-worker.js')
+
+    expect.soft(rootRegistrationScript.origin).toBe(runtime.origin)
+    expect.soft(rootRegistrationScript.pathname).toBe(`${safeProxyBase}root-service-worker.js`)
+    expect.soft(rootRegistrationScope.pathname).toBe(safeProxyBase)
+    expect.soft(scopedRegistrationScript.origin).toBe(runtime.origin)
+    expect.soft(scopedRegistrationScript.pathname).toBe(`${safeProxyBase}scoped-service-worker.js`)
+    expect.soft(scopedRegistrationScope.pathname).toBe(`${safeProxyBase}custom-scope/`)
+    expect.soft(existingRegistrationScript.pathname).toBe(`${safeProxyBase}existing-service-worker.js`)
+    expect.soft(existingRegistrationScope.pathname).toBe(`${safeProxyBase}existing-scope/`)
+    expect.soft(rootNativeCall).toEqual({ scope: null, scriptUrl: `${safeProxyBase}root-service-worker.js` })
+    expect.soft(scopedNativeCall).toEqual({
+      scope: `${safeProxyBase}custom-scope/`,
+      scriptUrl: `${safeProxyBase}scoped-service-worker.js`,
+    })
+    expect.soft(existingNativeCall).toEqual({
+      scope: `${safeProxyBase}existing-scope/`,
+      scriptUrl: `${safeProxyBase}existing-service-worker.js`,
+    })
+    expect.soft(
+      browserState.nativeCalls.find(
+        (call) => call.scriptUrl === 'data:text/javascript,self.addEventListener("fetch",()=>{})',
+      )?.scope,
+    ).toBeNull()
+    expect.soft(browserState.nativeCalls.some((call) => call.scriptUrl.startsWith('blob:'))).toBe(true)
+    expect.soft(
+      browserState.nativeCalls.find((call) => call.scriptUrl === 'https://foreign.invalid/service-worker.js')?.scope,
+    ).toBeNull()
+    expect.soft(nativeCallFor('/protocol-relative-service-worker.js')).toEqual({
+      scope: '//foreign.invalid/protocol-relative-scope/',
+      scriptUrl: '//foreign.invalid/protocol-relative-service-worker.js',
+    })
+    for (const call of [rootNativeCall, scopedNativeCall, existingNativeCall]) {
+      const scriptPathname = new URL(call?.scriptUrl ?? '', runtime.origin).pathname
+      expect.soft(scriptPathname.startsWith(safeProxyBase)).toBe(true)
+      expect.soft((scriptPathname.match(/\/__comfy_proxy_sw\//g) ?? [])).toHaveLength(1)
+      expect.soft(scriptPathname.includes(legacyProxyPathname)).toBe(false)
+      if (call?.scope) {
+        const scopePathname = new URL(call.scope, runtime.origin).pathname
+        expect.soft((scopePathname.match(/\/__comfy_proxy_sw\//g) ?? [])).toHaveLength(1)
+        expect.soft(scopePathname.includes(legacyProxyPathname)).toBe(false)
+      }
+    }
+
+    const upstreamPaths = upstream.requests.map((request) => request.url)
+    expect.soft(upstreamPaths.filter((path) => path === '/comfy/root-service-worker.js')).toHaveLength(1)
+    expect.soft(upstreamPaths.filter((path) => path === '/comfy/scoped-service-worker.js')).toHaveLength(1)
+    expect.soft(upstreamPaths.some((path) => path.includes('data:') || path.includes('blob:') || path.includes('foreign.invalid'))).toBe(
+      false,
+    )
+  } finally {
+    await runtime.stop()
+    await closeServer(upstream.server)
+  }
+})
 
 test('production server redirects HTTPS root assets back into the trusted authenticated proxy target', async ({
   request,

@@ -2103,14 +2103,17 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
   const showLiveDuration =
     Boolean(task?.startedAt) && typeof assetStatus === 'string' && liveAssetDurationStatuses.has(assetStatus)
   const durationLabel = formatDurationMs(runDurationMs(task, showLiveDuration ? liveDurationNow : undefined))
-  const sourceFunctionId =
-    resource?.metadata?.workflowFunctionId ??
-    (resource?.source.taskId ? nodeData.tasksById?.[resource.source.taskId]?.functionId : undefined)
+  const sourceFunctionId = task?.functionId ?? resource?.metadata?.workflowFunctionId
   const sourceFunction = sourceFunctionId
     ? nodeData.functionsById[sourceFunctionId] ??
       task?.functionSnapshot ??
       resource?.metadata?.functionSnapshot
     : undefined
+  const sourceIsEditableComfyWorkflow = Boolean(
+    sourceFunctionId &&
+      nodeData.functionsById[sourceFunctionId] &&
+      sourceFunction?.workflow.format === 'comfyui_api_json',
+  )
   const minSize = resourceNodeMinSize({
     resourceType: resource?.type ?? nodeData.resourceType,
     title,
@@ -2214,8 +2217,16 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
           <button
             type="button"
             className="asset-function-chip nodrag nopan"
-            aria-label={`Edit and run ${sourceFunction.name}`}
-            title={sourceFunction.name}
+            aria-label={
+              sourceIsEditableComfyWorkflow
+                ? `View function and workflow ${sourceFunction.name}`
+                : `Edit and run ${sourceFunction.name}`
+            }
+            title={
+              sourceIsEditableComfyWorkflow
+                ? `View function and edit its ComfyUI workflow: ${sourceFunction.name}`
+                : sourceFunction.name
+            }
             onClick={(event) => {
               event.stopPropagation()
               nodeData.onOpenFunctionRunForResource?.(resource.id)

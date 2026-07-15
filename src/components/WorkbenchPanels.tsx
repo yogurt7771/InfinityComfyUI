@@ -1945,6 +1945,15 @@ export function FunctionManager({
   const workflowFunctions = functions.filter(isComfyWorkflowFunction)
   const workflowFunctionIds = workflowFunctions.map((fn) => fn.id)
   const selectedIsComfyWorkflow = selectedFunction ? isComfyWorkflowFunction(selectedFunction) : false
+  const selectedFunctionType = selectedIsComfyWorkflow
+    ? 'comfyui'
+    : selectedIsRequest
+      ? 'request'
+      : selectedIsOpenAI
+        ? 'openai'
+        : selectedIsGemini
+          ? 'gemini'
+          : selectedFunction?.workflow.format ?? ''
   const selectableEditorComfyEndpoints =
     selectedFunction && selectedIsComfyWorkflow
       ? comfyEndpoints.filter((endpoint) => endpoint.enabled && endpointSupportsWorkflowFunction(endpoint, selectedFunction.id))
@@ -2208,6 +2217,10 @@ export function FunctionManager({
                     value={selectedFunction.category ?? ''}
                     onCommit={(category) => onUpdateFunction(selectedFunction.id, { category })}
                   />
+                </label>
+                <label className="field">
+                  <span>Function type</span>
+                  <input aria-label="Function type" readOnly value={selectedFunctionType} />
                 </label>
               </div>
               <label className="field">
@@ -2921,7 +2934,7 @@ function EndpointManager({
         : { type: 'none' },
     })
   }
-  const updateFallbackToken = (token: string) => {
+  const updateApiToken = (token: string) => {
     if (draft.auth?.type === 'password') {
       updateDraft({ auth: { ...draft.auth, token: token || undefined } })
       return
@@ -3035,7 +3048,7 @@ function EndpointManager({
               onChange={(event) => updateDraft({ timeoutMs: Math.max(1000, Number(event.target.value) || 1000) })}
             />
           </label>
-          <label className="field endpoint-password-field">
+          <label className="field endpoint-credential-field endpoint-password-field">
             <span>ComfyUI password</span>
             <input
               aria-label="ComfyUI password"
@@ -3046,17 +3059,17 @@ function EndpointManager({
             />
             <small>Saved with this project and removed from exports unless secret export is explicitly enabled.</small>
           </label>
-          <details className="field endpoint-token-fallback-field">
-            <summary>API token fallback (optional)</summary>
+          <label className="field endpoint-credential-field endpoint-api-token-field">
+            <span>ComfyUI API token</span>
             <input
-              aria-label="ComfyUI API token fallback"
+              aria-label="ComfyUI API token"
               type="password"
               autoComplete="off"
               value={draft.auth?.token ?? ''}
-              onChange={(event) => updateFallbackToken(event.target.value)}
+              onChange={(event) => updateApiToken(event.target.value)}
             />
-            <small>Only needed when this ComfyUI server does not accept its login cookie for API requests.</small>
-          </details>
+            <small>Used for API calls when this server does not accept its login cookie.</small>
+          </label>
           <label className="inline-check endpoint-enabled">
             <input
               aria-label="Endpoint enabled"

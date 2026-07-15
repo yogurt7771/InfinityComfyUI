@@ -15,6 +15,7 @@ const COMFY_PROXY_SEGMENT = '__comfy_proxy'
 const COMFY_PROXY_PREFIX = `/${COMFY_PROXY_SEGMENT}/`
 const COMFY_PROXY_AUTH_PREFIX = '/__comfy_proxy/auth/'
 const COMFY_PROXY_LEGACY_TOKEN_PARAM = '__infinity_comfy_token'
+const COMFY_PROXY_SERVICE_WORKER_PREFIX = '/__comfy_proxy_sw/'
 const COMFY_PROXY_SESSION_COOKIE_PREFIX = '__infinity_comfy_session_'
 const COMFY_PROXY_SESSION_TTL_MS = 8 * 60 * 60 * 1000
 const COMFY_PROXY_SESSION_CLEANUP_MS = 10 * 60 * 1000
@@ -477,21 +478,38 @@ const loginToComfyProxyTarget = async (targetBase, proxyBase, password) => {
   return { responseCookies, upstreamCookies: cookieSession.upstreamCookies }
 }
 
+const comfyProxyServiceWorkerTargetId = (targetBase) =>
+  Buffer.from(normalizedComfyBaseUrl(targetBase), 'utf8').toString('base64url')
+
+const comfyProxyServiceWorkerBase = (targetBase) =>
+  `${COMFY_PROXY_SERVICE_WORKER_PREFIX}${comfyProxyServiceWorkerTargetId(targetBase)}/`
+
 const comfyProxyRequestParts = (rawUrl) => {
   const requestUrl = new URL(rawUrl || '/', 'http://127.0.0.1')
-  if (!requestUrl.pathname.startsWith(COMFY_PROXY_PREFIX)) return undefined
+  const serviceWorkerRoute = requestUrl.pathname.startsWith(COMFY_PROXY_SERVICE_WORKER_PREFIX)
+  const prefix = serviceWorkerRoute ? COMFY_PROXY_SERVICE_WORKER_PREFIX : COMFY_PROXY_PREFIX
+  if (!requestUrl.pathname.startsWith(prefix)) return undefined
 
-  const pathAfterPrefix = requestUrl.pathname.slice(COMFY_PROXY_PREFIX.length)
+  const pathAfterPrefix = requestUrl.pathname.slice(prefix.length)
   const slashIndex = pathAfterPrefix.indexOf('/')
   const encodedBaseUrl = slashIndex === -1 ? pathAfterPrefix : pathAfterPrefix.slice(0, slashIndex)
   const targetPath = slashIndex === -1 ? '/' : pathAfterPrefix.slice(slashIndex) || '/'
-  const targetBase = normalizedComfyBaseUrl(decodeURIComponent(encodedBaseUrl))
+  if (serviceWorkerRoute && !/^[A-Za-z0-9_-]+$/.test(encodedBaseUrl)) {
+    throw new ComfyProxyTargetError('ComfyUI Service Worker proxy target is invalid')
+  }
+  const decodedBaseUrl = serviceWorkerRoute
+    ? Buffer.from(encodedBaseUrl, 'base64url').toString('utf8')
+    : decodeURIComponent(encodedBaseUrl)
+  const targetBase = normalizedComfyBaseUrl(decodedBaseUrl)
+  if (serviceWorkerRoute && comfyProxyServiceWorkerTargetId(targetBase) !== encodedBaseUrl) {
+    throw new ComfyProxyTargetError('ComfyUI Service Worker proxy target is invalid')
+  }
   return {
     requestUrl,
     encodedBaseUrl,
     targetBase,
     targetPath,
-    proxyBase: `${COMFY_PROXY_PREFIX}${encodedBaseUrl}/`,
+    proxyBase: `${prefix}${encodedBaseUrl}/`,
   }
 }
 
@@ -512,6 +530,7 @@ const comfyProxyRootResourceRedirect = (request) => {
     allowedComfyProxyTargetUrl(referrerParts.targetBase, '/', Boolean(session))
 
     const requestUrl = new URL(request.url || '/', trustedOrigin)
+    if (requestUrl.pathname.startsWith(COMFY_PROXY_SERVICE_WORKER_PREFIX)) return undefined
     if (requestUrl.pathname.startsWith(referrerParts.proxyBase)) return undefined
 
     let relativePath
@@ -801,7 +820,13 @@ const websocketProxyHeaders = (
 
 const comfyProxyBridge = (proxyBase, targetBase, parentOrigin) =>
   parentOrigin
-    ? comfyProxyBridgeModule.comfyProxyBridge(proxyBase, targetBase, COMFY_PROXY_LEGACY_TOKEN_PARAM, parentOrigin)
+    ? comfyProxyBridgeModule.comfyProxyBridge(
+        proxyBase,
+        targetBase,
+        COMFY_PROXY_LEGACY_TOKEN_PARAM,
+        parentOrigin,
+        comfyProxyServiceWorkerBase(targetBase),
+      )
     : `<script>
 (() => {
   const proxyBase = ${JSON.stringify(proxyBase)};
@@ -843,6 +868,16 @@ const comfyProxyBridge = (proxyBase, targetBase, parentOrigin) =>
     const raw = String(value);
     if (raw.startsWith('data:') || raw.startsWith('blob:')) return raw;
     if (raw.startsWith(proxyBase)) return withinProxy(raw);
+    if (raw.startsWith('//')) {
+      try {
+        const parsed = new URL(raw, location.href);
+        const target = new URL(targetBase);
+        if (parsed.origin === location.origin || parsed.origin === target.origin) {
+          return proxiedPath(parsed.pathname, parsed.search, parsed.hash);
+        }
+      } catch {}
+      return raw;
+    }
     if (raw.startsWith('/')) return withinProxy(proxyBase + raw.slice(1));
     try {
       const parsed = new URL(raw, location.href);
@@ -1116,7 +1151,10 @@ const startAppServer = () =>
             return
           }
           if (redirectComfyProxyRootResource(request, response)) return
-          if (requestUrl.pathname.startsWith(COMFY_PROXY_PREFIX)) {
+          if (
+            requestUrl.pathname.startsWith(COMFY_PROXY_PREFIX) ||
+            requestUrl.pathname.startsWith(COMFY_PROXY_SERVICE_WORKER_PREFIX)
+          ) {
             await serveComfyProxy(request, response, requestUrl)
             return
           }

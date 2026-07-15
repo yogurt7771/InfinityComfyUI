@@ -92,6 +92,127 @@ describe('CanvasWorkspace', () => {
     return { onClose, onRun }
   }
 
+  const provenanceProject = ({
+    includeTask = true,
+    metadataFunctionId,
+  }: {
+    includeTask?: boolean
+    metadataFunctionId?: 'fn_task_workflow' | 'fn_metadata_workflow'
+  } = {}): ProjectState => {
+    const taskFunction: GenerationFunction = {
+      id: 'fn_task_workflow',
+      name: 'Task Workflow A',
+      type: 'comfyui',
+      category: 'Render',
+      workflow: {
+        format: 'comfyui_api_json',
+        rawJson: { '20': { class_type: 'TaskWorkflowASentinel', inputs: {} } },
+      },
+      inputs: [],
+      outputs: [],
+      createdAt: '2026-06-25T00:00:00.000Z',
+      updatedAt: '2026-06-25T00:00:00.000Z',
+    }
+    const metadataFunction: GenerationFunction = {
+      id: 'fn_metadata_workflow',
+      name: 'Metadata Workflow B',
+      type: 'comfyui',
+      category: 'Render',
+      workflow: {
+        format: 'comfyui_api_json',
+        rawJson: { '99': { class_type: 'MetadataWorkflowBSentinel', inputs: {} } },
+      },
+      inputs: [],
+      outputs: [],
+      createdAt: '2026-06-25T00:00:01.000Z',
+      updatedAt: '2026-06-25T00:00:01.000Z',
+    }
+
+    return {
+      ...originalProject,
+      project: { ...originalProject.project, id: `project_provenance_${includeTask ? 'task' : 'metadata'}` },
+      canvas: {
+        nodes: [
+          {
+            id: 'node_provenance_image',
+            type: 'resource',
+            position: { x: 0, y: 0 },
+            data: { resourceId: 'res_provenance_image', resourceType: 'image', title: 'Provenance Image' },
+          },
+        ],
+        edges: [],
+        viewport: { x: 0, y: 0, zoom: 1 },
+      },
+      resources: {
+        res_provenance_image: {
+          id: 'res_provenance_image',
+          type: 'image',
+          name: 'provenance.png',
+          value: {
+            assetId: 'asset_provenance_image',
+            url: 'data:image/png;base64,abc',
+            filename: 'provenance.png',
+            mimeType: 'image/png',
+            sizeBytes: 123,
+          },
+          source: {
+            kind: 'function_output',
+            ...(includeTask ? { taskId: 'task_provenance_image' } : {}),
+            functionNodeId: 'node_historical_function',
+            outputKey: 'image',
+          },
+          metadata: {
+            ...(metadataFunctionId ? { workflowFunctionId: metadataFunctionId } : {}),
+            createdAt: '2026-06-25T00:00:10.000Z',
+          },
+        },
+      },
+      functions: {
+        fn_task_workflow: taskFunction,
+        fn_metadata_workflow: metadataFunction,
+      },
+      tasks: includeTask
+        ? {
+            task_provenance_image: {
+              id: 'task_provenance_image',
+              functionNodeId: 'node_historical_function',
+              functionId: 'fn_task_workflow',
+              runIndex: 1,
+              runTotal: 1,
+              status: 'succeeded',
+              inputRefs: {},
+              inputSnapshot: {},
+              paramsSnapshot: {},
+              workflowTemplateSnapshot: taskFunction.workflow.rawJson,
+              compiledWorkflowSnapshot: taskFunction.workflow.rawJson,
+              seedPatchLog: [],
+              outputRefs: { image: [{ resourceId: 'res_provenance_image', type: 'image' }] },
+              createdAt: '2026-06-25T00:00:02.000Z',
+              updatedAt: '2026-06-25T00:00:10.000Z',
+              completedAt: '2026-06-25T00:00:10.000Z',
+            },
+          }
+        : {},
+      comfy: {
+        ...originalProject.comfy,
+        endpoints: [
+          {
+            id: 'endpoint_provenance',
+            name: 'Provenance ComfyUI',
+            baseUrl: 'http://127.0.0.1:27707',
+            enabled: true,
+            maxConcurrentJobs: 2,
+            priority: 10,
+            timeoutMs: 600000,
+            auth: { type: 'none' },
+            capabilities: { supportedFunctions: ['fn_task_workflow', 'fn_metadata_workflow'] },
+            health: { status: 'online' },
+          },
+        ],
+      },
+    }
+  }
+
   it('separates built-in runners from saved function templates in the add menu', () => {
     projectStore.getState().addFunctionFromWorkflow('Custom Workflow', {
       '9': {
@@ -570,6 +691,233 @@ describe('CanvasWorkspace', () => {
     const inspectorBackdrop = document.querySelector('.asset-inspector-backdrop') as HTMLElement
     fireEvent.click(inspectorBackdrop, { clientX: 240, clientY: 180 })
     expect(screen.queryByRole('dialog', { name: /Inspector|查看/ })).not.toBeInTheDocument()
+  })
+
+  it('keeps a historical output linked to function A after its source function node is rebound to function B', async () => {
+    const decoyFunction: GenerationFunction = {
+      id: 'fn_decoy',
+      name: 'Decoy Workflow',
+      type: 'comfyui',
+      category: 'Render',
+      workflow: {
+        format: 'comfyui_api_json',
+        rawJson: {
+          '99': { class_type: 'DecoyWorkflowSentinel', inputs: {} },
+        },
+      },
+      inputs: [],
+      outputs: [],
+      createdAt: '2026-06-25T00:00:00.000Z',
+      updatedAt: '2026-06-25T00:00:00.000Z',
+    }
+    const sourceFunction: GenerationFunction = {
+      id: 'fn_source_image',
+      name: 'Source Image Workflow',
+      type: 'comfyui',
+      category: 'Render',
+      workflow: {
+        format: 'comfyui_api_json',
+        rawJson: {
+          '6': { class_type: 'CLIPTextEncode', inputs: { text: 'source prompt' } },
+          '20': { class_type: 'SourceWorkflowSentinel', inputs: { images: ['19', 0] } },
+        },
+      },
+      inputs: [
+        {
+          key: 'prompt',
+          label: 'Source Prompt',
+          type: 'text',
+          required: true,
+          bind: { nodeId: '6', nodeTitle: 'Positive Prompt', path: 'inputs.text' },
+          upload: { strategy: 'none' },
+        },
+      ],
+      outputs: [
+        {
+          key: 'image',
+          label: 'Source Image',
+          type: 'image',
+          bind: { nodeId: '20', nodeTitle: 'Save Source Image' },
+          extract: { source: 'history', multiple: true },
+        },
+      ],
+      createdAt: '2026-06-25T00:00:01.000Z',
+      updatedAt: '2026-06-25T00:00:01.000Z',
+    }
+    const sourceProject: ProjectState = {
+      ...originalProject,
+      project: { ...originalProject.project, id: 'project_source_function_details' },
+      canvas: {
+        nodes: [
+          {
+            id: 'node_source_function',
+            type: 'function',
+            position: { x: -360, y: 0 },
+            data: { functionId: 'fn_decoy', title: 'Rebound to Decoy Workflow', inputValues: {}, runCount: 1 },
+          },
+          {
+            id: 'node_source_image',
+            type: 'resource',
+            position: { x: 0, y: 0 },
+            data: { resourceId: 'res_source_image', resourceType: 'image', title: 'Generated Source Image' },
+          },
+        ],
+        edges: [],
+        viewport: { x: 0, y: 0, zoom: 1 },
+      },
+      resources: {
+        res_source_image: {
+          id: 'res_source_image',
+          type: 'image',
+          name: 'source-image.png',
+          value: {
+            assetId: 'asset_source_image',
+            url: 'data:image/png;base64,abc',
+            filename: 'source-image.png',
+            mimeType: 'image/png',
+            sizeBytes: 123,
+          },
+          source: {
+            kind: 'function_output',
+            taskId: 'task_source_image',
+            functionNodeId: 'node_source_function',
+            outputKey: 'image',
+          },
+          metadata: { createdAt: '2026-06-25T00:00:10.000Z' },
+        },
+      },
+      functions: {
+        fn_decoy: decoyFunction,
+        fn_source_image: sourceFunction,
+      },
+      tasks: {
+        task_source_image: {
+          id: 'task_source_image',
+          functionNodeId: 'node_source_function',
+          functionId: 'fn_source_image',
+          runIndex: 1,
+          runTotal: 1,
+          status: 'succeeded',
+          inputRefs: {},
+          inputSnapshot: {},
+          paramsSnapshot: {},
+          workflowTemplateSnapshot: sourceFunction.workflow.rawJson,
+          compiledWorkflowSnapshot: sourceFunction.workflow.rawJson,
+          seedPatchLog: [],
+          outputRefs: { image: [{ resourceId: 'res_source_image', type: 'image' }] },
+          createdAt: '2026-06-25T00:00:02.000Z',
+          updatedAt: '2026-06-25T00:00:10.000Z',
+          completedAt: '2026-06-25T00:00:10.000Z',
+        },
+      },
+      comfy: {
+        ...originalProject.comfy,
+        endpoints: [
+          {
+            id: 'endpoint_source_function',
+            name: 'Source ComfyUI',
+            baseUrl: 'http://127.0.0.1:27707',
+            enabled: true,
+            maxConcurrentJobs: 2,
+            priority: 10,
+            timeoutMs: 600000,
+            auth: { type: 'none' },
+            capabilities: { supportedFunctions: ['fn_source_image'] },
+            health: { status: 'online' },
+          },
+        ],
+      },
+    }
+    projectStore.setState({
+      project: sourceProject,
+      selectedNodeId: undefined,
+      selectedNodeIds: [],
+    } as Partial<ReturnType<typeof projectStore.getState>>)
+
+    const { container } = render(<CanvasWorkspace />)
+    const assetNode = await waitFor(() => {
+      const element = container.querySelector<HTMLElement>('.react-flow__node[data-id="node_source_image"]')
+      expect(element).not.toBeNull()
+      return element!
+    })
+    const sourceLink = within(assetNode).getByText('Source Image Workflow').closest('button')
+    expect(sourceLink).not.toBeNull()
+
+    fireEvent.click(sourceLink!)
+
+    const dialog = screen.getByRole('dialog', { name: /Function Management|Source function details/i })
+    expect(screen.queryByRole('dialog', { name: 'Run Source Image Workflow' })).not.toBeInTheDocument()
+    expect(within(dialog).getByLabelText('Function name')).toHaveValue('Source Image Workflow')
+    const selectedSource = within(within(dialog).getByLabelText('Managed function list')).getByRole('button', {
+      name: /Source Image Workflow/,
+    })
+    expect(selectedSource).toHaveClass('selected')
+    const functionType = within(dialog).queryByLabelText('Function type')
+    if (functionType) expect(functionType).toHaveValue('comfyui')
+    else expect(within(dialog).getByText(/^comfyui$/i)).toBeVisible()
+    expect(within(dialog).getByRole('heading', { name: 'Inputs' })).toBeVisible()
+    expect(within(dialog).getByLabelText('Input label prompt')).toHaveValue('Source Prompt')
+    expect(within(dialog).getByRole('heading', { name: 'Outputs' })).toBeVisible()
+    expect(within(dialog).getByLabelText('Output label image')).toHaveValue('Source Image')
+    expect(within(dialog).getByRole('heading', { name: 'Workflow JSON' })).toBeVisible()
+    expect(within(dialog).getByLabelText('Selected workflow JSON')).toHaveTextContent('SourceWorkflowSentinel')
+    expect(within(dialog).getByLabelText('Selected workflow JSON')).not.toHaveTextContent('DecoyWorkflowSentinel')
+    expect(within(dialog).getByRole('button', { name: 'Edit in ComfyUI' })).toBeEnabled()
+  })
+
+  it('uses task provenance consistently for the source button and function details when metadata disagrees', async () => {
+    const project = provenanceProject({ metadataFunctionId: 'fn_metadata_workflow' })
+    projectStore.setState({
+      project,
+      selectedNodeId: undefined,
+      selectedNodeIds: [],
+    } as Partial<ReturnType<typeof projectStore.getState>>)
+
+    const { container } = render(<CanvasWorkspace />)
+    const assetNode = await waitFor(() => {
+      const element = container.querySelector<HTMLElement>('.react-flow__node[data-id="node_provenance_image"]')
+      expect(element).not.toBeNull()
+      return element!
+    })
+    const sourceLink = assetNode.querySelector<HTMLButtonElement>('.asset-function-chip')
+    expect(sourceLink).not.toBeNull()
+    expect.soft(sourceLink).toHaveAttribute('aria-label', 'View function and workflow Task Workflow A')
+    expect.soft(sourceLink).toHaveTextContent('Task Workflow A')
+
+    fireEvent.click(sourceLink!)
+
+    const dialog = screen.getByRole('dialog', { name: /Function Management|Source function details/i })
+    expect(within(dialog).getByLabelText('Function name')).toHaveValue('Task Workflow A')
+    expect(within(dialog).getByLabelText('Function type')).toHaveValue('comfyui')
+    expect(within(dialog).getByLabelText('Selected workflow JSON')).toHaveTextContent('TaskWorkflowASentinel')
+    expect(within(dialog).getByLabelText('Selected workflow JSON')).not.toHaveTextContent('MetadataWorkflowBSentinel')
+  })
+
+  it('falls back to resource metadata provenance when the historical task is unavailable', async () => {
+    const project = provenanceProject({ includeTask: false, metadataFunctionId: 'fn_metadata_workflow' })
+    projectStore.setState({
+      project,
+      selectedNodeId: undefined,
+      selectedNodeIds: [],
+    } as Partial<ReturnType<typeof projectStore.getState>>)
+
+    const { container } = render(<CanvasWorkspace />)
+    const assetNode = await waitFor(() => {
+      const element = container.querySelector<HTMLElement>('.react-flow__node[data-id="node_provenance_image"]')
+      expect(element).not.toBeNull()
+      return element!
+    })
+    const sourceLink = assetNode.querySelector<HTMLButtonElement>('.asset-function-chip')
+    expect(sourceLink).not.toBeNull()
+    expect(sourceLink).toHaveAttribute('aria-label', 'View function and workflow Metadata Workflow B')
+
+    fireEvent.click(sourceLink!)
+
+    const dialog = screen.getByRole('dialog', { name: /Function Management|Source function details/i })
+    expect(within(dialog).getByLabelText('Function name')).toHaveValue('Metadata Workflow B')
+    expect(within(dialog).getByLabelText('Function type')).toHaveValue('comfyui')
+    expect(within(dialog).getByLabelText('Selected workflow JSON')).toHaveTextContent('MetadataWorkflowBSentinel')
+    expect(within(dialog).getByLabelText('Selected workflow JSON')).not.toHaveTextContent('TaskWorkflowASentinel')
   })
 
   it('shows run details and navigation from a generated asset inspector', async () => {

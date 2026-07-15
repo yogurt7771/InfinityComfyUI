@@ -2171,7 +2171,23 @@ function CanvasSurface() {
       const functionDef = functionId
         ? project.functions[functionId] ?? task?.functionSnapshot ?? resource?.metadata?.functionSnapshot
         : undefined
-      if (!resource || !task || !functionId || !functionDef) return
+      if (!resource || !functionId || !functionDef) return
+
+      const liveFunction = project.functions[functionId]
+      if (liveFunction?.workflow.format === 'comfyui_api_json') {
+        const sourceFunctionNodeId =
+          resource.source.kind === 'function_output' ? resource.source.functionNodeId : task?.functionNodeId
+
+        closeFunctionRunFloatingMenus()
+        setFunctionRunDialog(undefined)
+        setFunctionEditor({
+          nodeId: sourceFunctionNodeId ?? resourceId,
+          functionId: liveFunction.id,
+        })
+        return
+      }
+
+      if (!task) return
 
       const sourceNode = project.canvas.nodes.find(
         (node) => node.type === 'resource' && node.data.resourceId === resourceId,
@@ -2194,7 +2210,15 @@ function CanvasSurface() {
         },
       })
     },
-    [flowNodeLayoutContext, openFunctionRunDialog, project.canvas.nodes, project.functions, project.resources, project.tasks],
+    [
+      closeFunctionRunFloatingMenus,
+      flowNodeLayoutContext,
+      openFunctionRunDialog,
+      project.canvas.nodes,
+      project.functions,
+      project.resources,
+      project.tasks,
+    ],
   )
 
   useEffect(() => {
