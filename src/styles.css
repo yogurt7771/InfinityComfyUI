@@ -3987,9 +3987,10 @@ textarea[aria-invalid="true"] {
 .resource-node-active::before {
   content: "";
   position: absolute;
-  top: -3px;
-  left: -1px;
-  right: -1px;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1;
   height: 3px;
   border-radius: 8px 8px 0 0;
   background: linear-gradient(90deg, rgba(19, 136, 148, 0.34), rgba(20, 184, 166, 0.34), rgba(19, 136, 148, 0.34));
@@ -4080,9 +4081,10 @@ textarea[aria-invalid="true"] {
 .result-node-active::before {
   content: "";
   position: absolute;
-  top: -3px;
-  left: -1px;
-  right: -1px;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1;
   height: 3px;
   border-radius: 8px 8px 0 0;
   background: linear-gradient(90deg, rgba(19, 136, 148, 0.34), rgba(47, 158, 68, 0.32), rgba(19, 136, 148, 0.34));
@@ -7667,24 +7669,12 @@ body[data-theme='light'] option {
 
 .workspace-canvas .react-flow__node.selection-primary .canvas-node {
   border-color: var(--selection-primary-stroke);
-  outline: 0;
+  outline: 2px solid var(--selection-primary-stroke);
+  outline-offset: 4px;
   box-shadow:
     0 0 0 2px rgba(255, 255, 255, 0.96),
     0 0 0 6px var(--selection-primary-ring),
     0 20px 58px rgba(15, 23, 42, 0.2);
-}
-
-.workspace-canvas .react-flow__node.selection-primary .canvas-node::before {
-  content: "";
-  position: absolute;
-  inset: -8px;
-  z-index: 3;
-  border: 2px solid var(--selection-primary-stroke);
-  border-radius: 14px;
-  box-shadow:
-    0 0 0 4px var(--selection-primary-halo),
-    0 0 28px var(--selection-primary-halo);
-  pointer-events: none;
 }
 
 .workspace-canvas .react-flow__edge.selection-dimmed-edge {
