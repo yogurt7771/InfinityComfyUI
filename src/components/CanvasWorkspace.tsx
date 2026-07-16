@@ -2366,6 +2366,64 @@ function CanvasSurface() {
     ],
   )
 
+  const rerunResource = useCallback(
+    (resourceId: string) => {
+      const resource = project.resources[resourceId]
+      const taskId = resource?.source.taskId
+      const task = taskId ? project.tasks[taskId] : undefined
+      if (
+        !resource ||
+        !task ||
+        (task.status !== 'failed' && task.status !== 'succeeded' && task.status !== 'canceled')
+      ) {
+        return
+      }
+
+      const sourceNode = project.canvas.nodes.find(
+        (node) => node.type === 'resource' && node.data.resourceId === resourceId,
+      )
+      const sourceResultNodeId =
+        resource.source.resultGroupNodeId ??
+        (typeof sourceNode?.data.sourceResultNodeId === 'string' ? sourceNode.data.sourceResultNodeId : undefined)
+      if (
+        sourceResultNodeId &&
+        project.canvas.nodes.some((node) => node.id === sourceResultNodeId && node.type === 'result_group')
+      ) {
+        void rerunResultNode(sourceResultNodeId)
+        return
+      }
+
+      const functionId = task.functionId || resource.metadata?.workflowFunctionId
+      if (!functionId) return
+      const functionDef =
+        project.functions[functionId] ?? task.functionSnapshot ?? resource.metadata?.functionSnapshot
+      if (!functionDef) return
+
+      const position = sourceNode?.position ?? { x: 0, y: 0 }
+      const inputValues = functionRunInputsFromTask(task)
+      const options = {
+        replace: {
+          resourceId,
+          outputKey: resource.source.outputKey,
+        },
+      }
+      if (project.functions[functionId]) {
+        void runFunctionAtPosition(functionId, inputValues, position, 1, options)
+        return
+      }
+      void runTemporaryFunctionAtPosition(functionDef, inputValues, position, 1, options)
+    },
+    [
+      project.canvas.nodes,
+      project.functions,
+      project.resources,
+      project.tasks,
+      rerunResultNode,
+      runFunctionAtPosition,
+      runTemporaryFunctionAtPosition,
+    ],
+  )
+
   useEffect(() => {
     const focusNode = (event: Event) => {
       const nodeId = (event as CustomEvent<{ nodeId?: string }>).detail?.nodeId
@@ -2429,6 +2487,7 @@ function CanvasSurface() {
           onUpdateNumberResourceValue: updateNumberResourceValue,
           onUpdateBooleanResourceValue: updateBooleanResourceValue,
           onReplaceResourceMedia: replaceResourceMedia,
+          onRerunResource: rerunResource,
           onOpenFunctionRunForResource: openFunctionRunForResource,
           onResizeNode: updateNodeSize,
         },
@@ -2447,6 +2506,7 @@ function CanvasSurface() {
       project.tasks,
       renameNode,
       replaceResourceMedia,
+      rerunResource,
       rerunResultNode,
       runFunctionNodeWithComfy,
       activeSelectedNodeIds,

@@ -126,6 +126,7 @@ type WorkbenchNodeData = {
   onUpdateNumberResourceValue: (resourceId: string, value: number) => void
   onUpdateBooleanResourceValue: (resourceId: string, value: boolean) => void
   onReplaceResourceMedia: (resourceId: string, type: MediaResourceKind, media: MediaResourcePayload) => void
+  onRerunResource?: (resourceId: string) => void
   onOpenFunctionRunForResource?: (resourceId: string) => void
 }
 
@@ -136,6 +137,7 @@ const resourceTargetHandleId = (resourceId: string) => `resource-target:${resour
 const resultHandleId = (resourceId: string) => `result:${resourceId}`
 const hiddenLineageAnchorStyle: CSSProperties = { opacity: 0, pointerEvents: 'none' }
 const activeResultStatuses = new Set(['pending', 'queued', 'running', 'fetching_outputs'])
+const rerunnableResultStatuses = new Set(['failed', 'succeeded', 'canceled'])
 const visibleAssetStatuses = new Set(['pending', 'queued', 'running', 'fetching_outputs', 'failed'])
 const liveAssetDurationStatuses = activeResultStatuses
 const NEW_NODE_HIGHLIGHT_TTL_MS = 15_000
@@ -2120,6 +2122,7 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
   const title = String(nodeData.title ?? resource?.name ?? 'Resource')
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [previewResource, setPreviewResource] = useState<Resource | undefined>()
+  const [rerunConfirmationOpen, setRerunConfirmationOpen] = useState(false)
   const taskId = resource?.source.taskId ?? nodeData.taskId
   const task = taskId ? nodeData.tasksById?.[taskId] : undefined
   const taskStatus = task?.status
@@ -2145,6 +2148,32 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
       nodeData.functionsById[sourceFunctionId] &&
       sourceFunction?.workflow.format === 'comfyui_api_json',
   )
+  const canRerunAsset = Boolean(
+    resource?.source.kind === 'function_output' &&
+      task &&
+      sourceFunction &&
+      nodeData.onRerunResource &&
+      typeof assetStatus === 'string' &&
+      rerunnableResultStatuses.has(assetStatus),
+  )
+  const rerunControl = canRerunAsset ? (
+    <button
+      type="button"
+      aria-label="Rerun result"
+      className="result-run-control nodrag nopan"
+      title="Rerun result"
+      onClick={() => {
+        if (!resource) return
+        if (assetStatus === 'succeeded') {
+          setRerunConfirmationOpen(true)
+          return
+        }
+        nodeData.onRerunResource?.(resource.id)
+      }}
+    >
+      <RefreshCcw size={14} />
+    </button>
+  ) : null
   const minSize = resourceNodeMinSize({
     resourceType: resource?.type ?? nodeData.resourceType,
     title,
@@ -2224,7 +2253,12 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
         </>
       ) : null}
       <EditableNodeTitle
-        actions={nodeReferenceBadge(nodeData)}
+        actions={
+          <>
+            {nodeReferenceBadge(nodeData)}
+            {rerunControl}
+          </>
+        }
         icon={resource?.type === 'number' ? <Hash size={16} /> : <FileText size={16} />}
         isSelected={Boolean(selected)}
         nodeId={id}
@@ -2340,6 +2374,23 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
         resources={previewResource ? [previewResource] : []}
         onClose={() => setPreviewResource(undefined)}
       />
+      {rerunConfirmationOpen && resource ? (
+        <ConfirmationDialog
+          label="Rerun succeeded result confirmation"
+          title="Rerun and overwrite this output?"
+          message={
+            <>
+              <strong>{title}</strong> already succeeded. Rerunning it will replace this resource with the new result.
+            </>
+          }
+          confirmLabel="Rerun and overwrite"
+          onCancel={() => setRerunConfirmationOpen(false)}
+          onConfirm={() => {
+            setRerunConfirmationOpen(false)
+            nodeData.onRerunResource?.(resource.id)
+          }}
+        />
+      ) : null}
     </div>
   )
 })
@@ -2532,7 +2583,7 @@ export const ResultGroupNodeView = memo(({ id, data, selected }: NodeProps) => {
   const title = String(nodeData.title ?? `Run ${nodeData.runIndex ?? 1}`)
   const status = nodeData.status ?? 'created'
   const isActive = activeResultStatuses.has(status)
-  const canRerun = !isActive && (status === 'failed' || status === 'succeeded' || status === 'canceled')
+  const canRerun = !isActive && rerunnableResultStatuses.has(status)
   const task = nodeData.taskId ? nodeData.tasksById?.[nodeData.taskId] : undefined
   const errorMessage = nodeData.error?.message ?? task?.error?.message
   const handleRerun = () => {
