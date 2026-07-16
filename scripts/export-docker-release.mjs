@@ -48,7 +48,7 @@ writeFileSync(
 
 The default host ComfyUI address is http://127.0.0.1:27707.
 Override COMFY_PROXY_TARGET_BASE or configure the server URL in Infinity when needed.
-ComfyUI page passwords are entered manually in the embedded page; API tokens remain separate.
+Saved ComfyUI page passwords are filled and submitted by the injected browser bridge; API tokens remain separate.
 `,
   'utf8',
 )

@@ -21,15 +21,19 @@ export function assertSafeComfyEndpoints(endpoints: ComfyEndpointConfig[]) {
   for (const endpoint of endpoints) parseComfyEndpointUrl(endpoint.baseUrl)
 }
 
-export function normalizeBrowserDirectComfyEndpoint(endpoint: ComfyEndpointConfig): ComfyEndpointConfig {
-  const token = endpoint.auth?.token
+export function normalizeComfyEndpointCredentials(endpoint: ComfyEndpointConfig): ComfyEndpointConfig {
+  const auth = endpoint.auth
+  const token = auth?.token
+  const password = auth?.type === 'password' ? auth.password : undefined
   return {
     ...endpoint,
-    auth: token
-      ? { type: 'token', token, exportSecret: endpoint.auth?.exportSecret }
-      : { type: 'none' },
+    auth: password
+      ? { type: 'password', password, token, exportSecret: auth?.exportSecret }
+      : token
+        ? { type: 'token', token, exportSecret: auth?.exportSecret }
+        : { type: 'none' },
   }
 }
 
-export const normalizeBrowserDirectComfyEndpoints = (endpoints: ComfyEndpointConfig[]) =>
-  endpoints.map(normalizeBrowserDirectComfyEndpoint)
+export const normalizeComfyEndpointCredentialsList = (endpoints: ComfyEndpointConfig[]) =>
+  endpoints.map(normalizeComfyEndpointCredentials)

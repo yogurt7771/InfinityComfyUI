@@ -262,6 +262,55 @@ const comfyProxyBridge = (proxyBase, targetBase, bearerToken) => `<script>
   const proxyBearerToken = ${JSON.stringify(bearerToken ?? '')};
   const proxyAuthParams = new URLSearchParams(location.search);
   if (proxyBearerToken && !proxyAuthParams.has(proxyTokenParam)) proxyAuthParams.set(proxyTokenParam, proxyBearerToken);
+  let infinityLoginSubmitted = false;
+  let infinityLoginReadyTimer;
+  const infinityLoginSource = () => window.parent !== window ? window.parent : window.opener;
+  const infinityLoginRejected = new URL(location.href).searchParams.has('wrong_password');
+  const infinityLoginForm = () => {
+    const form = document.querySelector('form#form_login, form[action$="/login"]');
+    const passwordInput = form?.querySelector('input[type="password"][name="password"], input#password');
+    return form instanceof HTMLFormElement && passwordInput instanceof HTMLInputElement
+      ? { form, passwordInput }
+      : undefined;
+  };
+  const announceInfinityLoginReady = () => {
+    if (infinityLoginSubmitted || infinityLoginRejected || !infinityLoginForm()) return;
+    infinityLoginSource()?.postMessage({ type: 'infinity-comfy-login-ready' }, location.origin);
+  };
+  if (/\\/login\\/?$/.test(location.pathname) && !infinityLoginRejected) {
+    infinityLoginReadyTimer = window.setInterval(announceInfinityLoginReady, 250);
+    window.setTimeout(() => window.clearInterval(infinityLoginReadyTimer), 60000);
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', announceInfinityLoginReady, { once: true });
+    } else {
+      announceInfinityLoginReady();
+    }
+  }
+  const submitInfinityLogin = (password) => {
+    if (infinityLoginSubmitted || typeof password !== 'string' || !password) return false;
+    const login = infinityLoginForm();
+    if (!login) return false;
+    const { form, passwordInput } = login;
+    const usernameInput = form.querySelector('input[name="username"]');
+    window.clearInterval(infinityLoginReadyTimer);
+    passwordInput.value = password;
+    passwordInput.dispatchEvent(new Event('input', { bubbles: true }));
+    passwordInput.dispatchEvent(new Event('change', { bubbles: true }));
+    infinityLoginSource()?.postMessage({ type: 'infinity-comfy-login-handled' }, location.origin);
+    if (usernameInput instanceof HTMLInputElement && usernameInput.required && !usernameInput.value) {
+      usernameInput.focus();
+      return false;
+    }
+    infinityLoginSubmitted = true;
+    form.requestSubmit();
+    return true;
+  };
+  window.addEventListener('message', (event) => {
+    if (event.source !== window.parent && event.source !== window.opener) return;
+    if (event.origin !== location.origin) return;
+    if (event.data?.type !== 'infinity-comfy-login') return;
+    submitInfinityLogin(event.data.password);
+  });
   const withProxyAuth = (value) => {
     try {
       const parsed = new URL(value, location.href);
@@ -637,7 +686,7 @@ const endpointHeaders = (endpoint) => ({
       .map(([key, value]) => [key.trim(), String(value)] )
       .filter(([key]) => key),
   ),
-  ...(endpoint?.auth?.type === 'token' && endpoint.auth.token ? { Authorization: `Bearer ${endpoint.auth.token}` } : {}),
+  ...(endpoint?.auth?.token ? { Authorization: `Bearer ${endpoint.auth.token}` } : {}),
 })
 
 const fetchComfyAsset = async (project, resource) => {
@@ -792,6 +841,7 @@ ipcMain.handle('infinity-storage:save', (_event, payload) => saveProjectLibrary(
 
 async function createWindow() {
   const appUrl = rendererDevelopmentUrl() ?? (await startAppServer())
+  const appOrigin = new URL(appUrl).origin
   const win = new BrowserWindow({
     width: 1440,
     height: 920,
@@ -816,6 +866,23 @@ async function createWindow() {
   win.webContents.setWindowOpenHandler(({ url }) => {
     try {
       const parsed = new URL(url)
+      if (parsed.origin === appOrigin && parsed.pathname.startsWith(COMFY_PROXY_PREFIX)) {
+        return {
+          action: 'allow',
+          overrideBrowserWindowOptions: {
+            width: 1280,
+            height: 860,
+            minWidth: 900,
+            minHeight: 640,
+            backgroundColor: '#151719',
+            webPreferences: {
+              contextIsolation: true,
+              nodeIntegration: false,
+              sandbox: true,
+            },
+          },
+        }
+      }
       if (parsed.protocol === 'http:' || parsed.protocol === 'https:') void shell.openExternal(parsed.toString())
     } catch {
       // Invalid and non-web popup targets stay blocked inside the desktop app.

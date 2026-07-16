@@ -2648,44 +2648,6 @@ textarea[aria-invalid="true"] {
   grid-column: auto;
 }
 
-.endpoint-manual-login-note {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  gap: 10px;
-  align-items: start;
-  min-height: 74px;
-  padding: 10px;
-  border: 1px solid color-mix(in srgb, var(--teal) 22%, var(--line));
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--teal-soft) 56%, var(--panel));
-}
-
-.endpoint-manual-login-icon {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 9px;
-  color: var(--teal);
-  background: color-mix(in srgb, var(--teal) 12%, transparent);
-}
-
-.endpoint-manual-login-note > div {
-  display: grid;
-  gap: 4px;
-}
-
-.endpoint-manual-login-note strong {
-  color: var(--ink);
-  font-size: 12px;
-}
-
-.endpoint-manual-login-note small {
-  color: var(--muted);
-  font-size: 10px;
-  line-height: 1.45;
-}
-
 .endpoint-credential-field small {
   min-height: 32px;
   color: var(--muted);

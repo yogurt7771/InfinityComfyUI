@@ -4,8 +4,8 @@ import { get as getIdb, set as setIdb } from 'idb-keyval'
 import { ComfyClient, type ComfyUploadImageOptions, type ComfyUploadImageResult } from '../domain/comfyClient'
 import {
   assertSafeComfyEndpoints,
-  normalizeBrowserDirectComfyEndpoint,
-  normalizeBrowserDirectComfyEndpoints,
+  normalizeComfyEndpointCredentials,
+  normalizeComfyEndpointCredentialsList,
 } from '../domain/comfyEndpoint'
 import { ComfyServer, comfyFileFromResource } from '../domain/comfyServer'
 import { extractComfyOutputs, type ComfyFileRef } from '../domain/comfyOutputs'
@@ -9071,7 +9071,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         capabilities: { supportedFunctions: comfyWorkflowFunctionIds(get().project.functions) },
         health: { status: 'unknown' },
       }
-      const endpoint = normalizeBrowserDirectComfyEndpoint({
+      const endpoint = normalizeComfyEndpointCredentials({
         ...baseEndpoint,
         ...patch,
         id: endpointId,
@@ -9102,7 +9102,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             ...state.project.comfy,
             endpoints: state.project.comfy.endpoints.map((endpoint) =>
               endpoint.id === endpointId
-                ? normalizeBrowserDirectComfyEndpoint({ ...endpoint, ...patch })
+                ? normalizeComfyEndpointCredentials({ ...endpoint, ...patch })
                 : endpoint,
             ),
           },
@@ -9147,7 +9147,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
     exportConfig: () => createConfigPackage(get().project),
 
     importProject: (payload) => {
-      const endpoints = normalizeBrowserDirectComfyEndpoints(payload.project.comfy.endpoints)
+      const endpoints = normalizeComfyEndpointCredentialsList(payload.project.comfy.endpoints)
       assertSafeComfyEndpoints(endpoints)
       const now = runtime.now()
       const importedProject = withRuntimeHistory(withBuiltInFunctions({
@@ -9167,7 +9167,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
     importConfig: (payload) => {
       const config = payload.config
-      const endpoints = normalizeBrowserDirectComfyEndpoints(config.comfy.endpoints)
+      const endpoints = normalizeComfyEndpointCredentialsList(config.comfy.endpoints)
       assertSafeComfyEndpoints(endpoints)
       const now = runtime.now()
       set((state) => {
@@ -9209,7 +9209,7 @@ const persistentProjectSnapshot = (project: ProjectState): ProjectState => {
     comfy: {
       ...baseProject.comfy,
       endpoints: baseProject.comfy.endpoints.map((endpoint) => {
-        const persistentEndpoint = normalizeBrowserDirectComfyEndpoint(endpoint)
+        const persistentEndpoint = normalizeComfyEndpointCredentials(endpoint)
         delete persistentEndpoint.health
         return persistentEndpoint
       }),
@@ -9247,7 +9247,7 @@ const loadProjectLibrary = (
         ...project,
         comfy: {
           ...project.comfy,
-          endpoints: normalizeBrowserDirectComfyEndpoints(project.comfy.endpoints),
+          endpoints: normalizeComfyEndpointCredentialsList(project.comfy.endpoints),
         },
       }, now)),
     ]),
@@ -9277,7 +9277,7 @@ const loadIndexedDbProjectLibrary = (
         ...savedProject,
         comfy: {
           ...savedProject.comfy,
-          endpoints: normalizeBrowserDirectComfyEndpoints(savedProject.comfy.endpoints),
+          endpoints: normalizeComfyEndpointCredentialsList(savedProject.comfy.endpoints),
         },
       }, now))
       applyState({

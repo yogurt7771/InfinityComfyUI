@@ -1,6 +1,6 @@
 import type { ComfyEndpointConfig, ProjectState } from './types'
 import { withoutBuiltInProjectFunctions } from './builtInFunctions'
-import { normalizeBrowserDirectComfyEndpoint } from './comfyEndpoint'
+import { normalizeComfyEndpointCredentials } from './comfyEndpoint'
 
 export type FullProjectPackage = {
   manifest: {
@@ -24,10 +24,11 @@ export type ConfigPackage = {
 const clone = <T>(value: T): T => structuredClone(value) as T
 
 const sanitizeEndpoint = (endpoint: ComfyEndpointConfig): ComfyEndpointConfig => {
-  const sanitized = normalizeBrowserDirectComfyEndpoint(clone(endpoint))
+  const sanitized = normalizeComfyEndpointCredentials(clone(endpoint))
 
   if (sanitized.auth && sanitized.auth.exportSecret !== true) {
     delete sanitized.auth.token
+    delete sanitized.auth.password
   }
 
   return sanitized

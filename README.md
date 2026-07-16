@@ -48,7 +48,7 @@ npm run docker:up
 npm run docker:down
 ```
 
-默认 Compose 只把端口发布到宿主机回环地址。ComfyUI 如果运行在宿主机的 `127.0.0.1:27707`，容器代理会自动转到 `host.docker.internal:27707`。页面密码仍由用户在嵌入式 ComfyUI 中手动输入；`API token` 与页面登录保持独立。
+默认 Compose 只把端口发布到宿主机回环地址。ComfyUI 如果运行在宿主机的 `127.0.0.1:27707`，容器代理会自动转到 `host.docker.internal:27707`。配置页面密码后，代理注入脚本会在嵌入式登录页自动填写并提交；`API token` 与页面登录保持独立。
 
 导出可独立拷走的镜像 tar、发布 Compose 和启动说明：
 
@@ -84,6 +84,7 @@ npm run package:win    # 打包 Windows exe
 点击右上角 `Settings`，进入 `ComfyUI Server Management`：
 
 - 新增服务器：填写名称、URL，例如 `http://127.0.0.1:8188`。
+- 页面密码：保存在本地项目中，通过同源代理注入脚本自动填写并提交 ComfyUI 登录表单。
 - API token：由桌面客户端用于 API、媒体和工作流任务；它与 ComfyUI 页面登录密码相互独立。
 - 自定义 Headers：用于鉴权或网关，例如 `Authorization`。
 - 启用/禁用服务器：禁用后不会参与任务调度。
@@ -111,7 +112,8 @@ npm run package:win    # 打包 Windows exe
 
 嵌入式 ComfyUI 编辑器说明：
 
-- ComfyUI 在客户端管理的独立页面容器中运行，登录完全由用户在其中手动完成；Infinity 不收集、不代填、也不提交页面密码。
+- ComfyUI 在客户端管理的同源代理页面中运行。保存页面密码后，Infinity 只在登录页通过浏览器内存消息传给注入脚本，自动填写并提交；密码不会放入页面 URL。
+- 如果没有保存密码，仍可直接在嵌入式页面中手动登录。首次创建 ComfyUI-Login 账号时如需用户名，也由用户在页面中填写。
 - 打开已有 UI 工作流时会走 ComfyUI 的 File Open 逻辑，保留节点和连线。
 - 保存时会触发 ComfyUI 的导出逻辑，分别得到 UI 工作流和 `Export (API)` 等价的调用工作流。
 - 如果导入的是非 API 工作流，可以先用嵌入式 ComfyUI 打开，再保存为可运行的 API 工作流。
@@ -352,7 +354,7 @@ npm run package:win
 
 ### 内嵌 ComfyUI 页面需要登录
 
-直接在客户端的 ComfyUI 页面中手动完成登录。登录 Cookie 保存在 Electron 的持久化 ComfyUI 会话中，Infinity 不读取页面密码；API 调用继续使用服务器配置中的独立 token。自动工作流加载与导出由客户端注入的桌面 Bridge 完成，不需要改动 ComfyUI 安装目录。
+在 ComfyUI 服务器设置中保存页面密码后，嵌入式编辑器会自动填写并提交登录表单；密码不进入 URL，登录成功后的 Cookie 由浏览器正常保存。未配置密码或首次登录需要用户名时，也可以在页面中手动完成。API 调用继续使用独立 token，工作流加载与导出由同源代理注入的 Bridge 完成，不需要改动 ComfyUI 安装目录。
 
 ## 需求来源
 

@@ -151,6 +151,55 @@ const comfyProxyBridge = (proxyBase: string, targetBase: string, bearerToken?: s
   const proxyBearerToken = ${JSON.stringify(bearerToken ?? '')};
   const proxyAuthParams = new URLSearchParams(location.search);
   if (proxyBearerToken && !proxyAuthParams.has(proxyTokenParam)) proxyAuthParams.set(proxyTokenParam, proxyBearerToken);
+  let infinityLoginSubmitted = false;
+  let infinityLoginReadyTimer;
+  const infinityLoginSource = () => window.parent !== window ? window.parent : window.opener;
+  const infinityLoginRejected = new URL(location.href).searchParams.has('wrong_password');
+  const infinityLoginForm = () => {
+    const form = document.querySelector('form#form_login, form[action$="/login"]');
+    const passwordInput = form?.querySelector('input[type="password"][name="password"], input#password');
+    return form instanceof HTMLFormElement && passwordInput instanceof HTMLInputElement
+      ? { form, passwordInput }
+      : undefined;
+  };
+  const announceInfinityLoginReady = () => {
+    if (infinityLoginSubmitted || infinityLoginRejected || !infinityLoginForm()) return;
+    infinityLoginSource()?.postMessage({ type: 'infinity-comfy-login-ready' }, location.origin);
+  };
+  if (/\\/login\\/?$/.test(location.pathname) && !infinityLoginRejected) {
+    infinityLoginReadyTimer = window.setInterval(announceInfinityLoginReady, 250);
+    window.setTimeout(() => window.clearInterval(infinityLoginReadyTimer), 60000);
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', announceInfinityLoginReady, { once: true });
+    } else {
+      announceInfinityLoginReady();
+    }
+  }
+  const submitInfinityLogin = (password) => {
+    if (infinityLoginSubmitted || typeof password !== 'string' || !password) return false;
+    const login = infinityLoginForm();
+    if (!login) return false;
+    const { form, passwordInput } = login;
+    const usernameInput = form.querySelector('input[name="username"]');
+    window.clearInterval(infinityLoginReadyTimer);
+    passwordInput.value = password;
+    passwordInput.dispatchEvent(new Event('input', { bubbles: true }));
+    passwordInput.dispatchEvent(new Event('change', { bubbles: true }));
+    infinityLoginSource()?.postMessage({ type: 'infinity-comfy-login-handled' }, location.origin);
+    if (usernameInput instanceof HTMLInputElement && usernameInput.required && !usernameInput.value) {
+      usernameInput.focus();
+      return false;
+    }
+    infinityLoginSubmitted = true;
+    form.requestSubmit();
+    return true;
+  };
+  window.addEventListener('message', (event) => {
+    if (event.source !== window.parent && event.source !== window.opener) return;
+    if (event.origin !== location.origin) return;
+    if (event.data?.type !== 'infinity-comfy-login') return;
+    submitInfinityLogin(event.data.password);
+  });
   const withProxyAuth = (value) => {
     try {
       const parsed = new URL(value, location.href);

@@ -42,9 +42,14 @@ import { defaultGeminiLlmConfig, isGeminiLlmFunction, mergedGeminiLlmConfig } fr
 import { getProjectRunHistory, getSelectedNodesRunHistory } from '../domain/runHistory'
 import { formatDurationMs, formatHistoryTimestamp, runDurationMs } from '../domain/runTiming'
 import { downloadConfigPackage, downloadProjectPackage, readPackageFile } from '../domain/projectTransfer'
-import { normalizeBrowserDirectComfyEndpoint, parseComfyEndpointUrl } from '../domain/comfyEndpoint'
+import { normalizeComfyEndpointCredentials, parseComfyEndpointUrl } from '../domain/comfyEndpoint'
 import { parseComfyApiWorkflowJson } from '../domain/workflow'
-import { comfyProxyUrl } from '../domain/comfyProxy'
+import {
+  COMFY_PROXY_LOGIN_HANDLED_MESSAGE,
+  COMFY_PROXY_LOGIN_READY_MESSAGE,
+  comfyProxyUrl,
+  postComfyProxyPassword,
+} from '../domain/comfyProxy'
 import {
   exportApiWorkflowFromComfyEditor,
   exportUiWorkflowFromComfyEditor,
@@ -1299,18 +1304,33 @@ const setEndpointFunctionAvailability = (
   onUpdateEndpoint(endpoint.id, endpointCapabilitiesPatch(endpoint, nextFunctions))
 }
 
-const directComfyEditorUrl = (baseUrl: string) => {
-  const url = parseComfyEndpointUrl(baseUrl)
-  for (const key of Array.from(url.searchParams.keys())) {
-    if (key.toLowerCase() === 'token') url.searchParams.delete(key)
-  }
-  url.hash = ''
-  return url.toString()
-}
-
 export const openComfyEditorInBrowser = (endpoint: ComfyEndpointConfig) => {
   try {
-    window.open(directComfyEditorUrl(endpoint.baseUrl), '_blank', 'noopener,noreferrer')
+    parseComfyEndpointUrl(endpoint.baseUrl)
+    const bearerToken =
+      endpoint.auth?.type === 'token' || endpoint.auth?.type === 'password' ? endpoint.auth.token : undefined
+    const password = endpoint.auth?.type === 'password' ? endpoint.auth.password : undefined
+    const popup = window.open(comfyProxyUrl(endpoint.baseUrl, { bearerToken }), '_blank')
+    if (!popup) return 'ComfyUI could not open. Allow pop-ups for this site and try again.'
+    if (password) {
+      let passwordSent = false
+      const stop = () => {
+        window.clearTimeout(timeout)
+        window.removeEventListener('message', handleLoginMessage)
+      }
+      const handleLoginMessage = (event: MessageEvent) => {
+        if (event.source !== popup || event.origin !== window.location.origin) return
+        if (event.data?.type === COMFY_PROXY_LOGIN_READY_MESSAGE && !passwordSent) {
+          passwordSent = postComfyProxyPassword(popup, password, window.location.origin)
+          return
+        }
+        if (event.data?.type === COMFY_PROXY_LOGIN_HANDLED_MESSAGE) {
+          stop()
+        }
+      }
+      const timeout = window.setTimeout(stop, 60000)
+      window.addEventListener('message', handleLoginMessage)
+    }
     return undefined
   } catch (error) {
     return error instanceof TypeError
@@ -1392,10 +1412,11 @@ export function ComfyWorkflowEditorDialog({
     undefined,
   )
   const loadedWorkflowRef = useRef<{ generation: number; inputSignature: string } | undefined>(undefined)
+  const passwordAttemptedRef = useRef(false)
   const [frameKey, setFrameKey] = useState(0)
   const [phase, setPhase] = useState<ComfyEditorPhase>(endpoint ? 'login' : 'error')
   const [status, setStatus] = useState(
-    endpoint ? 'Sign in inside ComfyUI if prompted. Infinity never submits your page password.' : 'No ComfyUI server selected.',
+    endpoint ? 'Connecting to ComfyUI. A saved page password will be submitted automatically.' : 'No ComfyUI server selected.',
   )
   const [error, setError] = useState<string>()
   const [saving, setSaving] = useState(false)
@@ -1403,9 +1424,12 @@ export function ComfyWorkflowEditorDialog({
 
   const endpointId = endpoint?.id
   const endpointBaseUrl = endpoint?.baseUrl
+  const proxyBearerToken =
+    endpoint?.auth?.type === 'token' || endpoint?.auth?.type === 'password' ? endpoint.auth.token : undefined
+  const proxyPassword = endpoint?.auth?.type === 'password' ? endpoint.auth.password : undefined
   const frameSrc = endpoint
     ? comfyProxyUrl(endpoint.baseUrl, {
-        bearerToken: endpoint.auth?.type === 'token' ? endpoint.auth.token : undefined,
+        bearerToken: proxyBearerToken,
       })
     : undefined
   const inputSignature = useMemo(
@@ -1413,21 +1437,42 @@ export function ComfyWorkflowEditorDialog({
     [initialApiJson, initialUiJson],
   )
 
+  useEffect(() => {
+    const handleLoginMessage = (event: MessageEvent) => {
+      const frame = frameRef.current
+      if (!frame?.contentWindow || event.source !== frame.contentWindow || event.origin !== window.location.origin) return
+      if (event.data?.type === COMFY_PROXY_LOGIN_READY_MESSAGE && proxyPassword && !passwordAttemptedRef.current) {
+        passwordAttemptedRef.current = true
+        setPhase('connecting')
+        setStatus('Submitting the saved ComfyUI page password…')
+        postComfyProxyPassword(frame.contentWindow, proxyPassword, window.location.origin)
+        return
+      }
+      if (event.data?.type === COMFY_PROXY_LOGIN_HANDLED_MESSAGE) {
+        setPhase('connecting')
+        setStatus('Waiting for ComfyUI to finish signing in…')
+      }
+    }
+    window.addEventListener('message', handleLoginMessage)
+    return () => window.removeEventListener('message', handleLoginMessage)
+  }, [proxyPassword])
+
   /* eslint-disable react-hooks/set-state-in-effect -- A changed server starts a new proxied iframe lifecycle. */
   useEffect(() => {
     generationRef.current += 1
     initializingRef.current = undefined
     loadedWorkflowRef.current = undefined
+    passwordAttemptedRef.current = false
     setFrameReady(false)
     setSaving(false)
     setError(undefined)
     setPhase(endpointId ? 'login' : 'error')
     setStatus(
       endpointId
-        ? 'Sign in inside ComfyUI if prompted. Infinity never submits your page password.'
+        ? 'Connecting to ComfyUI. A saved page password will be submitted automatically.'
         : 'No ComfyUI server selected.',
     )
-  }, [endpointId, endpointBaseUrl, frameSrc])
+  }, [endpointId, endpointBaseUrl, frameSrc, proxyPassword])
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const initializeFrame = useCallback(async () => {
@@ -1526,11 +1571,54 @@ export function ComfyWorkflowEditorDialog({
     generationRef.current += 1
     initializingRef.current = undefined
     loadedWorkflowRef.current = undefined
+    passwordAttemptedRef.current = false
     setFrameReady(false)
     setError(undefined)
     setPhase('login')
-    setStatus('Sign in inside ComfyUI if prompted, then the workflow bridge will reconnect.')
+    setStatus('Reloading ComfyUI. A saved page password will be submitted automatically.')
     setFrameKey((current) => current + 1)
+  }
+
+  const handleFrameLoad = () => {
+    generationRef.current += 1
+    initializingRef.current = undefined
+    loadedWorkflowRef.current = undefined
+    setFrameReady(false)
+    setError(undefined)
+
+    const frame = frameRef.current
+    let frameUrl: URL | undefined
+    try {
+      frameUrl = frame?.contentWindow ? new URL(frame.contentWindow.location.href) : undefined
+    } catch {
+      // The proxy becomes same-origin after navigation; initializeFrame will report if it remains unavailable.
+    }
+
+    const loginPage = Boolean(frameUrl && /\/login\/?$/.test(frameUrl.pathname))
+    if (loginPage) {
+      setPhase('login')
+      if (frameUrl?.searchParams.has('wrong_password')) {
+        setPhase('error')
+        setStatus('ComfyUI rejected the saved page password.')
+        setError('The saved ComfyUI page password is incorrect. Update it in ComfyUI Servers, then Retry.')
+        return
+      }
+      if (proxyPassword) {
+        setStatus(
+          passwordAttemptedRef.current
+            ? 'Waiting for ComfyUI to finish signing in…'
+            : 'ComfyUI login page detected. Waiting for the secure password handshake…',
+        )
+        return
+      }
+      setStatus('ComfyUI login page opened. Enter the page password or save one in ComfyUI Servers.')
+      return
+    }
+
+    passwordAttemptedRef.current = false
+    setPhase('connecting')
+    setStatus('ComfyUI page loaded. Opening the saved workflow…')
+    if (open) void initializeFrame()
   }
 
   const saveFromComfy = async () => {
@@ -1610,24 +1698,17 @@ export function ComfyWorkflowEditorDialog({
               title={`ComfyUI editor ${endpoint?.name ?? ''}`.trim()}
               className="comfy-editor-frame"
               src={frameSrc}
-              onLoad={() => {
-                generationRef.current += 1
-                initializingRef.current = undefined
-                loadedWorkflowRef.current = undefined
-                setFrameReady(false)
-                setError(undefined)
-                setPhase('login')
-                setStatus('ComfyUI page loaded. The saved workflow will open after sign-in is complete.')
-                if (open) void initializeFrame()
-              }}
+              onLoad={handleFrameLoad}
             />
             {!frameReady ? (
               <div className={`comfy-editor-loading is-${phase}`} aria-live="polite">
                 <strong>{phase === 'error' ? 'Connection needs attention' : 'ComfyUI stays in control'}</strong>
                 <span>
                   {phase === 'error'
-                    ? 'Complete login inside ComfyUI and retry. The desktop client will reconnect automatically.'
-                    : 'Enter the page password yourself if asked. API jobs continue to use the separate API token.'}
+                    ? 'Update the saved page password if login failed, then retry. The editor will reconnect automatically.'
+                    : proxyPassword
+                      ? 'Infinity is signing in with the saved page password. API jobs continue to use the separate API token.'
+                      : 'No page password is saved. You can still sign in manually inside ComfyUI.'}
                 </span>
               </div>
             ) : null}
@@ -3127,7 +3208,7 @@ type EndpointSavePatch = Omit<Partial<ComfyEndpointConfig>, 'id' | 'health'>
 const endpointHeaders = (endpoint: ComfyEndpointConfig) => Object.entries(endpoint.customHeaders ?? {})
 
 const cloneEndpointDraft = (endpoint: ComfyEndpointConfig): ComfyEndpointConfig => ({
-  ...normalizeBrowserDirectComfyEndpoint(endpoint),
+  ...normalizeComfyEndpointCredentials(endpoint),
   customHeaders: endpoint.customHeaders ? { ...endpoint.customHeaders } : undefined,
   capabilities: endpoint.capabilities
     ? {
@@ -3163,7 +3244,7 @@ const endpointSavePatch = (endpoint: ComfyEndpointConfig): EndpointSavePatch => 
   priority: endpoint.priority,
   tags: endpoint.tags,
   timeoutMs: endpoint.timeoutMs,
-  auth: normalizeBrowserDirectComfyEndpoint(endpoint).auth,
+  auth: normalizeComfyEndpointCredentials(endpoint).auth,
   customHeaders: endpoint.customHeaders,
   capabilities: endpoint.capabilities,
 })
@@ -3210,7 +3291,29 @@ function EndpointManager({
   const deleteHeader = (index: number) => {
     updateDraft({ customHeaders: Object.fromEntries(endpointHeaders(draft).filter((_, headerIndex) => headerIndex !== index)) })
   }
+  const updatePassword = (password: string) => {
+    if (password) {
+      updateDraft({
+        auth: {
+          type: 'password',
+          password,
+          token: draft.auth?.token,
+          exportSecret: draft.auth?.exportSecret,
+        },
+      })
+      return
+    }
+    updateDraft({
+      auth: draft.auth?.token
+        ? { type: 'token', token: draft.auth.token, exportSecret: draft.auth.exportSecret }
+        : { type: 'none' },
+    })
+  }
   const updateApiToken = (token: string) => {
+    if (draft.auth?.type === 'password') {
+      updateDraft({ auth: { ...draft.auth, token: token || undefined } })
+      return
+    }
     updateDraft({
       auth: token ? { type: 'token', token, exportSecret: draft.auth?.exportSecret } : { type: 'none' },
     })
@@ -3379,17 +3482,21 @@ function EndpointManager({
             <span className="endpoint-section-icon" aria-hidden="true"><KeyRound size={16} /></span>
             <div>
               <h4 id="endpoint-credentials-heading">Credentials</h4>
-              <p>Page sign-in and API authentication are intentionally separate.</p>
+              <p>The page password signs in the embedded editor; the API token remains independent.</p>
             </div>
           </div>
           <div className="endpoint-credential-grid">
-            <div className="endpoint-manual-login-note">
-              <span className="endpoint-manual-login-icon" aria-hidden="true"><ExternalLink size={16} /></span>
-              <div>
-                <strong>ComfyUI page login is manual</strong>
-                <small>Enter the page password inside the embedded ComfyUI editor. Infinity does not request or submit it.</small>
-              </div>
-            </div>
+            <label className="field endpoint-credential-field endpoint-password-field">
+              <span>ComfyUI page password</span>
+              <input
+                aria-label="ComfyUI password"
+                type="password"
+                autoComplete="current-password"
+                value={draft.auth?.type === 'password' ? (draft.auth.password ?? '') : ''}
+                onChange={(event) => updatePassword(event.target.value)}
+              />
+              <small>Saved with this local project, then filled and submitted automatically on the proxied login page.</small>
+            </label>
             <label className="field endpoint-credential-field endpoint-api-token-field">
               <span>API token</span>
               <input
@@ -3399,7 +3506,7 @@ function EndpointManager({
                 value={draft.auth?.token ?? ''}
                 onChange={(event) => updateApiToken(event.target.value)}
               />
-              <small>Sent by your browser directly to ComfyUI for API calls, media, and workflow runs.</small>
+              <small>Used separately for API calls, media, workflow runs, and WebSocket connections.</small>
             </label>
           </div>
         </section>
