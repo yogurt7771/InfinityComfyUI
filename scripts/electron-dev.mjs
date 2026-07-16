@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import electron from 'electron'
 
 const developmentUrl = 'http://127.0.0.1:7930/'
+const appMode = process.argv[2] === 'electron' ? 'electron' : 'launcher'
 const require = createRequire(import.meta.url)
 const viteCli = join(dirname(require.resolve('vite/package.json')), 'bin', 'vite.js')
 const renderer = spawn(process.execPath, [viteCli, '--host', '127.0.0.1', '--port', '7930', '--strictPort'], {
@@ -31,7 +32,7 @@ const waitForRenderer = async () => {
 
 try {
   await waitForRenderer()
-  const desktop = spawn(electron, ['.'], {
+  const desktop = spawn(electron, [appMode === 'launcher' ? 'electron/launcher.cjs' : '.'], {
     cwd: process.cwd(),
     env: { ...process.env, INFINITY_DEV_SERVER_URL: developmentUrl },
     stdio: 'inherit',

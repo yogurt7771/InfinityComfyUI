@@ -44,14 +44,14 @@ import { formatDurationMs, formatHistoryTimestamp, runDurationMs } from '../doma
 import { downloadConfigPackage, downloadProjectPackage, readPackageFile } from '../domain/projectTransfer'
 import { normalizeBrowserDirectComfyEndpoint, parseComfyEndpointUrl } from '../domain/comfyEndpoint'
 import { parseComfyApiWorkflowJson } from '../domain/workflow'
+import { comfyProxyUrl } from '../domain/comfyProxy'
 import {
-  exportWorkflowFromComfyFrame,
-  loadApiWorkflowIntoComfyFrame,
-  loadUiWorkflowIntoComfyFrame,
-  resumeComfyFrame,
-  waitForComfyFrameBridge,
-  type ComfyWebviewElement,
-} from '../domain/comfyFrameBridge'
+  exportApiWorkflowFromComfyEditor,
+  exportUiWorkflowFromComfyEditor,
+  loadApiWorkflowIntoComfyEditor,
+  openApiWorkflowJsonFileInComfyEditor,
+  openWorkflowJsonFileInComfyEditor,
+} from '../domain/comfyEditorBridge'
 import type {
   ComfyEndpointConfig,
   ComfyUiWorkflow,
@@ -1330,6 +1330,47 @@ type ComfyEditorPhase = 'login' | 'connecting' | 'ready' | 'error'
 const comfyWorkflowInputSignature = (uiJson?: ComfyUiWorkflow, apiJson?: ComfyWorkflow) =>
   JSON.stringify({ uiJson: uiJson ?? null, apiJson: apiJson ?? null })
 
+type ComfyFrameGraph = {
+  getNodeById?: (id: unknown) => unknown
+  _nodes?: unknown[]
+  _nodes_by_id?: Record<string, unknown>
+  change?: () => void
+  serialize?: () => unknown
+}
+
+type ComfyFrameWindow = Window & {
+  fetch: typeof fetch
+  Request?: typeof Request
+  Response: typeof Response
+  app?: {
+    graphToPrompt?: (
+      graph?: ComfyFrameGraph,
+    ) => Promise<{ output?: unknown; workflow?: unknown }> | { output?: unknown; workflow?: unknown }
+    queuePrompt?: (...args: unknown[]) => Promise<unknown> | unknown
+    handleFile?: (file: File, openSource?: unknown, options?: unknown) => Promise<unknown> | unknown
+    loadGraphData?: (workflow: ComfyUiWorkflow) => Promise<unknown> | unknown
+    loadApiJson?: (workflow: ComfyWorkflow) => Promise<unknown> | unknown
+    rootGraph?: ComfyFrameGraph
+    rootGraphInternal?: ComfyFrameGraph
+    graph?: ComfyFrameGraph
+    canvas?: {
+      draw?: (forceCanvas?: boolean, forceBgCanvas?: boolean) => void
+    }
+  }
+}
+
+const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
+
+async function waitForComfyFrameApp(frame: HTMLIFrameElement) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const frameWindow = frame.contentWindow as ComfyFrameWindow | null
+    const app = frameWindow?.app
+    if (app?.graphToPrompt) return app
+    await wait(150)
+  }
+  throw new Error('ComfyUI editor is not ready yet')
+}
+
 export function ComfyWorkflowEditorDialog({
   open = true,
   endpoint,
@@ -1345,11 +1386,8 @@ export function ComfyWorkflowEditorDialog({
   onSave: (value: EmbeddedComfySave) => void
   onClose: () => void
 }) {
-  const frameRef = useRef<ComfyWebviewElement>(null)
-  const frameLoadedRef = useRef(false)
-  const frameLoadScheduledRef = useRef(false)
+  const frameRef = useRef<HTMLIFrameElement>(null)
   const generationRef = useRef(0)
-  const bridgeAbortRef = useRef<AbortController | undefined>(undefined)
   const initializingRef = useRef<{ generation: number; inputSignature: string; promise: Promise<void> } | undefined>(
     undefined,
   )
@@ -1365,19 +1403,19 @@ export function ComfyWorkflowEditorDialog({
 
   const endpointId = endpoint?.id
   const endpointBaseUrl = endpoint?.baseUrl
-  const frameSrc = endpoint ? directComfyEditorUrl(endpoint.baseUrl) : undefined
+  const frameSrc = endpoint
+    ? comfyProxyUrl(endpoint.baseUrl, {
+        bearerToken: endpoint.auth?.type === 'token' ? endpoint.auth.token : undefined,
+      })
+    : undefined
   const inputSignature = useMemo(
     () => comfyWorkflowInputSignature(initialUiJson, initialApiJson),
     [initialApiJson, initialUiJson],
   )
 
-  /* eslint-disable react-hooks/set-state-in-effect -- A changed server starts a new isolated guest lifecycle. */
+  /* eslint-disable react-hooks/set-state-in-effect -- A changed server starts a new proxied iframe lifecycle. */
   useEffect(() => {
-    bridgeAbortRef.current?.abort()
-    bridgeAbortRef.current = undefined
     generationRef.current += 1
-    frameLoadedRef.current = false
-    frameLoadScheduledRef.current = false
     initializingRef.current = undefined
     loadedWorkflowRef.current = undefined
     setFrameReady(false)
@@ -1389,8 +1427,7 @@ export function ComfyWorkflowEditorDialog({
         ? 'Sign in inside ComfyUI if prompted. Infinity never submits your page password.'
         : 'No ComfyUI server selected.',
     )
-    return () => bridgeAbortRef.current?.abort()
-  }, [endpointId, endpointBaseUrl])
+  }, [endpointId, endpointBaseUrl, frameSrc])
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const initializeFrame = useCallback(async () => {
@@ -1401,16 +1438,9 @@ export function ComfyWorkflowEditorDialog({
       loadedWorkflowRef.current?.generation === generation &&
       loadedWorkflowRef.current.inputSignature === inputSignature
     ) {
-      try {
-        await resumeComfyFrame(frame)
-        if (generation !== generationRef.current) return
-        setFrameReady(true)
-        setPhase('ready')
-        return
-      } catch {
-        if (generation !== generationRef.current) return
-        loadedWorkflowRef.current = undefined
-      }
+      setFrameReady(true)
+      setPhase('ready')
+      return
     }
     if (
       initializingRef.current?.generation === generation &&
@@ -1420,38 +1450,32 @@ export function ComfyWorkflowEditorDialog({
       return
     }
 
-    const controller = new AbortController()
-    bridgeAbortRef.current?.abort()
-    bridgeAbortRef.current = controller
     const run = (async () => {
       setFrameReady(false)
       setError(undefined)
       setPhase('connecting')
-      setStatus('Connecting to the Infinity workflow bridge…')
-      await waitForComfyFrameBridge(frame, controller.signal)
+      setStatus('Loading the saved workflow through the local ComfyUI proxy…')
+      const app = await waitForComfyFrameApp(frame)
       if (generation !== generationRef.current) return
 
-      if (initialUiJson) {
-        let loadedEditableWorkflow = true
-        try {
-          await loadUiWorkflowIntoComfyFrame(frame, initialUiJson)
-        } catch (uiLoadError) {
-          if (!initialApiJson) throw uiLoadError
-          await loadApiWorkflowIntoComfyFrame(frame, initialApiJson)
-          loadedEditableWorkflow = false
-        }
+      if (initialUiJson && app.handleFile) {
+        await openWorkflowJsonFileInComfyEditor(app, initialUiJson, 'Infinity Workflow.json')
         if (generation !== generationRef.current) return
-        setStatus(
-          loadedEditableWorkflow
-            ? 'Editable workflow loaded. Changes can now be saved back automatically.'
-            : 'API workflow loaded as a fallback. Changes can now be saved back automatically.',
-        )
-      } else if (initialApiJson) {
-        await loadApiWorkflowIntoComfyFrame(frame, initialApiJson)
+        setStatus('Editable workflow loaded from the saved function.')
+      } else if (initialUiJson && app.loadGraphData) {
+        await app.loadGraphData(initialUiJson)
         if (generation !== generationRef.current) return
-        setStatus('API workflow loaded. Changes can now be saved back automatically.')
+        setStatus('Editable workflow loaded from the saved function.')
+      } else if (initialApiJson && app.handleFile) {
+        await openApiWorkflowJsonFileInComfyEditor(app, initialApiJson)
+        if (generation !== generationRef.current) return
+        setStatus('API workflow loaded because no editable UI workflow is stored.')
+      } else if (initialApiJson && app.loadApiJson) {
+        await loadApiWorkflowIntoComfyEditor(app, initialApiJson)
+        if (generation !== generationRef.current) return
+        setStatus('API workflow loaded because no editable UI workflow is stored.')
       } else {
-        setStatus('ComfyUI is connected. Build a workflow, then save it directly to Infinity.')
+        setStatus('ComfyUI is connected. Build a workflow, then save it to the function.')
       }
       loadedWorkflowRef.current = { generation, inputSignature }
       setFrameReady(true)
@@ -1462,14 +1486,27 @@ export function ComfyWorkflowEditorDialog({
     try {
       await run
     } catch (cause) {
-      if (controller.signal.aborted) return
       if (generation !== generationRef.current) return
+      let framePath = ''
+      try {
+        framePath = frame.contentWindow?.location.pathname ?? ''
+      } catch {
+        // The proxy is expected to make the frame same-origin; a transient navigation may briefly be unavailable.
+      }
+      if (framePath.includes('/login')) {
+        setFrameReady(false)
+        setPhase('login')
+        setStatus('ComfyUI login page opened. Enter the page password there to continue.')
+        setError(undefined)
+        return
+      }
       setFrameReady(false)
       setPhase('error')
+      const message = cause instanceof Error ? cause.message : ''
       setError(
-        cause instanceof Error && !cause.message.includes('timed out') && !cause.message.includes('not ready')
-          ? cause.message
-          : 'The desktop workflow bridge could not connect. Finish signing in inside ComfyUI, then Retry.',
+        message && !message.includes('not ready')
+          ? message
+          : 'ComfyUI did not expose its editor app. Finish signing in inside the embedded page, then Retry.',
       )
     } finally {
       if (
@@ -1478,45 +1515,15 @@ export function ComfyWorkflowEditorDialog({
       ) {
         initializingRef.current = undefined
       }
-      if (bridgeAbortRef.current === controller) bridgeAbortRef.current = undefined
     }
   }, [endpoint, initialApiJson, initialUiJson, inputSignature, open])
 
   useEffect(() => {
-    const webview = frameRef.current
-    if (!webview) return
-    const handleDocumentReady = () => {
-      if (frameLoadScheduledRef.current) return
-      frameLoadScheduledRef.current = true
-      queueMicrotask(() => {
-        frameLoadScheduledRef.current = false
-        if (frameRef.current !== webview) return
-        frameLoadedRef.current = true
-        bridgeAbortRef.current?.abort()
-        bridgeAbortRef.current = undefined
-        generationRef.current += 1
-        initializingRef.current = undefined
-        loadedWorkflowRef.current = undefined
-        setFrameReady(false)
-        setError(undefined)
-        setPhase('login')
-        setStatus('Sign in inside ComfyUI if prompted, then the desktop workflow bridge will connect.')
-        void initializeFrame()
-      })
-    }
-    webview.addEventListener('did-finish-load', handleDocumentReady)
-    return () => webview.removeEventListener('did-finish-load', handleDocumentReady)
-  }, [frameKey, frameSrc, initializeFrame])
-
-  useEffect(() => {
-    if (open && frameLoadedRef.current) void initializeFrame()
+    if (open) void initializeFrame()
   }, [initializeFrame, open])
 
   const reloadFrame = () => {
-    bridgeAbortRef.current?.abort()
-    bridgeAbortRef.current = undefined
     generationRef.current += 1
-    frameLoadedRef.current = false
     initializingRef.current = undefined
     loadedWorkflowRef.current = undefined
     setFrameReady(false)
@@ -1530,7 +1537,10 @@ export function ComfyWorkflowEditorDialog({
     if (!frameRef.current || !endpoint || !frameReady) return
     setSaving(true)
     try {
-      const { rawJson, uiJson } = await exportWorkflowFromComfyFrame(frameRef.current)
+      const app = await waitForComfyFrameApp(frameRef.current)
+      const frameWindow = frameRef.current.contentWindow as ComfyFrameWindow | null
+      const uiJson = await exportUiWorkflowFromComfyEditor(app)
+      const rawJson = await exportApiWorkflowFromComfyEditor(app, frameWindow ?? undefined)
       loadedWorkflowRef.current = {
         generation: generationRef.current,
         inputSignature: comfyWorkflowInputSignature(uiJson, rawJson),
@@ -1594,14 +1604,22 @@ export function ComfyWorkflowEditorDialog({
         </div>
         {frameSrc ? (
           <div className="comfy-editor-frame-wrap">
-            <webview
+            <iframe
               key={`${endpointId ?? 'none'}:${endpointBaseUrl ?? ''}:${frameKey}`}
               ref={frameRef}
               title={`ComfyUI editor ${endpoint?.name ?? ''}`.trim()}
               className="comfy-editor-frame"
               src={frameSrc}
-              partition="persist:infinity-comfyui"
-              webpreferences="contextIsolation=yes, nodeIntegration=no, sandbox=yes"
+              onLoad={() => {
+                generationRef.current += 1
+                initializingRef.current = undefined
+                loadedWorkflowRef.current = undefined
+                setFrameReady(false)
+                setError(undefined)
+                setPhase('login')
+                setStatus('ComfyUI page loaded. The saved workflow will open after sign-in is complete.')
+                if (open) void initializeFrame()
+              }}
             />
             {!frameReady ? (
               <div className={`comfy-editor-loading is-${phase}`} aria-live="polite">
