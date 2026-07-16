@@ -1,0 +1,17 @@
+services:
+  infinity-comfyui:
+    build:
+      context: .
+    image: ${INFINITY_COMFYUI_IMAGE:-infinity-comfyui:local}
+    container_name: infinity-comfyui
+    restart: unless-stopped
+    ports:
+      - "${INFINITY_COMFYUI_BIND:-127.0.0.1}:${INFINITY_COMFYUI_PORT:-7930}:7930"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 7930
+      COMFY_PROXY_LOOPBACK_HOST: "${COMFY_PROXY_LOOPBACK_HOST:-host.docker.internal}"
+      COMFY_PROXY_TARGET_BASE: "${COMFY_PROXY_TARGET_BASE:-http://127.0.0.1:27707}"
+      COMFY_PROXY_BEARER_TOKEN: "${COMFY_PROXY_BEARER_TOKEN:-}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

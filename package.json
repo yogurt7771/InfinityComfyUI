@@ -1,7 +1,7 @@
 {
   "name": "infinity-comfyui",
   "private": true,
-  "version": "5.22.0",
+  "version": "5.23.0",
   "type": "module",
   "scripts": {
     "dev": "node scripts/electron-dev.mjs launcher",
@@ -12,6 +12,11 @@
     "test:watch": "vitest",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "serve": "node server/serve.mjs",
+    "docker:build": "docker build -t infinity-comfyui:local .",
+    "docker:up": "docker compose up -d --build",
+    "docker:down": "docker compose down",
+    "docker:export": "node scripts/export-docker-release.mjs",
     "electron": "npm run build && electron .",
     "launcher": "npm run build && electron electron/launcher.cjs",
     "package:electron": "npm run build && electron-builder --config electron-builder.electron.cjs --win",

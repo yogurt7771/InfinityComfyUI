@@ -1,8 +1,8 @@
 # Infinity ComfyUI
 
-Infinity ComfyUI 是一个 Windows 桌面无限画布 AI 工作台，用来把 ComfyUI API 工作流、OpenAI/Gemini 内置节点、文本/图片/视频/音频/数值资产组织成可视化节点流程。它的目标不是复刻 ComfyUI，而是提供一个更适合批量生成、结果对比、任务追踪和多模型编排的上层工作台。
+Infinity ComfyUI 是一个无限画布 AI 工作台，用来把 ComfyUI API 工作流、OpenAI/Gemini 内置节点、文本/图片/视频/音频/数值资产组织成可视化节点流程。它的目标不是复刻 ComfyUI，而是提供一个更适合批量生成、结果对比、任务追踪和多模型编排的上层工作台。
 
-当前版本仅以 Electron 桌面客户端形式运行，不提供浏览器、Docker 或独立 Web Server 版本。
+当前同时提供 Launcher、Electron 和 Docker 三种运行方式。Launcher 是首选桌面入口：启动本地 HTTP 服务后使用系统浏览器打开；Electron 使用同一套本地服务与代理运行时；Docker 适合常驻运行或跨平台部署。
 
 ## 界面总览
 
@@ -25,7 +25,7 @@ npm install
 npm run dev
 ```
 
-该命令先启动仅供热更新使用的本地 Vite 服务，再自动打开 Electron 客户端；关闭客户端后开发服务会同时退出。
+该命令先启动带 ComfyUI 代理的本地 Vite 服务，再由 Launcher 自动打开系统浏览器；关闭 Launcher 后开发服务会同时退出。需要调试 Electron 壳层时使用 `npm run dev:electron`。
 
 ### Windows 桌面版本
 
@@ -36,14 +36,41 @@ npm run package:win
 
 构建产物会输出到 `release/`，包含 portable 版本和安装包版本。
 
+### Docker 版本
+
+```powershell
+npm run docker:up
+```
+
+启动后打开 `http://127.0.0.1:7930`。停止服务：
+
+```powershell
+npm run docker:down
+```
+
+默认 Compose 只把端口发布到宿主机回环地址。ComfyUI 如果运行在宿主机的 `127.0.0.1:27707`，容器代理会自动转到 `host.docker.internal:27707`。页面密码仍由用户在嵌入式 ComfyUI 中手动输入；`API token` 与页面登录保持独立。
+
+导出可独立拷走的镜像 tar、发布 Compose 和启动说明：
+
+```powershell
+npm run docker:export
+```
+
+产物会写入 `release/`。
+
 ### 常用开发命令
 
 ```powershell
-npm run dev            # 启动 Electron 开发模式
+npm run dev            # 启动 Launcher + 浏览器开发模式
+npm run dev:electron   # 启动 Electron 开发模式
 npm test               # 运行单元测试
 npm run typecheck      # TypeScript 类型检查
 npm run lint           # ESLint 检查
 npm run build          # 构建前端产物到 app-dist/
+npm run serve          # 运行生产 Web Server
+npm run docker:up      # 构建并启动 Docker 版本
+npm run docker:down    # 停止 Docker 版本
+npm run docker:export  # 导出 Docker 离线发布文件到 release/
 npm run electron       # 构建后启动 Electron
 npm run package:win    # 打包 Windows exe
 ```
@@ -90,7 +117,7 @@ npm run package:win    # 打包 Windows exe
 - 如果导入的是非 API 工作流，可以先用嵌入式 ComfyUI 打开，再保存为可运行的 API 工作流。
 - 如果导入的是 API JSON，仍可作为调用工作流保存，但 UI 编辑能力取决于 ComfyUI 是否能恢复对应图。
 
-工作流桥由 Electron 客户端在 ComfyUI 页面就绪后注入，无需安装 ComfyUI custom node、油猴脚本或浏览器扩展。
+工作流桥由本地同源代理在 ComfyUI 页面返回时注入，无需安装 ComfyUI custom node、油猴脚本或浏览器扩展。
 
 输入绑定说明：
 
