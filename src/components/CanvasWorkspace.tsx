@@ -1866,7 +1866,6 @@ function TemporaryComfyWorkflowDialog({
   const [workflowEditor, setWorkflowEditor] = useState(initialEditor)
   const [error, setError] = useState<string>()
   const [comfyEditorOpen, setComfyEditorOpen] = useState(false)
-  const [comfyEditorMounted, setComfyEditorMounted] = useState(false)
 
   const workflowForEditor = useMemo(() => {
     if (!workflowJson.trim()) return undefined
@@ -1959,10 +1958,7 @@ function TemporaryComfyWorkflowDialog({
             type="button"
             aria-label="Edit temporary workflow in ComfyUI"
             disabled={!selectedEndpoint}
-            onClick={() => {
-              setComfyEditorMounted(true)
-              setComfyEditorOpen(true)
-            }}
+            onClick={() => setComfyEditorOpen(true)}
           >
             Edit in ComfyUI
           </button>
@@ -1971,9 +1967,8 @@ function TemporaryComfyWorkflowDialog({
           </button>
         </div>
     </ModalFrame>
-    {comfyEditorMounted ? (
+    {comfyEditorOpen ? (
       <ComfyWorkflowEditorDialog
-        open={comfyEditorOpen}
         endpoint={selectedEndpoint}
         initialUiJson={workflowUiJson}
         initialApiJson={workflowForEditor}

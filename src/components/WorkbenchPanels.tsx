@@ -1633,7 +1633,6 @@ function NewFunctionDialog({
   const [workflowEditor, setWorkflowEditor] = useState<ComfyWorkflowEditorMetadata>()
   const [workflowJson, setWorkflowJson] = useState('')
   const [comfyEditorOpen, setComfyEditorOpen] = useState(false)
-  const [comfyEditorMounted, setComfyEditorMounted] = useState(false)
   const [requestUrl, setRequestUrl] = useState('https://example.com/api')
   const [requestMethod, setRequestMethod] = useState('GET')
   const [requestHeaders, setRequestHeaders] = useState('{\n}')
@@ -1818,10 +1817,7 @@ function NewFunctionDialog({
             <div className="workflow-authoring-actions">
               <button
                 type="button"
-                onClick={() => {
-                  setComfyEditorMounted(true)
-                  setComfyEditorOpen(true)
-                }}
+                onClick={() => setComfyEditorOpen(true)}
                 disabled={!selectedComfyEndpoint}
               >
                 <Network size={14} />
@@ -2061,9 +2057,8 @@ function NewFunctionDialog({
         </div>
       </div>
     </ModalShell>
-    {comfyEditorMounted ? (
+    {comfyEditorOpen ? (
       <ComfyWorkflowEditorDialog
-        open={comfyEditorOpen}
         endpoint={selectedComfyEndpoint}
         initialUiJson={workflowUiJson}
         initialApiJson={workflowRawJson}
@@ -2100,7 +2095,6 @@ export function FunctionManager({
   const selectedFunction = functions.find((fn) => fn.id === selectedFunctionId) ?? functions[0]
   const [createFunctionOpen, setCreateFunctionOpen] = useState(false)
   const [comfyEditorOpen, setComfyEditorOpen] = useState(false)
-  const [comfyEditorMounted, setComfyEditorMounted] = useState(false)
   const [selectedWorkflowDraft, setSelectedWorkflowDraft] = useState<WorkflowJsonDraft>({ value: '' })
   const [workflowImportOpen, setWorkflowImportOpen] = useState(false)
   const [requestHeaderError, setRequestHeaderError] = useState<string>()
@@ -2657,10 +2651,7 @@ export function FunctionManager({
                       {selectedWorkflowJsonError ? <span className="field-error" role="alert">{selectedWorkflowJsonError}</span> : null}
                       <button
                         type="button"
-                        onClick={() => {
-                          setComfyEditorMounted(true)
-                          setComfyEditorOpen(true)
-                        }}
+                        onClick={() => setComfyEditorOpen(true)}
                         disabled={!selectedEditorComfyEndpoint}
                       >
                         <Network size={14} />
@@ -3051,9 +3042,8 @@ export function FunctionManager({
           </div>
         </ModalShell>
       ) : null}
-      {comfyEditorMounted && selectedFunction && selectedIsComfyWorkflow ? (
+      {comfyEditorOpen && selectedFunction && selectedIsComfyWorkflow ? (
         <ComfyWorkflowEditorDialog
-          open={comfyEditorOpen}
           endpoint={selectedEditorComfyEndpoint}
           initialUiJson={selectedFunction.workflow.uiJson}
           initialApiJson={selectedFunction.workflow.rawJson}
