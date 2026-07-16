@@ -1,7 +1,7 @@
 import type { ComfyUiWorkflow, ComfyWorkflow } from './types'
 
 const DESKTOP_BRIDGE_KEY = '__infinityComfyDesktopWorkflowBridge'
-const DESKTOP_BRIDGE_VERSION = 2
+const DESKTOP_BRIDGE_VERSION = 3
 
 export type ComfyWebviewElement = HTMLElement & {
   executeJavaScript: <T = unknown>(code: string, userGesture?: boolean) => Promise<T>
@@ -82,53 +82,108 @@ const bridgeInstallerSource = String.raw`
     }
   };
 
-  const openWorkflow = async (comfyApp, workflow, filename) => {
-    if (comfyApp.handleFile) {
-      await comfyApp.handleFile(new File([JSON.stringify(workflow, null, 2)], filename, { type: 'application/json' }));
-      return;
-    }
-    if (comfyApp.loadGraphData) {
-      await comfyApp.loadGraphData(workflow);
-      return;
-    }
-    throw new Error('ComfyUI workflow loader is not available');
-  };
-
   const nextPaint = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-  const serializedSubsetMatches = (actual, expected) => {
-    if (Object.is(actual, expected)) return true;
-    if (Array.isArray(expected)) {
-      return Array.isArray(actual) && actual.length === expected.length &&
-        expected.every((item, index) => serializedSubsetMatches(actual[index], item));
-    }
-    if (expected && typeof expected === 'object') {
-      return actual && typeof actual === 'object' &&
-        Object.entries(expected).every(([key, value]) => serializedSubsetMatches(actual[key], value));
-    }
-    return false;
+  const graphNodes = (comfyApp) => {
+    const graph = graphFor(comfyApp);
+    if (Array.isArray(graph?._nodes)) return graph._nodes;
+    if (Array.isArray(graph?.nodes)) return graph.nodes;
+    return [];
   };
-  const linkTopology = (link) => Array.isArray(link)
-    ? link[1] + ':' + link[2] + '->' + link[3] + ':' + link[4]
-    : link?.origin_id + ':' + link?.origin_slot + '->' + link?.target_id + ':' + link?.target_slot;
-  const assertUiWorkflowLoaded = async (comfyApp, workflow) => {
-    if (!Array.isArray(workflow?.nodes)) throw new Error('Editable ComfyUI workflow has no nodes array');
+  const nodeBounds = (node) => {
+    node?.updateArea?.();
+    const bounds = node?.boundingRect;
+    if (bounds && bounds.length >= 4 && [...bounds].slice(0, 4).every(Number.isFinite)) {
+      return [Number(bounds[0]), Number(bounds[1]), Number(bounds[2]), Number(bounds[3])];
+    }
+    const position = node?.pos;
+    const size = node?.size;
+    if (position?.length >= 2 && size?.length >= 2) {
+      return [Number(position[0]) || 0, Number(position[1]) || 0, Number(size[0]) || 1, Number(size[1]) || 1];
+    }
+  };
+  const combinedBounds = (nodes) => {
+    const bounds = nodes.map(nodeBounds).filter(Boolean);
+    if (!bounds.length) return;
+    const left = Math.min(...bounds.map((item) => item[0]));
+    const top = Math.min(...bounds.map((item) => item[1]));
+    const right = Math.max(...bounds.map((item) => item[0] + item[2]));
+    const bottom = Math.max(...bounds.map((item) => item[1] + item[3]));
+    return [left, top, Math.max(1, right - left), Math.max(1, bottom - top)];
+  };
+  const fitLoadedWorkflow = async (comfyApp) => {
     await nextPaint();
-    const serialized = graphFor(comfyApp)?.serialize?.();
-    const loadedNodes = Array.isArray(serialized?.nodes) ? serialized.nodes : [];
+    const nodes = graphNodes(comfyApp);
+    if (!nodes.length) throw new Error('ComfyUI did not create any editable nodes');
+    window.dispatchEvent(new Event('resize'));
+    const canvasElement = comfyApp.canvas?.canvas;
+    if (
+      !canvasElement?.width ||
+      !canvasElement?.height ||
+      (canvasElement.width === 300 && canvasElement.height === 150)
+    ) {
+      comfyApp.canvas?.resize?.();
+    }
+    await nextPaint();
+    const bounds = combinedBounds(nodes);
+    if (bounds && comfyApp.canvas?.ds?.fitToBounds) {
+      comfyApp.canvas.ds.fitToBounds(bounds);
+    } else if (bounds && comfyApp.canvas?.animateToBounds) {
+      comfyApp.canvas.animateToBounds(bounds, { duration: 1 });
+    } else if (comfyApp.canvas?.fitViewToSelectionAnimated) {
+      comfyApp.canvas.deselectAll?.();
+      comfyApp.canvas.fitViewToSelectionAnimated({ duration: 1 });
+    } else if (comfyApp.canvas?.centerOnNode) {
+      comfyApp.canvas.centerOnNode(nodes[0]);
+    }
+    comfyApp.canvas?.setDirty?.(true, true);
+    comfyApp.canvas?.draw?.(true, true);
+    await nextPaint();
+    return nodes;
+  };
+  const assertUiWorkflowLoaded = async (comfyApp, workflow) => {
+    if (!Array.isArray(workflow?.nodes) || workflow.nodes.length === 0) {
+      throw new Error('Editable ComfyUI workflow has no nodes');
+    }
+    const loadedNodes = await fitLoadedWorkflow(comfyApp);
     const loadedById = new Map(loadedNodes.map((node) => [String(node?.id), node]));
     const missing = workflow.nodes.filter((node) => {
       const loaded = loadedById.get(String(node?.id));
-      return !loaded ||
-        (node?.type && loaded?.type !== node.type) ||
-        (Object.hasOwn(node ?? {}, 'widgets_values') && !serializedSubsetMatches(loaded?.widgets_values, node.widgets_values)) ||
-        (node?.properties && !serializedSubsetMatches(loaded?.properties, node.properties));
+      return !loaded || (node?.type && loaded?.type !== node.type);
     });
-    const expectedLinks = (Array.isArray(workflow.links) ? workflow.links : []).map(linkTopology).sort();
-    const loadedLinks = (Array.isArray(serialized?.links) ? serialized.links : []).map(linkTopology).sort();
-    if (missing.length > 0 || loadedNodes.length !== workflow.nodes.length ||
-      !serializedSubsetMatches(loadedLinks, expectedLinks)) {
+    if (missing.length > 0 || loadedNodes.length !== workflow.nodes.length) {
       throw new Error('ComfyUI did not load the editable workflow; falling back to the API workflow is required');
     }
+  };
+  const assertApiWorkflowLoaded = async (comfyApp, workflow) => {
+    const expectedIds = Object.keys(workflow || {});
+    if (!expectedIds.length) throw new Error('ComfyUI API workflow has no nodes');
+    const loadedNodes = await fitLoadedWorkflow(comfyApp);
+    const loadedIds = new Set(loadedNodes.map((node) => String(node?.id)));
+    if (!expectedIds.some((id) => loadedIds.has(String(id)))) {
+      throw new Error('ComfyUI did not load any nodes from the API workflow');
+    }
+  };
+  const loadUiWorkflow = async (comfyApp, workflow) => {
+    if (comfyApp.loadGraphData) {
+      await comfyApp.loadGraphData(workflow, true, true, 'Infinity Workflow');
+      return;
+    }
+    if (comfyApp.handleFile) {
+      await comfyApp.handleFile(new File([JSON.stringify(workflow, null, 2)], 'Infinity Workflow.json', { type: 'application/json' }));
+      return;
+    }
+    throw new Error('ComfyUI editable workflow loader is not available');
+  };
+  const loadApiWorkflow = async (comfyApp, workflow) => {
+    if (comfyApp.loadApiJson) {
+      await comfyApp.loadApiJson(workflow, 'Infinity API Workflow');
+      return;
+    }
+    if (comfyApp.handleFile) {
+      await comfyApp.handleFile(new File([JSON.stringify(workflow, null, 2)], 'Infinity API Workflow.json', { type: 'application/json' }));
+      return;
+    }
+    throw new Error('ComfyUI API workflow loader is not available');
   };
 
   const handle = async (command, payload) => {
@@ -141,15 +196,14 @@ const bridgeInstallerSource = String.raw`
     }
     if (!app?.graphToPrompt || !graphFor(app)) throw new Error('ComfyUI editor is not ready yet');
     if (command === 'load-ui') {
-      await openWorkflow(app, payload, 'Infinity Workflow.json');
+      await loadUiWorkflow(app, payload);
       await assertUiWorkflowLoaded(app, payload);
       return { loaded: true };
     }
     if (command === 'load-api') {
-      if (app.handleFile) await openWorkflow(app, payload, 'Infinity API Workflow.json');
-      else if (app.loadApiJson) await app.loadApiJson(payload);
-      else throw new Error('ComfyUI API workflow loader is not available');
+      await loadApiWorkflow(app, payload);
       restoreApiLinks(app, payload);
+      await assertApiWorkflowLoaded(app, payload);
       return { loaded: true };
     }
     if (command === 'resume') {

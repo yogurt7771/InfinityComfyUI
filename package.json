@@ -1,7 +1,7 @@
 {
   "name": "infinity-comfyui",
   "private": true,
-  "version": "5.21.2",
+  "version": "5.21.3",
   "type": "module",
   "scripts": {
     "dev": "node scripts/electron-dev.mjs",
