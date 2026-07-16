@@ -195,6 +195,7 @@ export function ModalFrame({
       ref={backdropRef}
       className={backdropClasses}
       aria-hidden={hidden || undefined}
+      inert={hidden || undefined}
       style={style}
       onClick={handleBackdropClick}
       onContextMenu={blockModalContextMenu}

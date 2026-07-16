@@ -1882,6 +1882,12 @@ div.server-list-item {
   display: none;
 }
 
+.modal-backdrop-hidden.modal-backdrop-preserve-layout {
+  display: grid;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .comfy-editor-toolbar {
   min-height: 66px;
   padding: 10px 12px 10px 14px;

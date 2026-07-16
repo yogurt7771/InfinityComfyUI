@@ -1,6 +1,7 @@
 import type { ComfyUiWorkflow, ComfyWorkflow } from './types'
 
 const DESKTOP_BRIDGE_KEY = '__infinityComfyDesktopWorkflowBridge'
+const DESKTOP_BRIDGE_VERSION = 2
 
 export type ComfyWebviewElement = HTMLElement & {
   executeJavaScript: <T = unknown>(code: string, userGesture?: boolean) => Promise<T>
@@ -12,7 +13,7 @@ type BridgePing = { ready?: boolean; pathname?: string; bridgeVersion?: number }
 
 export type ComfyFrameExport = {
   rawJson: ComfyWorkflow
-  uiJson?: ComfyUiWorkflow
+  uiJson: ComfyUiWorkflow
 }
 
 const abortError = () => new DOMException('ComfyUI editor request was cancelled', 'AbortError')
@@ -37,8 +38,9 @@ const wait = (ms: number, signal?: AbortSignal) =>
 const bridgeInstallerSource = String.raw`
 (async () => {
   const bridgeKey = ${JSON.stringify(DESKTOP_BRIDGE_KEY)};
-  if (window[bridgeKey]?.bridgeVersion === 1) {
-    return { ready: true, bridgeVersion: 1 };
+  const bridgeVersion = ${DESKTOP_BRIDGE_VERSION};
+  if (window[bridgeKey]?.bridgeVersion === bridgeVersion) {
+    return { ready: true, bridgeVersion };
   }
 
   const appModuleUrl = new URL('scripts/app.js', document.baseURI).href;
@@ -134,7 +136,7 @@ const bridgeInstallerSource = String.raw`
       return {
         ready: Boolean(app?.graphToPrompt && graphFor(app)),
         pathname: location.pathname,
-        bridgeVersion: 1,
+        bridgeVersion,
       };
     }
     if (!app?.graphToPrompt || !graphFor(app)) throw new Error('ComfyUI editor is not ready yet');
@@ -150,21 +152,34 @@ const bridgeInstallerSource = String.raw`
       restoreApiLinks(app, payload);
       return { loaded: true };
     }
+    if (command === 'resume') {
+      window.dispatchEvent(new Event('resize'));
+      app.canvas?.resize?.();
+      app.canvas?.setDirty?.(true, true);
+      app.canvas?.draw?.(true, true);
+      await nextPaint();
+      return { resumed: true };
+    }
     if (command === 'export') {
-      const exported = await app.graphToPrompt(graphFor(app));
+      const graph = graphFor(app);
+      const exported = await app.graphToPrompt(graph);
       if (!exported || typeof exported !== 'object' || !exported.output) {
         throw new Error('ComfyUI did not return an API workflow');
       }
-      return { rawJson: exported.output, uiJson: exported.workflow };
+      const uiWorkflow = Array.isArray(exported.workflow?.nodes) ? exported.workflow : graph?.serialize?.();
+      if (!uiWorkflow || typeof uiWorkflow !== 'object' || !Array.isArray(uiWorkflow.nodes)) {
+        throw new Error('ComfyUI did not return an editable UI workflow');
+      }
+      return { rawJson: exported.output, uiJson: uiWorkflow };
     }
     throw new Error('Unsupported Infinity ComfyUI editor command');
   };
 
   Object.defineProperty(window, bridgeKey, {
     configurable: true,
-    value: { bridgeVersion: 1, handle },
+    value: { bridgeVersion, handle },
   });
-  return { ready: Boolean(app?.graphToPrompt && graphFor(app)), bridgeVersion: 1 };
+  return { ready: Boolean(app?.graphToPrompt && graphFor(app)), bridgeVersion };
 })()
 `
 
@@ -245,6 +260,9 @@ export const loadApiWorkflowIntoComfyFrame = (
   webview: ComfyWebviewElement,
   workflow: ComfyWorkflow,
 ) => requestComfyFrame(webview, 'load-api', workflow)
+
+export const resumeComfyFrame = (webview: ComfyWebviewElement) =>
+  requestComfyFrame(webview, 'resume', undefined, 5_000)
 
 export const exportWorkflowFromComfyFrame = (webview: ComfyWebviewElement) =>
   requestComfyFrame<ComfyFrameExport>(webview, 'export')

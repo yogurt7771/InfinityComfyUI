@@ -48,6 +48,7 @@ import {
   exportWorkflowFromComfyFrame,
   loadApiWorkflowIntoComfyFrame,
   loadUiWorkflowIntoComfyFrame,
+  resumeComfyFrame,
   waitForComfyFrameBridge,
   type ComfyWebviewElement,
 } from '../domain/comfyFrameBridge'
@@ -795,18 +796,21 @@ function ModalShell({
   onClose,
   modalClassName,
   hidden = false,
+  preserveLayoutWhenHidden = false,
 }: {
   label: string
   children: ReactNode
   onClose: () => void
   modalClassName?: string
   hidden?: boolean
+  preserveLayoutWhenHidden?: boolean
 }) {
   return (
     <ModalFrame
       label={label}
       onClose={onClose}
       hidden={hidden}
+      backdropClassName={preserveLayoutWhenHidden ? 'modal-backdrop modal-backdrop-preserve-layout' : undefined}
       dialogClassName={`manager-modal${modalClassName ? ` ${modalClassName}` : ''}`}
     >
         <div className="manager-header">
@@ -1397,9 +1401,16 @@ export function ComfyWorkflowEditorDialog({
       loadedWorkflowRef.current?.generation === generation &&
       loadedWorkflowRef.current.inputSignature === inputSignature
     ) {
-      setFrameReady(true)
-      setPhase('ready')
-      return
+      try {
+        await resumeComfyFrame(frame)
+        if (generation !== generationRef.current) return
+        setFrameReady(true)
+        setPhase('ready')
+        return
+      } catch {
+        if (generation !== generationRef.current) return
+        loadedWorkflowRef.current = undefined
+      }
     }
     if (
       initializingRef.current?.generation === generation &&
@@ -1545,7 +1556,13 @@ export function ComfyWorkflowEditorDialog({
   }
 
   return (
-    <ModalShell label="ComfyUI Workflow Editor" modalClassName="comfy-editor-modal" hidden={!open} onClose={onClose}>
+    <ModalShell
+      label="ComfyUI Workflow Editor"
+      modalClassName="comfy-editor-modal"
+      hidden={!open}
+      preserveLayoutWhenHidden
+      onClose={onClose}
+    >
       <div className="comfy-editor-shell">
         <div className="comfy-editor-toolbar">
           <div className="comfy-editor-identity">
@@ -1633,6 +1650,7 @@ function NewFunctionDialog({
   const [workflowEditor, setWorkflowEditor] = useState<ComfyWorkflowEditorMetadata>()
   const [workflowJson, setWorkflowJson] = useState('')
   const [comfyEditorOpen, setComfyEditorOpen] = useState(false)
+  const [comfyEditorMounted, setComfyEditorMounted] = useState(false)
   const [requestUrl, setRequestUrl] = useState('https://example.com/api')
   const [requestMethod, setRequestMethod] = useState('GET')
   const [requestHeaders, setRequestHeaders] = useState('{\n}')
@@ -1817,7 +1835,10 @@ function NewFunctionDialog({
             <div className="workflow-authoring-actions">
               <button
                 type="button"
-                onClick={() => setComfyEditorOpen(true)}
+                onClick={() => {
+                  setComfyEditorMounted(true)
+                  setComfyEditorOpen(true)
+                }}
                 disabled={!selectedComfyEndpoint}
               >
                 <Network size={14} />
@@ -2057,8 +2078,9 @@ function NewFunctionDialog({
         </div>
       </div>
     </ModalShell>
-    {comfyEditorOpen ? (
+    {comfyEditorMounted ? (
       <ComfyWorkflowEditorDialog
+        open={comfyEditorOpen}
         endpoint={selectedComfyEndpoint}
         initialUiJson={workflowUiJson}
         initialApiJson={workflowRawJson}
@@ -2095,6 +2117,7 @@ export function FunctionManager({
   const selectedFunction = functions.find((fn) => fn.id === selectedFunctionId) ?? functions[0]
   const [createFunctionOpen, setCreateFunctionOpen] = useState(false)
   const [comfyEditorOpen, setComfyEditorOpen] = useState(false)
+  const [comfyEditorMounted, setComfyEditorMounted] = useState(false)
   const [selectedWorkflowDraft, setSelectedWorkflowDraft] = useState<WorkflowJsonDraft>({ value: '' })
   const [workflowImportOpen, setWorkflowImportOpen] = useState(false)
   const [requestHeaderError, setRequestHeaderError] = useState<string>()
@@ -2651,7 +2674,10 @@ export function FunctionManager({
                       {selectedWorkflowJsonError ? <span className="field-error" role="alert">{selectedWorkflowJsonError}</span> : null}
                       <button
                         type="button"
-                        onClick={() => setComfyEditorOpen(true)}
+                        onClick={() => {
+                          setComfyEditorMounted(true)
+                          setComfyEditorOpen(true)
+                        }}
                         disabled={!selectedEditorComfyEndpoint}
                       >
                         <Network size={14} />
@@ -3042,8 +3068,9 @@ export function FunctionManager({
           </div>
         </ModalShell>
       ) : null}
-      {comfyEditorOpen && selectedFunction && selectedIsComfyWorkflow ? (
+      {comfyEditorMounted && selectedFunction && selectedIsComfyWorkflow ? (
         <ComfyWorkflowEditorDialog
+          open={comfyEditorOpen}
           endpoint={selectedEditorComfyEndpoint}
           initialUiJson={selectedFunction.workflow.uiJson}
           initialApiJson={selectedFunction.workflow.rawJson}
