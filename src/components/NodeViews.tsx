@@ -1909,7 +1909,8 @@ function EditableNodeTitle({
         />
       ) : (
         <span
-          title="Double-click to rename"
+          className="node-title-text"
+          title={`${title} — Double-click to rename`}
           onDoubleClick={(event) => {
             event.stopPropagation()
             setDraft(title)
@@ -2701,7 +2702,7 @@ export const GroupNodeView = memo(({ id, data, selected }: NodeProps) => {
       <SelectedResizeControl id={id} minHeight={90} minWidth={180} nodeData={nodeData} selected={Boolean(selected)} />
       <div className="node-title">
         <Layers size={16} />
-        <span>{title}</span>
+        <span className="node-title-text">{title}</span>
         {childCount > 0 ? <small>{childCount} nodes</small> : null}
         {nodeReferenceBadge(nodeData)}
       </div>
@@ -2717,7 +2718,7 @@ export const EmptyNodeView = memo(({ id, data, selected }: NodeProps) => {
       <SelectedResizeControl id={id} minHeight={90} minWidth={160} nodeData={nodeData} selected={Boolean(selected)} />
       <div className="node-title">
         <Box size={16} />
-        <span>Node</span>
+        <span className="node-title-text">Node</span>
         {nodeReferenceBadge(nodeData)}
       </div>
     </div>

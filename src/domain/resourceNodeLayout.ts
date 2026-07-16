@@ -16,7 +16,6 @@ const DELETE_BUTTON_WIDTH = 28
 const ACTION_BUTTONS_WIDTH = 30 * 3 + 6 * 2
 
 const TITLE_TEXT_MIN_WIDTH = 80
-const TITLE_TEXT_MAX_WIDTH = 280
 const FUNCTION_CHIP_MIN_WIDTH = 112
 const FUNCTION_CHIP_MAX_WIDTH = 220
 
@@ -92,11 +91,10 @@ export function resourceNodeMinSize(input: ResourceNodeMinSizeInput) {
   const preview = PREVIEW_MIN_SIZE_BY_TYPE[resourceType]
   const referenceLabel = `${Math.max(0, input.referenceCount ?? 0)} refs`
   const referenceWidth = Math.max(REF_BADGE_MIN_WIDTH, estimateTextWidth(referenceLabel) + 12)
-  const titleTextWidth = clamp(estimateTextWidth(input.title), TITLE_TEXT_MIN_WIDTH, TITLE_TEXT_MAX_WIDTH)
   const titleWidth =
     NODE_PADDING_X +
     TITLE_ICON_WIDTH +
-    titleTextWidth +
+    TITLE_TEXT_MIN_WIDTH +
     referenceWidth +
     DELETE_BUTTON_WIDTH +
     TITLE_GAP * 3
