@@ -20,9 +20,7 @@ if not exist "node_modules" (
   )
 )
 
-echo [Infinity ComfyUI] Starting browser version at http://127.0.0.1:7930
-start "" powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds 2; Start-Process 'http://127.0.0.1:7930'"
-
-call npm run dev -- --host 127.0.0.1 --port 7930
+echo [Infinity ComfyUI] Starting Electron desktop client
+call npm run dev
 
 pause

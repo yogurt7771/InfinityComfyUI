@@ -1,19 +1,16 @@
 {
   "name": "infinity-comfyui",
   "private": true,
-  "version": "1.0.7",
+  "version": "5.21.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/electron-dev.mjs",
+    "dev:renderer": "vite --host 127.0.0.1 --port 7930 --strictPort",
     "typecheck": "tsc -b",
     "test": "vitest run",
     "test:watch": "vitest",
-    "browser:smoke": "playwright test",
     "build": "tsc -b && vite build",
-    "export:dist": "node scripts/export-dist.mjs",
-    "serve": "node server/serve.mjs",
     "lint": "eslint .",
-    "preview": "vite preview",
     "electron": "npm run build && electron .",
     "package:win": "npm run build && electron-builder --win"
   },
@@ -58,7 +55,6 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@playwright/test": "^1.59.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^24.12.2",

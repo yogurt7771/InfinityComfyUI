@@ -1,5 +1,4 @@
 const { app, BrowserWindow, ipcMain, shell } = require('electron')
-const http = require('node:http')
 const fs = require('node:fs/promises')
 const path = require('node:path')
 const { hydrateProjectAssets } = require('./projectAssetStorage.cjs')
@@ -7,8 +6,6 @@ const { hydrateProjectAssets } = require('./projectAssetStorage.cjs')
 const PROJECTS_FOLDER = 'projects'
 const CONFIG_FOLDER = 'config'
 const ASSETS_FOLDER = 'assets'
-let localAppServer
-let localAppServerUrl
 
 const safeSegment = (value, fallback) => {
   const cleaned = String(value ?? '')
@@ -93,68 +90,15 @@ const fileExtension = (filename, mimeType) => path.extname(filename || '') || ex
 const appIconPath = () =>
   app.isPackaged ? path.join(process.resourcesPath, 'icon.ico') : path.join(__dirname, '..', 'build', 'icon.ico')
 
-const mimeTypeFor = (filePath) => {
-  const extension = path.extname(filePath).toLowerCase()
-  if (extension === '.html') return 'text/html; charset=utf-8'
-  if (extension === '.js' || extension === '.mjs') return 'text/javascript; charset=utf-8'
-  if (extension === '.css') return 'text/css; charset=utf-8'
-  if (extension === '.json') return 'application/json; charset=utf-8'
-  if (extension === '.svg') return 'image/svg+xml'
-  if (extension === '.png') return 'image/png'
-  if (extension === '.ico') return 'image/x-icon'
-  if (extension === '.webp') return 'image/webp'
-  if (extension === '.woff2') return 'font/woff2'
-  return 'application/octet-stream'
-}
-
-const serveStaticApp = async (response, requestPath) => {
-  const distDir = path.resolve(__dirname, '..', 'app-dist')
-  const decodedPath = decodeURIComponent(requestPath)
-  const relativePath = decodedPath === '/' ? 'index.html' : decodedPath.replace(/^\/+/, '')
-  const candidatePath = path.resolve(distDir, relativePath)
-  const safePath = candidatePath.startsWith(`${distDir}${path.sep}`) ? candidatePath : path.join(distDir, 'index.html')
-
-  try {
-    const content = await fs.readFile(safePath)
-    response.setHeader('content-type', mimeTypeFor(safePath))
-    response.end(content)
-  } catch {
-    const html = await fs.readFile(path.join(distDir, 'index.html'))
-    response.setHeader('content-type', 'text/html; charset=utf-8')
-    response.end(html)
+const rendererDevelopmentUrl = () => {
+  const value = process.env.INFINITY_DEV_SERVER_URL?.trim()
+  if (!value || app.isPackaged) return undefined
+  const parsed = new URL(value)
+  if (parsed.protocol !== 'http:' || !['127.0.0.1', 'localhost', '::1'].includes(parsed.hostname)) {
+    throw new Error('INFINITY_DEV_SERVER_URL must be a loopback HTTP URL')
   }
+  return parsed.toString()
 }
-
-const startAppServer = () =>
-  new Promise((resolve, reject) => {
-    if (localAppServerUrl) {
-      resolve(localAppServerUrl)
-      return
-    }
-    localAppServer = http.createServer((request, response) => {
-      void (async () => {
-        try {
-          const requestUrl = new URL(request.url || '/', 'http://127.0.0.1')
-          await serveStaticApp(response, requestUrl.pathname)
-        } catch (error) {
-          response.statusCode = 500
-          response.setHeader('content-type', 'text/plain; charset=utf-8')
-          response.end(error instanceof Error ? error.message : 'Infinity app server failed')
-        }
-      })()
-    })
-    localAppServer.on('upgrade', (_request, socket) => socket.destroy())
-    localAppServer.on('error', reject)
-    localAppServer.listen(0, '127.0.0.1', () => {
-      const address = localAppServer.address()
-      if (!address || typeof address === 'string') {
-        reject(new Error('Unable to start local app server'))
-        return
-      }
-      localAppServerUrl = `http://127.0.0.1:${address.port}/`
-      resolve(localAppServerUrl)
-    })
-  })
 
 const mediaValue = (resource) => {
   const value = resource?.value
@@ -273,7 +217,6 @@ ipcMain.handle('infinity-storage:load', loadProjectLibrary)
 ipcMain.handle('infinity-storage:save', (_event, payload) => saveProjectLibrary(payload))
 
 async function createWindow() {
-  const appUrl = await startAppServer()
   const win = new BrowserWindow({
     width: 1440,
     height: 920,
@@ -287,6 +230,7 @@ async function createWindow() {
       nodeIntegration: false,
       preload: path.join(__dirname, 'preload.cjs'),
       sandbox: true,
+      webviewTag: true,
     },
   })
 
@@ -299,7 +243,36 @@ async function createWindow() {
     }
     return { action: 'deny' }
   })
-  win.loadURL(appUrl)
+
+  win.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+    try {
+      const source = new URL(params.src)
+      if (source.protocol !== 'http:' && source.protocol !== 'https:') throw new Error('Unsupported ComfyUI URL')
+    } catch {
+      event.preventDefault()
+      return
+    }
+    delete webPreferences.preload
+    webPreferences.nodeIntegration = false
+    webPreferences.contextIsolation = true
+    webPreferences.sandbox = true
+  })
+
+  win.webContents.on('did-attach-webview', (_event, guest) => {
+    guest.setWindowOpenHandler(({ url }) => {
+      try {
+        const parsed = new URL(url)
+        if (parsed.protocol === 'http:' || parsed.protocol === 'https:') void shell.openExternal(parsed.toString())
+      } catch {
+        // Invalid and non-web popups stay blocked inside the desktop client.
+      }
+      return { action: 'deny' }
+    })
+  })
+
+  const developmentUrl = rendererDevelopmentUrl()
+  if (developmentUrl) await win.loadURL(developmentUrl)
+  else await win.loadFile(path.join(__dirname, '..', 'app-dist', 'index.html'))
 }
 
 app.whenReady().then(() => {
@@ -310,10 +283,5 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
-  if (localAppServer) {
-    localAppServer.close()
-    localAppServer = undefined
-    localAppServerUrl = undefined
-  }
   if (process.platform !== 'darwin') app.quit()
 })

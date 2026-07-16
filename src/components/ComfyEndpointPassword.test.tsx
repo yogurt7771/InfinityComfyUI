@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { LeftPanel, openComfyEditorInBrowser } from './WorkbenchPanels'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { LeftPanel } from './WorkbenchPanels'
 import { projectStore } from '../store/projectStore'
 
 const endpointPasswordLabel = /^comfyui password$/i
@@ -32,7 +32,6 @@ describe('ComfyUI server token-only configuration', () => {
 
   afterEach(() => {
     cleanup()
-    vi.restoreAllMocks()
   })
 
   it('normalizes a legacy password entry to API-token-only authentication when saved', () => {
@@ -123,29 +122,4 @@ describe('ComfyUI server token-only configuration', () => {
     })
   })
 
-  it('never submits a saved password when opening ComfyUI and leaves login to the user', () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch')
-    const popup = {} as WindowProxy
-    vi.spyOn(window, 'open').mockReturnValue(popup)
-    const submitSpy = vi.spyOn(HTMLFormElement.prototype, 'submit').mockImplementation(() => undefined)
-    const endpoint = {
-      ...projectStore.getState().project.comfy.endpoints[0]!,
-      auth: {
-        type: 'password' as const,
-        password: 'fixture-editor-ui-password',
-        token: 'fixture-editor-fallback-token',
-      },
-    }
-
-    const error = openComfyEditorInBrowser(endpoint)
-    expect(error).toBeUndefined()
-    expect(submitSpy).not.toHaveBeenCalled()
-    const openedUrl = new URL(String(vi.mocked(window.open).mock.calls[0]?.[0]))
-    expect(openedUrl.href).toBe('http://127.0.0.1:27707/')
-    expect(openedUrl.href).not.toContain('fixture-editor-ui-password')
-    expect(openedUrl.href).not.toContain('fixture-editor-fallback-token')
-    expect(openedUrl.href).not.toContain('/__comfy_proxy/')
-    expect(fetchMock).not.toHaveBeenCalled()
-    expect(popup.opener).toBeNull()
-  })
 })

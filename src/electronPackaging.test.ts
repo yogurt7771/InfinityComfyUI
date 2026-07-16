@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import viteConfig from '../vite.config'
@@ -27,30 +27,42 @@ describe('Electron packaging configuration', () => {
     expect(main).toContain("ipcMain.handle('infinity-storage:save'")
   })
 
-  it('serves the packaged app over a local HTTP origin without a main-process ComfyUI proxy', () => {
+  it('loads the packaged renderer from app-dist without starting a local HTTP server', () => {
     const main = readFileSync(resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
 
-    expect(main).toContain("require('node:http')")
-    expect(main).toContain("'app-dist'")
-    expect(main).not.toContain('__comfy_proxy')
-    expect(main).not.toContain('COMFY_PROXY_')
-    expect(main).toContain('startAppServer')
+    expect(main).not.toContain("require('node:http')")
+    expect(main).not.toContain('startAppServer')
+    expect(main).not.toContain('serveStaticApp')
+    expect(main).toContain("path.join(__dirname, '..', 'app-dist', 'index.html')")
+    expect(main).toContain('win.loadFile')
+    expect(main).toContain('INFINITY_DEV_SERVER_URL')
     expect(main).toContain('win.loadURL')
   })
 
-  it('keeps ComfyUI networking and authentication out of the Electron main and preload processes', () => {
+  it('owns the ComfyUI editor in an isolated Electron view with built-in workflow commands', () => {
+    const electronDirectory = resolve(__dirname, '..', 'electron')
     const main = readFileSync(resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
-    const preload = readFileSync(resolve(__dirname, '..', 'electron', 'preload.cjs'), 'utf8')
+    const bridge = readFileSync(resolve(__dirname, 'domain', 'comfyFrameBridge.ts'), 'utf8')
+    const electronRuntime = readdirSync(electronDirectory)
+      .filter((filename) => filename.endsWith('.cjs'))
+      .map((filename) => readFileSync(resolve(electronDirectory, filename), 'utf8'))
+      .join('\n')
 
-    expect(main).not.toContain('__comfy_proxy')
-    expect(main).not.toContain('COMFY_PROXY_')
-    expect(main).not.toContain('infinity-comfy:authorize-target')
-    expect(main).not.toMatch(/comfy.*(?:fetch|request|websocket)|(?:fetch|request|websocket).*comfy/i)
-    expect(preload).not.toContain('authorizeComfyProxyTarget')
-    expect(preload).not.toContain('infinity-comfy:')
+    expect(main).toMatch(/WebContentsView|webviewTag:\s*true/)
     expect(main).toContain('contextIsolation: true')
     expect(main).toContain('nodeIntegration: false')
-    expect(main).toContain('sandbox: true')
+    expect(main).toContain('will-attach-webview')
+    expect(main).toContain('did-attach-webview')
+    expect(bridge).toContain('executeJavaScript')
+    expect(bridge).toContain('load-ui')
+    expect(bridge).toContain('load-api')
+    expect(bridge).toContain('export')
+    expect(bridge).toContain('rawJson')
+    expect(bridge).toContain('uiJson')
+    expect(electronRuntime).not.toContain('infinity_comfy_bridge')
+    expect(bridge).not.toContain('infinity_comfy_bridge')
+    expect(electronRuntime).not.toContain('__comfy_proxy')
+    expect(electronRuntime).not.toMatch(/password/i)
   })
 
   it('uses the custom generated icon for browser, portable, and installer builds', () => {
