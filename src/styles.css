@@ -29,14 +29,7 @@
   --selection-primary-stroke: #35dcc8;
   --selection-primary-ring: rgba(53, 220, 200, 0.38);
   --selection-primary-halo: rgba(53, 220, 200, 0.16);
-  --selection-related-stroke: rgba(94, 234, 212, 0.58);
-  --selection-related-ring: rgba(94, 234, 212, 0.32);
-  --selection-related-surface: rgba(45, 212, 191, 0.07);
-  --selection-node-base: rgba(15, 23, 33, 0.94);
-  --selection-contrast-ring: rgba(255, 255, 255, 0.22);
-  --selection-related-contrast-ring: rgba(255, 255, 255, 0.12);
   --selection-edge-primary: #35dcc8;
-  --selection-edge-related: rgba(94, 234, 212, 0.68);
   --shadow-soft: 0 22px 70px rgba(0, 0, 0, 0.36);
   --shadow-focus: 0 0 0 3px rgba(53, 220, 200, 0.28);
 }
@@ -7208,14 +7201,7 @@ body[data-theme='light'] .confirmation-dialog,
   --selection-primary-stroke: #0f766e;
   --selection-primary-ring: rgba(15, 118, 110, 0.42);
   --selection-primary-halo: rgba(13, 148, 136, 0.16);
-  --selection-related-stroke: rgba(15, 118, 110, 0.44);
-  --selection-related-ring: rgba(20, 184, 166, 0.28);
-  --selection-related-surface: rgba(240, 253, 250, 0.74);
-  --selection-node-base: rgba(255, 255, 255, 0.96);
-  --selection-contrast-ring: rgba(255, 255, 255, 0.96);
-  --selection-related-contrast-ring: rgba(255, 255, 255, 0.7);
   --selection-edge-primary: #0f766e;
-  --selection-edge-related: rgba(13, 148, 136, 0.62);
   --shadow-soft: 0 18px 46px rgba(15, 23, 42, 0.1);
   --shadow-focus: 0 0 0 3px rgba(13, 148, 136, 0.2);
   color-scheme: light;
@@ -7642,29 +7628,8 @@ body[data-theme='light'] option {
   border-top-color: #be123c;
 }
 
-.workspace-canvas .react-flow__node.selection-dimmed {
-  opacity: 0.7;
-}
-
-.workspace-canvas .react-flow__node.selection-related {
-  z-index: 8;
-  opacity: 1;
-}
-
 .workspace-canvas .react-flow__node.selection-primary {
   z-index: 18;
-}
-
-.workspace-canvas .react-flow__node.selection-related:not(.selected) .canvas-node {
-  border-color: var(--selection-related-stroke);
-  outline: 2px dashed var(--selection-related-ring);
-  outline-offset: 4px;
-  background:
-    linear-gradient(180deg, var(--selection-related-surface), transparent 46%),
-    rgba(255, 255, 255, 0.96);
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.7),
-    0 14px 34px rgba(13, 148, 136, 0.1);
 }
 
 .workspace-canvas .react-flow__node.selection-primary .canvas-node {
@@ -7677,25 +7642,9 @@ body[data-theme='light'] option {
     0 20px 58px rgba(15, 23, 42, 0.2);
 }
 
-.workspace-canvas .react-flow__edge.selection-dimmed-edge {
-  opacity: 0.42;
-}
-
-.workspace-canvas .react-flow__edge.selection-related-edge {
-  opacity: 1;
-  z-index: 4;
-}
-
 .workspace-canvas .react-flow__edge.selection-primary-edge {
   opacity: 1;
   z-index: 5;
-}
-
-.workspace-canvas .react-flow__edge.selection-related-edge .react-flow__edge-path {
-  stroke: var(--selection-edge-related);
-  stroke-width: 2.5;
-  stroke-dasharray: 7 6;
-  filter: none;
 }
 
 .workspace-canvas .react-flow__edge.selection-primary-edge .react-flow__edge-path {
@@ -7705,19 +7654,15 @@ body[data-theme='light'] option {
   filter: drop-shadow(0 0 7px var(--selection-primary-halo));
 }
 
-.workspace-canvas .react-flow__edge.selection-related-edge .react-flow__edge-textbg,
 .workspace-canvas .react-flow__edge.selection-primary-edge .react-flow__edge-textbg {
   fill: rgba(240, 253, 250, 0.96);
 }
 
-.workspace-canvas .react-flow__edge.selection-related-edge .react-flow__edge-text,
 .workspace-canvas .react-flow__edge.selection-primary-edge .react-flow__edge-text {
   fill: #0f766e;
 }
 
-.workspace-canvas .react-flow__node-group .group-node,
-.workspace-canvas .react-flow__node-group.selection-related:not(.selected) .group-node,
-.workspace-canvas .react-flow__node-group.selection-primary .group-node {
+.workspace-canvas .react-flow__node-group .group-node {
   border-color: rgba(94, 234, 212, 0.46);
   background:
     linear-gradient(180deg, rgba(45, 212, 191, 0.1), rgba(8, 13, 21, 0.02)),
@@ -7740,9 +7685,7 @@ body[data-theme='light'] option {
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
 }
 
-:is(body[data-theme='light'], .app-shell[data-theme='light']) .workspace-canvas .react-flow__node-group .group-node,
-:is(body[data-theme='light'], .app-shell[data-theme='light']) .workspace-canvas .react-flow__node-group.selection-related:not(.selected) .group-node,
-:is(body[data-theme='light'], .app-shell[data-theme='light']) .workspace-canvas .react-flow__node-group.selection-primary .group-node {
+:is(body[data-theme='light'], .app-shell[data-theme='light']) .workspace-canvas .react-flow__node-group .group-node {
   border-color: rgba(15, 118, 110, 0.52);
   background:
     linear-gradient(180deg, rgba(204, 251, 241, 0.18), rgba(255, 255, 255, 0.02)),
