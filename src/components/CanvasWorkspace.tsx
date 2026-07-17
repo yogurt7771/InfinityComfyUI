@@ -1805,7 +1805,7 @@ export function FunctionRunDialog({
                 title={disabledRunTitle}
                 onClick={() => handleRun('replace')}
               >
-                Run & Replace
+                Rerun & Replace
               </button>
               <button
                 type="button"
@@ -2318,22 +2318,6 @@ function CanvasSurface() {
         : undefined
       if (!resource || !functionId || !functionDef) return
 
-      const liveFunction = project.functions[functionId]
-      if (liveFunction?.workflow.format === 'comfyui_api_json') {
-        const sourceFunctionNodeId =
-          resource.source.kind === 'function_output' ? resource.source.functionNodeId : task?.functionNodeId
-
-        closeFunctionRunFloatingMenus()
-        setFunctionRunDialog(undefined)
-        setFunctionEditor({
-          nodeId: sourceFunctionNodeId ?? resourceId,
-          functionId: liveFunction.id,
-        })
-        return
-      }
-
-      if (!task) return
-
       const sourceNode = project.canvas.nodes.find(
         (node) => node.type === 'resource' && node.data.resourceId === resourceId,
       )
@@ -2341,8 +2325,14 @@ function CanvasSurface() {
       openFunctionRunDialog({
         functionId,
         temporaryFunction: project.functions[functionId] ? undefined : functionDef,
-        inputValues: functionRunInputsFromTask(task),
-        runCount: Number((task.paramsSnapshot as { runCount?: unknown } | undefined)?.runCount ?? functionDef.runtimeDefaults?.runCount ?? 1),
+        inputValues: task
+          ? functionRunInputsFromTask(task)
+          : buildFunctionRunInputDraft(functionDef, project.resources, []),
+        runCount: Number(
+          (task?.paramsSnapshot as { runCount?: unknown } | undefined)?.runCount ??
+            functionDef.runtimeDefaults?.runCount ??
+            1,
+        ),
         position: sourceNode
           ? {
               x: sourceNode.position.x + (Number.isFinite(sourceWidth) ? sourceWidth : DEFAULT_ASSET_NODE_WIDTH) + MENU_NODE_GAP,
@@ -2356,7 +2346,6 @@ function CanvasSurface() {
       })
     },
     [
-      closeFunctionRunFloatingMenus,
       flowNodeLayoutContext,
       openFunctionRunDialog,
       project.canvas.nodes,
@@ -4524,22 +4513,44 @@ function CanvasSurface() {
               : undefined
           }
           onEditComfyWorkflow={
-            functionRunDialog.temporaryFunction?.workflow.format === 'comfyui_api_json'
-              ? () => {
-                  const endpointId =
-                    functionRunDialog.temporaryFunction?.workflow.editor?.endpointId ??
-                    temporaryComfyWorkflow?.endpointId ??
-                    project.comfy.endpoints.find((endpoint) => endpoint.enabled !== false)?.id
-                  setTemporaryComfyWorkflow((current) => ({
-                    position: current?.position ?? functionRunDialog.position,
-                    endpointId,
-                    dialogOpen: true,
-                    workflowJson: JSON.stringify(functionRunDialog.temporaryFunction?.workflow.rawJson ?? {}, null, 2),
-                    workflowUiJson: functionRunDialog.temporaryFunction?.workflow.uiJson,
-                    workflowEditor: functionRunDialog.temporaryFunction?.workflow.editor,
-                    candidateRefs: current?.candidateRefs ?? [],
-                  }))
-                }
+            activeFunctionRunFunction.workflow.format === 'comfyui_api_json'
+              ? functionRunDialog.temporaryFunction
+                ? () => {
+                    const endpointId =
+                      functionRunDialog.temporaryFunction?.workflow.editor?.endpointId ??
+                      temporaryComfyWorkflow?.endpointId ??
+                      project.comfy.endpoints.find((endpoint) => endpoint.enabled !== false)?.id
+                    setTemporaryComfyWorkflow((current) => ({
+                      position: current?.position ?? functionRunDialog.position,
+                      endpointId,
+                      dialogOpen: true,
+                      workflowJson: JSON.stringify(
+                        functionRunDialog.temporaryFunction?.workflow.rawJson ?? {},
+                        null,
+                        2,
+                      ),
+                      workflowUiJson: functionRunDialog.temporaryFunction?.workflow.uiJson,
+                      workflowEditor: functionRunDialog.temporaryFunction?.workflow.editor,
+                      candidateRefs: current?.candidateRefs ?? [],
+                    }))
+                  }
+                : () => {
+                    const sourceResource = functionRunDialog.replaceTarget?.resourceId
+                      ? project.resources[functionRunDialog.replaceTarget.resourceId]
+                      : undefined
+                    const sourceTask = sourceResource?.source.taskId
+                      ? project.tasks[sourceResource.source.taskId]
+                      : undefined
+                    const sourceFunctionNodeId =
+                      sourceResource?.source.kind === 'function_output'
+                        ? sourceResource.source.functionNodeId
+                        : sourceTask?.functionNodeId
+                    setFunctionRunDialog(undefined)
+                    setFunctionEditor({
+                      nodeId: sourceFunctionNodeId ?? functionRunDialog.functionId,
+                      functionId: functionRunDialog.functionId,
+                    })
+                  }
               : undefined
           }
           onRunCountChange={(runCount) =>

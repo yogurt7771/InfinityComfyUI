@@ -2143,11 +2143,6 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
       task?.functionSnapshot ??
       resource?.metadata?.functionSnapshot
     : undefined
-  const sourceIsEditableComfyWorkflow = Boolean(
-    sourceFunctionId &&
-      nodeData.functionsById[sourceFunctionId] &&
-      sourceFunction?.workflow.format === 'comfyui_api_json',
-  )
   const canRerunAsset = Boolean(
     resource?.source.kind === 'function_output' &&
       task &&
@@ -2282,16 +2277,8 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
           <button
             type="button"
             className="asset-function-chip nodrag nopan"
-            aria-label={
-              sourceIsEditableComfyWorkflow
-                ? `View function and workflow ${sourceFunction.name}`
-                : `Edit and run ${sourceFunction.name}`
-            }
-            title={
-              sourceIsEditableComfyWorkflow
-                ? `View function and edit its ComfyUI workflow: ${sourceFunction.name}`
-                : sourceFunction.name
-            }
+            aria-label={`Edit and run ${sourceFunction.name}`}
+            title={`Edit inputs and rerun ${sourceFunction.name}`}
             onClick={(event) => {
               event.stopPropagation()
               nodeData.onOpenFunctionRunForResource?.(resource.id)
