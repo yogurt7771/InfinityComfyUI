@@ -574,15 +574,31 @@ const selectionGroupChildNodeIds = (node: SelectionHighlightNodeLike, nodeIds: S
     ? node.data.childNodeIds.filter((childNodeId): childNodeId is string => typeof childNodeId === 'string' && nodeIds.has(childNodeId))
     : []
 
+const selectedEdgeEndpointNodeIds = (
+  nodes: SelectionHighlightNodeLike[],
+  edges: SelectionHighlightEdgeLike[],
+  selectedEdgeIds: string[],
+) => {
+  const nodeIds = new Set(nodes.map((node) => node.id))
+  const selectedIds = new Set(selectedEdgeIds)
+  return uniqueIds(
+    edges
+      .filter((edge) => selectedIds.has(edge.id))
+      .flatMap((edge) => [edge.source, edge.target])
+      .filter((nodeId) => nodeIds.has(nodeId)),
+  )
+}
+
 export function buildCanvasSelectionHighlights(
-  _nodes: SelectionHighlightNodeLike[],
-  _edges: SelectionHighlightEdgeLike[],
+  nodes: SelectionHighlightNodeLike[],
+  edges: SelectionHighlightEdgeLike[],
   selectedNodeIds: string[],
   selectedEdgeIds: string[],
   traceNodeIds: string[] = [],
 ) {
   const nodeClassNamesById = new Map<string, string>()
-  for (const nodeId of uniqueIds([...selectedNodeIds, ...traceNodeIds])) {
+  const edgeEndpointNodeIds = selectedEdgeEndpointNodeIds(nodes, edges, selectedEdgeIds)
+  for (const nodeId of uniqueIds([...selectedNodeIds, ...traceNodeIds, ...edgeEndpointNodeIds])) {
     nodeClassNamesById.set(nodeId, 'selection-primary')
   }
 
@@ -2522,11 +2538,6 @@ function CanvasSurface() {
     if (selectionBoxActive.current || Date.now() < ignoreSelectionSyncUntil.current) return
     const selectChanges = changes.filter((change) => change.type === 'select')
     if (selectChanges.length === 0) return
-    recordEdgeSelectionRecency(
-      selectChanges
-        .filter((change) => 'selected' in change && change.selected)
-        .map((change) => change.id),
-    )
 
     setSelectedEdgeIds((current) => {
       const next = new Set(current)
@@ -2539,7 +2550,7 @@ function CanvasSurface() {
       }
       return selectedEdgeIdsFromSelectionChange(current, [...next])
     })
-  }, [recordEdgeSelectionRecency])
+  }, [])
 
   const clearSelectedEdgeIds = useCallback(() => {
     setSelectedEdgeIds((current) => (current.length > 0 ? [] : current))
@@ -2896,10 +2907,19 @@ function CanvasSurface() {
 
       const changedEdgeIds = changedEdges.map((edge) => edge.id)
       if (changedEdgeIds.length > 0) {
+        const endpointNodeIds = selectedEdgeEndpointNodeIds(visibleNodes, visibleEdges, changedEdgeIds)
+        const edgeSelectionChanged = !sameNodeIdSet(selectedEdgeIds, changedEdgeIds)
         setSelectedEdgeIds((current) => selectedEdgeIdsFromSelectionChange(current, changedEdgeIds))
-        recordEdgeSelectionRecency(changedEdgeIds)
-        selectNode(undefined)
+        if (edgeSelectionChanged) recordEdgeSelectionRecency(changedEdgeIds)
+        if (!sameNodeIdSet(activeSelectedNodeIds, endpointNodeIds)) {
+          forcedFlowSelectionNodeIds.current = endpointNodeIds
+          ignoreSelectionSyncUntil.current = Date.now() + 250
+          selectNodes(endpointNodeIds)
+          recordNodeSelectionRecency(endpointNodeIds)
+          syncFlowNodeSelection(endpointNodeIds)
+        }
         clearTraceHighlightNodeIds()
+        return
       }
       if (changedNodeIds.length > 0) {
         const mode = modifierKeys.current.alt
@@ -2929,9 +2949,11 @@ function CanvasSurface() {
       expandGroupSelectionIds,
       recordEdgeSelectionRecency,
       recordNodeSelectionRecency,
-      selectNode,
+      selectedEdgeIds,
       selectNodes,
       syncFlowNodeSelection,
+      visibleEdges,
+      visibleNodes,
     ],
   )
 
@@ -3907,16 +3929,30 @@ function CanvasSurface() {
 
   const handleEdgeClick = useCallback<EdgeMouseHandler>(
     (event, edge) => {
+      event.preventDefault()
       event.stopPropagation()
+      const endpointNodeIds = selectedEdgeEndpointNodeIds(visibleNodes, visibleEdges, [edge.id])
+      forcedFlowSelectionNodeIds.current = endpointNodeIds
+      ignoreSelectionSyncUntil.current = Date.now() + 250
       setSelectedEdgeIds((current) => (current.length === 1 && current[0] === edge.id ? current : [edge.id]))
       recordEdgeSelectionRecency([edge.id])
+      recordNodeSelectionRecency(endpointNodeIds)
+      selectNodes(endpointNodeIds)
+      syncFlowNodeSelection(endpointNodeIds)
       clearTraceHighlightNodeIds()
       setQuickToolbar(undefined)
       setFunctionNodeMenu(undefined)
       setGroupNodeMenu(undefined)
-      selectNode(undefined)
     },
-    [clearTraceHighlightNodeIds, recordEdgeSelectionRecency, selectNode],
+    [
+      clearTraceHighlightNodeIds,
+      recordEdgeSelectionRecency,
+      recordNodeSelectionRecency,
+      selectNodes,
+      syncFlowNodeSelection,
+      visibleEdges,
+      visibleNodes,
+    ],
   )
 
   const handleConnectStart = useCallback<OnConnectStart>((_, params) => {

@@ -89,7 +89,7 @@ const projectWithOptionalInput = (inputValues: Record<string, unknown> = {}): Pr
 })
 
 describe('CanvasWorkspace helpers', () => {
-  it('highlights only the explicitly selected graph items', () => {
+  it('keeps node highlighting local while selecting both endpoints of a selected edge', () => {
     const nodes = [
       { id: 'node_a' },
       { id: 'node_b' },
@@ -118,7 +118,12 @@ describe('CanvasWorkspace helpers', () => {
 
     const edgeSelection = buildCanvasSelectionHighlights(nodes, edges, [], ['edge_bc'])
 
-    expect(edgeSelection.nodeClassNamesById).toEqual(new Map())
+    expect(edgeSelection.nodeClassNamesById).toEqual(
+      new Map([
+        ['node_b', 'selection-primary'],
+        ['node_c', 'selection-primary'],
+      ]),
+    )
     expect(edgeSelection.edgeClassNamesById).toEqual(new Map([['edge_bc', 'selection-primary-edge']]))
   })
 
@@ -220,8 +225,13 @@ describe('CanvasWorkspace helpers', () => {
     expect(sameFlowEdgesForSync(previous, [{ ...next[0], selected: true }])).toBe(false)
   })
 
-  it('keeps explicit edge clicks selected when React Flow reports an empty edge selection', () => {
-    expect(selectedEdgeIdsFromSelectionChange(['edge_1'], [])).toEqual(['edge_1'])
+  it('keeps repeated edge selection changes referentially stable', () => {
+    const selected = selectedEdgeIdsFromSelectionChange([], ['edge_1'])
+    const repeated = selectedEdgeIdsFromSelectionChange(selected, ['edge_1'])
+    const emptySelectionNoise = selectedEdgeIdsFromSelectionChange(repeated, [])
+
+    expect(repeated).toBe(selected)
+    expect(emptySelectionNoise).toBe(selected)
     expect(selectedEdgeIdsFromSelectionChange(['edge_1'], ['edge_2'])).toEqual(['edge_2'])
     expect(selectedEdgeIdsFromSelectionChange([], [])).toEqual([])
   })
