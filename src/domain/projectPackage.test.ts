@@ -135,7 +135,7 @@ describe('project package helpers', () => {
     })
   })
 
-  it('migrates legacy password auth to a secretless token config export by default', () => {
+  it('keeps password auth type while omitting password and fallback token from config exports by default', () => {
     const passwordProject = structuredClone(project)
     passwordProject.comfy.endpoints[0]!.auth = {
       type: 'password',
@@ -147,14 +147,14 @@ describe('project package helpers', () => {
     const exported = createConfigPackage(passwordProject)
 
     expect(exported.config.comfy.endpoints[0]?.auth).toEqual({
-      type: 'token',
+      type: 'password',
       exportSecret: false,
     })
     expect(JSON.stringify(exported)).not.toContain('fixture-config-password')
     expect(JSON.stringify(exported)).not.toContain('fixture-config-fallback-token')
   })
 
-  it('exports only the API token from legacy password auth when secret export is enabled', () => {
+  it('exports the password and fallback API token when config secret export is enabled', () => {
     const passwordProject = structuredClone(project)
     passwordProject.comfy.endpoints[0]!.auth = {
       type: 'password',
@@ -164,14 +164,14 @@ describe('project package helpers', () => {
     }
 
     expect(createConfigPackage(passwordProject).config.comfy.endpoints[0]?.auth).toEqual({
-      type: 'token',
+      type: 'password',
+      password: 'fixture-exported-config-password',
       token: 'fixture-exported-config-fallback-token',
       exportSecret: true,
     })
-    expect(JSON.stringify(createConfigPackage(passwordProject))).not.toContain('fixture-exported-config-password')
   })
 
-  it('migrates legacy password auth to a secretless token full-project export by default', () => {
+  it('keeps password auth type while omitting password and fallback token from full-project exports by default', () => {
     const passwordProject = structuredClone(project)
     passwordProject.comfy.endpoints[0]!.auth = {
       type: 'password',
@@ -183,14 +183,14 @@ describe('project package helpers', () => {
     const exported = createProjectPackage(passwordProject)
 
     expect(exported.project.comfy.endpoints[0]?.auth).toEqual({
-      type: 'token',
+      type: 'password',
       exportSecret: false,
     })
     expect(JSON.stringify(exported)).not.toContain('fixture-full-project-password')
     expect(JSON.stringify(exported)).not.toContain('fixture-full-project-fallback-token')
   })
 
-  it('exports only the API token from legacy password auth in an explicitly secret-enabled full project', () => {
+  it('exports the password and fallback API token in an explicitly secret-enabled full project', () => {
     const passwordProject = structuredClone(project)
     passwordProject.comfy.endpoints[0]!.auth = {
       type: 'password',
@@ -200,11 +200,11 @@ describe('project package helpers', () => {
     }
 
     expect(createProjectPackage(passwordProject).project.comfy.endpoints[0]?.auth).toEqual({
-      type: 'token',
+      type: 'password',
+      password: 'fixture-exported-full-project-password',
       token: 'fixture-exported-full-project-fallback-token',
       exportSecret: true,
     })
-    expect(JSON.stringify(createProjectPackage(passwordProject))).not.toContain('fixture-exported-full-project-password')
   })
 
   it('excludes built-in function definitions from project and config exports', () => {

@@ -358,7 +358,7 @@ describe('NodeViews', () => {
     expect(within(resourceNode as HTMLElement).getByLabelText('Run duration 4.5s')).toBeVisible()
   })
 
-  it('exposes a generated asset source as a function or workflow view instead of a replacement runner', () => {
+  it('opens the unified edit-and-rerun dialog for a generated ComfyUI asset source', () => {
     const onOpenFunctionRunForResource = vi.fn()
     const linkedOutput: Resource = {
       ...outputResource,
@@ -406,10 +406,7 @@ describe('NodeViews', () => {
       </ReactFlowProvider>,
     )
 
-    const sourceLink = within(container).getByRole('button', {
-      name: /view.*(?:function|workflow).*Flux2 Text To Image/i,
-    })
-    expect(within(container).queryByRole('button', { name: 'Edit and run Flux2 Text To Image' })).not.toBeInTheDocument()
+    const sourceLink = within(container).getByRole('button', { name: 'Edit and run Flux2 Text To Image' })
 
     fireEvent.click(sourceLink)
 

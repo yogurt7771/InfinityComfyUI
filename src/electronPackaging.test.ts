@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import viteConfig from '../vite.config'
@@ -27,42 +27,33 @@ describe('Electron packaging configuration', () => {
     expect(main).toContain("ipcMain.handle('infinity-storage:save'")
   })
 
-  it('loads the packaged renderer from app-dist without starting a local HTTP server', () => {
+  it('serves the packaged renderer over a local HTTP server for Electron and launcher modes', () => {
     const main = readFileSync(resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
+    const launcher = readFileSync(resolve(__dirname, '..', 'electron', 'launcher.cjs'), 'utf8')
 
-    expect(main).not.toContain("require('node:http')")
-    expect(main).not.toContain('startAppServer')
-    expect(main).not.toContain('serveStaticApp')
-    expect(main).toContain("path.join(__dirname, '..', 'app-dist', 'index.html')")
-    expect(main).toContain('win.loadFile')
+    expect(main).toContain("require('node:http')")
+    expect(main).toContain('startAppServer')
+    expect(main).toContain('serveStaticApp')
+    expect(main).toContain("path.join(__dirname, '..', 'app-dist')")
+    expect(main).toContain("path.join(distDir, 'index.html')")
     expect(main).toContain('INFINITY_DEV_SERVER_URL')
     expect(main).toContain('win.loadURL')
+    expect(main).toContain('shell.openExternal(appUrl)')
+    expect(launcher).toContain("process.env.INFINITY_APP_MODE = 'launcher'")
+    expect(launcher).toContain("require('./main.cjs')")
   })
 
-  it('owns the ComfyUI editor in an isolated Electron view with built-in workflow commands', () => {
-    const electronDirectory = resolve(__dirname, '..', 'electron')
+  it('routes the embedded ComfyUI editor through the local proxy with automatic password login support', () => {
     const main = readFileSync(resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
-    const bridge = readFileSync(resolve(__dirname, 'domain', 'comfyFrameBridge.ts'), 'utf8')
-    const electronRuntime = readdirSync(electronDirectory)
-      .filter((filename) => filename.endsWith('.cjs'))
-      .map((filename) => readFileSync(resolve(electronDirectory, filename), 'utf8'))
-      .join('\n')
-
-    expect(main).toMatch(/WebContentsView|webviewTag:\s*true/)
     expect(main).toContain('contextIsolation: true')
     expect(main).toContain('nodeIntegration: false')
-    expect(main).toContain('will-attach-webview')
-    expect(main).toContain('did-attach-webview')
-    expect(bridge).toContain('executeJavaScript')
-    expect(bridge).toContain('load-ui')
-    expect(bridge).toContain('load-api')
-    expect(bridge).toContain('export')
-    expect(bridge).toContain('rawJson')
-    expect(bridge).toContain('uiJson')
-    expect(electronRuntime).not.toContain('infinity_comfy_bridge')
-    expect(bridge).not.toContain('infinity_comfy_bridge')
-    expect(electronRuntime).not.toContain('__comfy_proxy')
-    expect(electronRuntime).not.toMatch(/password/i)
+    expect(main).toContain("const COMFY_PROXY_SEGMENT = '__comfy_proxy'")
+    expect(main).toContain("type: 'infinity-comfy-login-ready'")
+    expect(main).toContain("event.data?.type !== 'infinity-comfy-login'")
+    expect(main).toContain('passwordInput.value = password')
+    expect(main).toContain('form.requestSubmit()')
+    expect(main).not.toContain('infinity_comfy_bridge')
+    expect(existsSync(resolve(__dirname, 'domain', 'comfyFrameBridge.ts'))).toBe(false)
   })
 
   it('uses the custom generated icon for browser, portable, and installer builds', () => {

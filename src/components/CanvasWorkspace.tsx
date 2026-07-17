@@ -246,7 +246,8 @@ export const visibleCanvasNodes = (nodes: CanvasNode[]) =>
   nodes.filter((node) => node.type === 'resource' || node.type === 'group')
 
 const GROUP_NODE_Z_INDEX_BASE = 0
-const ASSET_NODE_Z_INDEX_BASE = 10000
+const CANVAS_EDGE_Z_INDEX_BASE = 1000000
+const ASSET_NODE_Z_INDEX_BASE = 2000000
 
 const parsedTimestamp = (value: unknown) => {
   if (typeof value !== 'string') return 0
@@ -297,6 +298,28 @@ export const buildCanvasNodeZIndexMap = (
       })
   }
 
+  return zIndexById
+}
+
+export const buildCanvasEdgeZIndexMap = (
+  edges: Array<Pick<Edge, 'id'>>,
+  selectedEdgeRecencyById: Record<string, number> = {},
+) => {
+  const zIndexById = new Map<string, number>()
+  edges
+    .map((edge, originalIndex) => ({
+      edge,
+      originalIndex,
+      selectedRecency: selectedEdgeRecencyById[edge.id] ?? 0,
+    }))
+    .sort(
+      (left, right) =>
+        left.selectedRecency - right.selectedRecency ||
+        left.originalIndex - right.originalIndex,
+    )
+    .forEach((item, index) => {
+      zIndexById.set(item.edge.id, CANVAS_EDGE_Z_INDEX_BASE + index)
+    })
   return zIndexById
 }
 
@@ -460,6 +483,7 @@ export const sameFlowEdgesForSync = (left: Edge[], right: Edge[]) => {
       edge.label === next.label &&
       edge.type === next.type &&
       edge.className === next.className &&
+      edge.zIndex === next.zIndex &&
       markerKey(edge.markerEnd) === markerKey(next.markerEnd)
     )
   })
@@ -2121,6 +2145,7 @@ function CanvasSurface() {
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([])
   const [traceHighlightNodeIds, setTraceHighlightNodeIds] = useState<string[]>([])
   const [selectedNodeRecencyById, setSelectedNodeRecencyById] = useState<Record<string, number>>({})
+  const [selectedEdgeRecencyById, setSelectedEdgeRecencyById] = useState<Record<string, number>>({})
   const [addMenuQuery, setAddMenuQuery] = useState('')
   const addMenuRef = useRef<HTMLDivElement | null>(null)
   const quickToolbarRef = useRef<HTMLDivElement | null>(null)
@@ -2149,6 +2174,18 @@ function CanvasSurface() {
       for (const nodeId of ids) {
         selectionRecencyCounter.current += 1
         next[nodeId] = selectionRecencyCounter.current
+      }
+      return next
+    })
+  }, [])
+  const recordEdgeSelectionRecency = useCallback((edgeIds: string[]) => {
+    const ids = edgeIds.filter(Boolean)
+    if (ids.length === 0) return
+    setSelectedEdgeRecencyById((current) => {
+      const next = { ...current }
+      for (const edgeId of ids) {
+        selectionRecencyCounter.current += 1
+        next[edgeId] = selectionRecencyCounter.current
       }
       return next
     })
@@ -2220,6 +2257,10 @@ function CanvasSurface() {
   const zIndexByNodeId = useMemo(
     () => buildCanvasNodeZIndexMap(visibleNodes, project.resources, selectedNodeRecencyById),
     [project.resources, selectedNodeRecencyById, visibleNodes],
+  )
+  const zIndexByEdgeId = useMemo(
+    () => buildCanvasEdgeZIndexMap(visibleEdges, selectedEdgeRecencyById),
+    [selectedEdgeRecencyById, visibleEdges],
   )
   const groupChildNodeIdsById = useMemo(() => {
     const visibleNodeIds = new Set(visibleNodes.map((node) => node.id))
@@ -2449,10 +2490,11 @@ function CanvasSurface() {
   const flowEdges = useMemo<Edge[]>(() => {
     return visibleEdges.map((edge) => ({
       ...edge,
+      zIndex: zIndexByEdgeId.get(edge.id),
       className: mergeClassNames(edge.className, selectionHighlights.edgeClassNamesById.get(edge.id)),
       selected: selectedEdgeIdSet.has(edge.id),
     }))
-  }, [selectedEdgeIdSet, selectionHighlights.edgeClassNamesById, visibleEdges])
+  }, [selectedEdgeIdSet, selectionHighlights.edgeClassNamesById, visibleEdges, zIndexByEdgeId])
 
   const selectedComparePair = useMemo<CompareImagePair | undefined>(() => {
     if (activeSelectedNodeIds.length !== 2) return undefined
@@ -2480,6 +2522,11 @@ function CanvasSurface() {
     if (selectionBoxActive.current || Date.now() < ignoreSelectionSyncUntil.current) return
     const selectChanges = changes.filter((change) => change.type === 'select')
     if (selectChanges.length === 0) return
+    recordEdgeSelectionRecency(
+      selectChanges
+        .filter((change) => 'selected' in change && change.selected)
+        .map((change) => change.id),
+    )
 
     setSelectedEdgeIds((current) => {
       const next = new Set(current)
@@ -2492,7 +2539,7 @@ function CanvasSurface() {
       }
       return selectedEdgeIdsFromSelectionChange(current, [...next])
     })
-  }, [])
+  }, [recordEdgeSelectionRecency])
 
   const clearSelectedEdgeIds = useCallback(() => {
     setSelectedEdgeIds((current) => (current.length > 0 ? [] : current))
@@ -2850,6 +2897,7 @@ function CanvasSurface() {
       const changedEdgeIds = changedEdges.map((edge) => edge.id)
       if (changedEdgeIds.length > 0) {
         setSelectedEdgeIds((current) => selectedEdgeIdsFromSelectionChange(current, changedEdgeIds))
+        recordEdgeSelectionRecency(changedEdgeIds)
         selectNode(undefined)
         clearTraceHighlightNodeIds()
       }
@@ -2879,6 +2927,7 @@ function CanvasSurface() {
       clearSelectedEdgeIds,
       clearTraceHighlightNodeIds,
       expandGroupSelectionIds,
+      recordEdgeSelectionRecency,
       recordNodeSelectionRecency,
       selectNode,
       selectNodes,
@@ -3860,13 +3909,14 @@ function CanvasSurface() {
     (event, edge) => {
       event.stopPropagation()
       setSelectedEdgeIds((current) => (current.length === 1 && current[0] === edge.id ? current : [edge.id]))
+      recordEdgeSelectionRecency([edge.id])
       clearTraceHighlightNodeIds()
       setQuickToolbar(undefined)
       setFunctionNodeMenu(undefined)
       setGroupNodeMenu(undefined)
       selectNode(undefined)
     },
-    [clearTraceHighlightNodeIds, selectNode],
+    [clearTraceHighlightNodeIds, recordEdgeSelectionRecency, selectNode],
   )
 
   const handleConnectStart = useCallback<OnConnectStart>((_, params) => {

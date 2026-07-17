@@ -7628,7 +7628,7 @@ body[data-theme='light'] option {
   border-top-color: #be123c;
 }
 
-.workspace-canvas .react-flow__node.selection-primary {
+.workspace-canvas .react-flow__node:not(.react-flow__node-group).selection-primary {
   z-index: 18;
 }
 

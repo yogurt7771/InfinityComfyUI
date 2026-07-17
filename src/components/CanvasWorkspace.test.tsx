@@ -330,7 +330,7 @@ describe('CanvasWorkspace', () => {
     expect(within(dialog).getByRole('textbox', { name: 'Gemini prompt' })).toBeInTheDocument()
   })
 
-  it('opens the selected one-off ComfyUI endpoint in an Electron webview without proxy or token URL leakage', () => {
+  it('opens the selected one-off ComfyUI endpoint in a same-origin proxied iframe', () => {
     configureTemporaryComfyProject()
     const openSpy = vi.spyOn(window, 'open').mockReturnValue({} as WindowProxy)
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
@@ -342,46 +342,56 @@ describe('CanvasWorkspace', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Edit temporary workflow in ComfyUI' }))
 
     const editorDialog = screen.getByRole('dialog', { name: 'ComfyUI Workflow Editor' })
-    const webview = within(editorDialog).getByTitle(/^ComfyUI editor\b/)
-    const frameUrl = new URL(String(webview.getAttribute('src')))
-    expect(webview.tagName).toBe('WEBVIEW')
-    expect(frameUrl.origin).toBe('https://comfyui.example.test:8443')
-    expect(frameUrl.pathname).toBe('/custom/ui')
-    expect(frameUrl.searchParams.get('theme')).toBe('dark')
-    expect(frameUrl.searchParams.has('token')).toBe(false)
+    const iframe = within(editorDialog).getByTitle(/^ComfyUI editor\b/)
+    const frameUrl = new URL(String(iframe.getAttribute('src')), window.location.href)
+    expect(iframe.tagName).toBe('IFRAME')
+    expect(frameUrl.origin).toBe(window.location.origin)
+    expect(frameUrl.pathname).toContain('/__comfy_proxy/')
+    expect(decodeURIComponent(frameUrl.pathname)).toContain('https://comfyui.example.test:8443')
+    expect(frameUrl.searchParams.get('__infinity_comfy_token')).toBe('fixture-canvas-token')
     expect(frameUrl.hash).toBe('')
-    expect(frameUrl.href).not.toContain('/__comfy_proxy/')
     expect(openSpy).not.toHaveBeenCalled()
     expect(fetchSpy).not.toHaveBeenCalled()
     expect(screen.getByRole('dialog', { name: 'ComfyUI workflow runner' })).toBeVisible()
     expect(screen.queryByRole('menu', { name: 'Add node' })).not.toBeInTheDocument()
   })
 
-  it('leaves one-off endpoint password login to the user without exposing saved credentials', () => {
+  it('submits a saved one-off endpoint page password through the proxy login handshake', () => {
     configureTemporaryComfyProject(
       { type: 'password', password: 'fixture-ui-password', token: 'fixture-fallback-token' },
       'https://comfyui.example.test:8443',
     )
     vi.spyOn(window, 'open').mockReturnValue({} as WindowProxy)
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
-    const submitSpy = vi.spyOn(HTMLFormElement.prototype, 'submit').mockImplementation(() => undefined)
-
     const menu = openAddMenu()
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'ComfyUI Workflow' }))
     const dialog = screen.getByRole('dialog', { name: 'ComfyUI workflow runner' })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Edit temporary workflow in ComfyUI' }))
 
     const editorDialog = screen.getByRole('dialog', { name: 'ComfyUI Workflow Editor' })
-    const webview = within(editorDialog).getByTitle(/^ComfyUI editor\b/)
-    const frameUrl = new URL(String(webview.getAttribute('src')))
-    expect(webview.tagName).toBe('WEBVIEW')
-    expect(frameUrl.href).toBe('https://comfyui.example.test:8443/')
+    const iframe = within(editorDialog).getByTitle(/^ComfyUI editor\b/) as HTMLIFrameElement
+    const frameUrl = new URL(String(iframe.getAttribute('src')), window.location.href)
+    expect(iframe.tagName).toBe('IFRAME')
+    expect(frameUrl.pathname).toContain('/__comfy_proxy/')
     expect(frameUrl.href).not.toContain('fixture-ui-password')
-    expect(frameUrl.href).not.toContain('fixture-fallback-token')
-    expect(submitSpy).not.toHaveBeenCalled()
+    expect(frameUrl.searchParams.get('__infinity_comfy_token')).toBe('fixture-fallback-token')
+
+    const postMessageSpy = vi.spyOn(iframe.contentWindow!, 'postMessage')
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        source: iframe.contentWindow,
+        origin: window.location.origin,
+        data: { type: 'infinity-comfy-login-ready' },
+      }),
+    )
+
+    expect(postMessageSpy).toHaveBeenCalledWith(
+      { type: 'infinity-comfy-login', password: 'fixture-ui-password' },
+      window.location.origin,
+    )
     expect(fetchSpy).not.toHaveBeenCalled()
     expect(screen.getByRole('dialog', { name: 'ComfyUI workflow runner' })).toBeVisible()
-    expect(within(editorDialog).getByRole('status')).toHaveTextContent(/sign in|login|connecting|bridge/i)
+    expect(within(editorDialog).getByRole('status')).toHaveTextContent(/password|proxy/i)
   })
 
   it('keeps the embedded one-off editor available when popups are blocked', () => {
@@ -1031,24 +1041,12 @@ describe('CanvasWorkspace', () => {
 
     fireEvent.click(sourceLink!)
 
-    const dialog = screen.getByRole('dialog', { name: /Function Management|Source function details/i })
-    expect(screen.queryByRole('dialog', { name: 'Run Source Image Workflow' })).not.toBeInTheDocument()
-    expect(within(dialog).getByLabelText('Function name')).toHaveValue('Source Image Workflow')
-    const selectedSource = within(within(dialog).getByLabelText('Managed function list')).getByRole('button', {
-      name: /Source Image Workflow/,
-    })
-    expect(selectedSource).toHaveClass('selected')
-    const functionType = within(dialog).queryByLabelText('Function type')
-    if (functionType) expect(functionType).toHaveValue('comfyui')
-    else expect(within(dialog).getByText(/^comfyui$/i)).toBeVisible()
-    expect(within(dialog).getByRole('heading', { name: 'Inputs' })).toBeVisible()
-    expect(within(dialog).getByLabelText('Input label prompt')).toHaveValue('Source Prompt')
-    expect(within(dialog).getByRole('heading', { name: 'Outputs' })).toBeVisible()
-    expect(within(dialog).getByLabelText('Output label image')).toHaveValue('Source Image')
-    expect(within(dialog).getByRole('heading', { name: 'Workflow JSON' })).toBeVisible()
-    expect(within(dialog).getByLabelText('Selected workflow JSON')).toHaveTextContent('SourceWorkflowSentinel')
-    expect(within(dialog).getByLabelText('Selected workflow JSON')).not.toHaveTextContent('DecoyWorkflowSentinel')
-    expect(within(dialog).getByRole('button', { name: 'Edit in ComfyUI' })).toBeEnabled()
+    const dialog = screen.getByRole('dialog', { name: 'Run Source Image Workflow' })
+    expect(within(dialog).getByRole('heading', { name: 'Source Image Workflow' })).toBeVisible()
+    expect(within(dialog).getByLabelText('Manual input Source Prompt')).toBeVisible()
+    expect(within(dialog).getByRole('button', { name: 'Edit workflow in ComfyUI' })).toBeEnabled()
+    expect(within(dialog).getByRole('button', { name: 'Run and replace current output' })).toBeInTheDocument()
+    expect(dialog).not.toHaveTextContent('Decoy Workflow')
   })
 
   it('uses task provenance consistently for the source button and function details when metadata disagrees', async () => {
@@ -1067,16 +1065,16 @@ describe('CanvasWorkspace', () => {
     })
     const sourceLink = assetNode.querySelector<HTMLButtonElement>('.asset-function-chip')
     expect(sourceLink).not.toBeNull()
-    expect.soft(sourceLink).toHaveAttribute('aria-label', 'View function and workflow Task Workflow A')
+    expect.soft(sourceLink).toHaveAttribute('aria-label', 'Edit and run Task Workflow A')
     expect.soft(sourceLink).toHaveTextContent('Task Workflow A')
 
     fireEvent.click(sourceLink!)
 
-    const dialog = screen.getByRole('dialog', { name: /Function Management|Source function details/i })
-    expect(within(dialog).getByLabelText('Function name')).toHaveValue('Task Workflow A')
-    expect(within(dialog).getByLabelText('Function type')).toHaveValue('comfyui')
-    expect(within(dialog).getByLabelText('Selected workflow JSON')).toHaveTextContent('TaskWorkflowASentinel')
-    expect(within(dialog).getByLabelText('Selected workflow JSON')).not.toHaveTextContent('MetadataWorkflowBSentinel')
+    const dialog = screen.getByRole('dialog', { name: 'Run Task Workflow A' })
+    expect(within(dialog).getByRole('heading', { name: 'Task Workflow A' })).toBeVisible()
+    expect(within(dialog).getByRole('button', { name: 'Edit workflow in ComfyUI' })).toBeEnabled()
+    expect(within(dialog).getByRole('button', { name: 'Run and replace current output' })).toBeEnabled()
+    expect(dialog).not.toHaveTextContent('Metadata Workflow B')
   })
 
   it('falls back to resource metadata provenance when the historical task is unavailable', async () => {
@@ -1095,15 +1093,15 @@ describe('CanvasWorkspace', () => {
     })
     const sourceLink = assetNode.querySelector<HTMLButtonElement>('.asset-function-chip')
     expect(sourceLink).not.toBeNull()
-    expect(sourceLink).toHaveAttribute('aria-label', 'View function and workflow Metadata Workflow B')
+    expect(sourceLink).toHaveAttribute('aria-label', 'Edit and run Metadata Workflow B')
 
     fireEvent.click(sourceLink!)
 
-    const dialog = screen.getByRole('dialog', { name: /Function Management|Source function details/i })
-    expect(within(dialog).getByLabelText('Function name')).toHaveValue('Metadata Workflow B')
-    expect(within(dialog).getByLabelText('Function type')).toHaveValue('comfyui')
-    expect(within(dialog).getByLabelText('Selected workflow JSON')).toHaveTextContent('MetadataWorkflowBSentinel')
-    expect(within(dialog).getByLabelText('Selected workflow JSON')).not.toHaveTextContent('TaskWorkflowASentinel')
+    const dialog = screen.getByRole('dialog', { name: 'Run Metadata Workflow B' })
+    expect(within(dialog).getByRole('heading', { name: 'Metadata Workflow B' })).toBeVisible()
+    expect(within(dialog).getByRole('button', { name: 'Edit workflow in ComfyUI' })).toBeEnabled()
+    expect(within(dialog).getByRole('button', { name: 'Run and replace current output' })).toBeEnabled()
+    expect(dialog).not.toHaveTextContent('Task Workflow A')
   })
 
   it('shows run details and navigation from a generated asset inspector', async () => {
@@ -1292,7 +1290,7 @@ describe('CanvasWorkspace', () => {
     expect(sameFlowEdgesForSync(structuralEdges, selectedOnlyEdges)).toBe(true)
   })
 
-  it('highlights group children as related nodes and expands their graph chain from a group double click', async () => {
+  it('selects a group and all of its children without highlighting external graph nodes', async () => {
     const groupedProject: ProjectState = {
       ...originalProject,
       project: { ...originalProject.project, id: 'project_group_highlight' },
@@ -1424,15 +1422,17 @@ describe('CanvasWorkspace', () => {
     fireEvent.click(groupNode)
 
     await waitFor(() => expect(groupNode).toHaveClass('selection-primary'))
-    expect(promptNode).toHaveClass('selection-related')
-    expect(resultNode).toHaveClass('selection-related')
-    expect(externalNode).toHaveClass('selection-dimmed')
+    expect(promptNode).toHaveClass('selection-primary', 'selected')
+    expect(resultNode).toHaveClass('selection-primary', 'selected')
+    expect(externalNode).not.toHaveClass('selection-primary', 'selection-related', 'selection-dimmed', 'selected')
+    expect(projectStore.getState().selectedNodeIds).toEqual(['node_group', 'node_prompt', 'node_result'])
 
     fireEvent.doubleClick(groupNode)
 
-    await waitFor(() => expect(externalNode).toHaveClass('selection-related'))
-    expect(promptNode).toHaveClass('selection-related')
-    expect(resultNode).toHaveClass('selection-related')
+    await waitFor(() => expect(groupNode).toHaveClass('selection-primary'))
+    expect(promptNode).toHaveClass('selection-primary')
+    expect(resultNode).toHaveClass('selection-primary')
+    expect(externalNode).not.toHaveClass('selection-primary', 'selection-related', 'selection-dimmed')
   })
 
   it('groups the active node selection with Ctrl+G', async () => {
@@ -1474,15 +1474,15 @@ describe('CanvasWorkspace', () => {
       return node!
     })
     expect(groupNode.data.childNodeIds).toEqual(['node_prompt', 'node_result'])
-    expect(projectStore.getState().selectedNodeIds).toEqual([groupNode.id])
+    expect(projectStore.getState().selectedNodeIds).toEqual([groupNode.id, 'node_prompt', 'node_result'])
 
     await waitFor(() => {
       const groupElement = container.querySelector<HTMLElement>(`.react-flow__node[data-id="${groupNode.id}"]`)
       expect(groupElement).not.toBeNull()
       expect(groupElement).toHaveClass('selected')
     })
-    expect(container.querySelector('.react-flow__node[data-id="node_prompt"]')).not.toHaveClass('selected')
-    expect(container.querySelector('.react-flow__node[data-id="node_result"]')).not.toHaveClass('selected')
+    expect(container.querySelector('.react-flow__node[data-id="node_prompt"]')).toHaveClass('selected')
+    expect(container.querySelector('.react-flow__node[data-id="node_result"]')).toHaveClass('selected')
   })
 
   it('clears a selected group from an empty click inside the group body without reselecting it', async () => {
@@ -1555,19 +1555,19 @@ describe('CanvasWorkspace', () => {
     fireEvent.click(groupNode)
 
     await waitFor(() => expect(groupNode).toHaveClass('selection-primary'))
-    expect(promptNode).toHaveClass('selection-related')
-    expect(resultNode).toHaveClass('selection-related')
+    expect(promptNode).toHaveClass('selection-primary', 'selected')
+    expect(resultNode).toHaveClass('selection-primary', 'selected')
 
     fireEvent.click(groupNode, { clientX: 120, clientY: 220 })
 
     await waitFor(() => expect(groupNode).not.toHaveClass('selection-primary'))
-    expect(promptNode).not.toHaveClass('selection-related')
-    expect(resultNode).not.toHaveClass('selection-related')
+    expect(promptNode).not.toHaveClass('selection-primary', 'selected')
+    expect(resultNode).not.toHaveClass('selection-primary', 'selected')
     expect(projectStore.getState().selectedNodeId).toBeUndefined()
     expect(projectStore.getState().selectedNodeIds).toEqual([])
   })
 
-  it('highlights direct graph relations first, expands the full chain, and clears it from an empty canvas click', async () => {
+  it('highlights only the selected node and clears it from an empty canvas click', async () => {
     const chainedProject: ProjectState = {
       ...originalProject,
       project: { ...originalProject.project, id: 'project_selection_highlight' },
@@ -1664,23 +1664,25 @@ describe('CanvasWorkspace', () => {
     fireEvent.click(nodeB)
 
     await waitFor(() => expect(nodeB).toHaveClass('selection-primary'))
-    expect(nodeA).toHaveClass('selection-related')
-    expect(nodeC).toHaveClass('selection-related')
-    expect(nodeD).toHaveClass('selection-dimmed')
+    expect(nodeA).not.toHaveClass('selection-primary', 'selection-related', 'selection-dimmed')
+    expect(nodeC).not.toHaveClass('selection-primary', 'selection-related', 'selection-dimmed')
+    expect(nodeD).not.toHaveClass('selection-primary', 'selection-related', 'selection-dimmed')
 
     fireEvent.doubleClick(nodeB)
 
-    await waitFor(() => expect(nodeD).toHaveClass('selection-related'))
-    expect(nodeB).toHaveClass('selection-primary')
+    await waitFor(() => expect(nodeB).toHaveClass('selection-primary'))
+    expect(nodeA).not.toHaveClass('selection-primary', 'selection-related', 'selection-dimmed')
+    expect(nodeC).not.toHaveClass('selection-primary', 'selection-related', 'selection-dimmed')
+    expect(nodeD).not.toHaveClass('selection-primary', 'selection-related', 'selection-dimmed')
 
     const pane = container.querySelector<HTMLElement>('.react-flow__pane')
     expect(pane).not.toBeNull()
     fireEvent.click(pane!)
 
     await waitFor(() => expect(nodeB).not.toHaveClass('selection-primary'))
-    expect(nodeA).not.toHaveClass('selection-related')
-    expect(nodeC).not.toHaveClass('selection-related')
-    expect(nodeD).not.toHaveClass('selection-related')
+    expect(nodeA).not.toHaveClass('selection-primary')
+    expect(nodeC).not.toHaveClass('selection-primary')
+    expect(nodeD).not.toHaveClass('selection-primary')
     expect(projectStore.getState().selectedNodeId).toBeUndefined()
     expect(projectStore.getState().selectedNodeIds).toEqual([])
   })

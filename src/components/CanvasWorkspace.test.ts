@@ -4,6 +4,8 @@ import { buildNodeReferenceMap } from '../domain/nodeReferences'
 import type { ProjectState } from '../domain/types'
 import {
   buildCanvasSelectionHighlights,
+  buildCanvasEdgeZIndexMap,
+  buildCanvasNodeZIndexMap,
   buildComfyMinimapLayout,
   flowNodeStyle,
   buildFunctionRunInputDraft,
@@ -87,7 +89,7 @@ const projectWithOptionalInput = (inputValues: Record<string, unknown> = {}): Pr
 })
 
 describe('CanvasWorkspace helpers', () => {
-  it('marks selected graph items separately from directly related items', () => {
+  it('highlights only the explicitly selected graph items', () => {
     const nodes = [
       { id: 'node_a' },
       { id: 'node_b' },
@@ -103,56 +105,85 @@ describe('CanvasWorkspace helpers', () => {
     const nodeSelection = buildCanvasSelectionHighlights(nodes, edges, ['node_b'], [])
 
     expect(nodeSelection.nodeClassNamesById).toEqual(
-      new Map([
-        ['node_a', 'selection-related'],
-        ['node_b', 'selection-primary'],
-        ['node_c', 'selection-related'],
-        ['node_d', 'selection-dimmed'],
-      ]),
+      new Map([['node_b', 'selection-primary']]),
     )
-    expect(nodeSelection.edgeClassNamesById).toEqual(
-      new Map([
-        ['edge_ab', 'selection-related-edge'],
-        ['edge_bc', 'selection-related-edge'],
-        ['edge_cd', 'selection-dimmed-edge'],
-      ]),
-    )
+    expect(nodeSelection.edgeClassNamesById).toEqual(new Map())
 
     const tracedSelection = buildCanvasSelectionHighlights(nodes, edges, ['node_b'], [], ['node_b'])
 
     expect(tracedSelection.nodeClassNamesById).toEqual(
-      new Map([
-        ['node_a', 'selection-related'],
-        ['node_b', 'selection-primary'],
-        ['node_c', 'selection-related'],
-        ['node_d', 'selection-related'],
-      ]),
+      new Map([['node_b', 'selection-primary']]),
     )
-    expect(tracedSelection.edgeClassNamesById).toEqual(
-      new Map([
-        ['edge_ab', 'selection-related-edge'],
-        ['edge_bc', 'selection-related-edge'],
-        ['edge_cd', 'selection-related-edge'],
-      ]),
-    )
+    expect(tracedSelection.edgeClassNamesById).toEqual(new Map())
 
     const edgeSelection = buildCanvasSelectionHighlights(nodes, edges, [], ['edge_bc'])
 
-    expect(edgeSelection.nodeClassNamesById).toEqual(
-      new Map([
-        ['node_a', 'selection-dimmed'],
-        ['node_b', 'selection-related'],
-        ['node_c', 'selection-related'],
-        ['node_d', 'selection-dimmed'],
-      ]),
-    )
-    expect(edgeSelection.edgeClassNamesById).toEqual(
-      new Map([
-        ['edge_ab', 'selection-dimmed-edge'],
-        ['edge_bc', 'selection-primary-edge'],
-        ['edge_cd', 'selection-dimmed-edge'],
-      ]),
-    )
+    expect(edgeSelection.nodeClassNamesById).toEqual(new Map())
+    expect(edgeSelection.edgeClassNamesById).toEqual(new Map([['edge_bc', 'selection-primary-edge']]))
+  })
+
+  it('orders each fixed canvas layer by creation and selection recency without crossing layer boundaries', () => {
+    const nodes: ProjectState['canvas']['nodes'] = [
+      {
+        id: 'group_old',
+        type: 'group',
+        position: { x: -40, y: -40 },
+        data: { childNodeIds: ['asset_old'], createdAt: '2026-05-09T00:00:01.000Z' },
+      },
+      {
+        id: 'group_new',
+        type: 'group',
+        position: { x: -20, y: -20 },
+        data: { childNodeIds: ['asset_new'], createdAt: '2026-05-09T00:00:02.000Z' },
+      },
+      {
+        id: 'asset_old',
+        type: 'resource',
+        position: { x: 0, y: 0 },
+        data: { resourceId: 'res_old', createdAt: '2026-05-09T00:00:01.000Z' },
+      },
+      {
+        id: 'asset_new',
+        type: 'resource',
+        position: { x: 320, y: 0 },
+        data: { resourceId: 'res_new', createdAt: '2026-05-09T00:00:02.000Z' },
+      },
+    ]
+    const resources: ProjectState['resources'] = {
+      res_old: {
+        id: 'res_old',
+        type: 'text',
+        value: 'a',
+        source: { kind: 'manual_input' },
+        metadata: { createdAt: '2026-05-09T00:00:01.000Z' },
+      },
+      res_new: {
+        id: 'res_new',
+        type: 'text',
+        value: 'b',
+        source: { kind: 'manual_input' },
+        metadata: { createdAt: '2026-05-09T00:00:02.000Z' },
+      },
+    }
+    const edges = [{ id: 'edge_old' }, { id: 'edge_new' }]
+
+    const createdNodeZ = buildCanvasNodeZIndexMap(nodes, resources)
+    const createdEdgeZ = buildCanvasEdgeZIndexMap(edges)
+
+    expect(createdNodeZ.get('group_new')).toBeGreaterThan(createdNodeZ.get('group_old') ?? 0)
+    expect(createdEdgeZ.get('edge_new')).toBeGreaterThan(createdEdgeZ.get('edge_old') ?? 0)
+    expect(createdNodeZ.get('asset_new')).toBeGreaterThan(createdNodeZ.get('asset_old') ?? 0)
+    expect(createdNodeZ.get('group_new')).toBeLessThan(createdEdgeZ.get('edge_old') ?? 0)
+    expect(createdEdgeZ.get('edge_new')).toBeLessThan(createdNodeZ.get('asset_old') ?? 0)
+
+    const selectedNodeZ = buildCanvasNodeZIndexMap(nodes, resources, { group_old: 3, asset_old: 3 })
+    const selectedEdgeZ = buildCanvasEdgeZIndexMap(edges, { edge_old: 3 })
+
+    expect(selectedNodeZ.get('group_old')).toBeGreaterThan(selectedNodeZ.get('group_new') ?? 0)
+    expect(selectedEdgeZ.get('edge_old')).toBeGreaterThan(selectedEdgeZ.get('edge_new') ?? 0)
+    expect(selectedNodeZ.get('asset_old')).toBeGreaterThan(selectedNodeZ.get('asset_new') ?? 0)
+    expect(selectedNodeZ.get('group_old')).toBeLessThan(selectedEdgeZ.get('edge_new') ?? 0)
+    expect(selectedEdgeZ.get('edge_old')).toBeLessThan(selectedNodeZ.get('asset_new') ?? 0)
   })
 
   it('does not resync React Flow edges when derived edge fields are unchanged', () => {

@@ -6,7 +6,7 @@ import { projectStore } from '../store/projectStore'
 const endpointPasswordLabel = /^comfyui password$/i
 const endpointTokenLabel = /^comfyui api token$/i
 
-describe('ComfyUI server token-only configuration', () => {
+describe('ComfyUI server page-password and API-token configuration', () => {
   beforeEach(() => {
     const project = structuredClone(projectStore.getState().project)
     project.comfy.endpoints = [
@@ -34,7 +34,7 @@ describe('ComfyUI server token-only configuration', () => {
     cleanup()
   })
 
-  it('normalizes a legacy password entry to API-token-only authentication when saved', () => {
+  it('preserves a saved page password while editing its fallback API token', () => {
     const project = structuredClone(projectStore.getState().project)
     project.comfy.endpoints[0]!.auth = {
       type: 'password',
@@ -53,9 +53,11 @@ describe('ComfyUI server token-only configuration', () => {
     fireEvent.click(within(serverList).getByRole('button', { name: /edit (server|endpoint) password test comfyui/i }))
 
     const dialog = screen.getByRole('dialog', { name: /edit comfyui server/i })
+    const passwordInput = within(dialog).getByLabelText(endpointPasswordLabel)
     const tokenInput = within(dialog).getByLabelText(endpointTokenLabel)
-    expect(within(dialog).queryByLabelText(endpointPasswordLabel)).not.toBeInTheDocument()
-    expect(within(dialog).queryByText(/api token fallback.*optional/i)).not.toBeInTheDocument()
+    expect(passwordInput).toBeVisible()
+    expect(passwordInput).toHaveAttribute('type', 'password')
+    expect(passwordInput).toHaveValue('fixture-existing-password')
     expect(tokenInput).toBeVisible()
     expect(tokenInput).toHaveAttribute('type', 'password')
     expect(tokenInput).toHaveValue('fixture-existing-token')
@@ -64,12 +66,13 @@ describe('ComfyUI server token-only configuration', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }))
 
     expect(projectStore.getState().project.comfy.endpoints[0]?.auth).toEqual({
-      type: 'token',
+      type: 'password',
+      password: 'fixture-existing-password',
       token: 'fixture-edited-token',
     })
   })
 
-  it('keeps an existing API token while exposing no password control', () => {
+  it('keeps token authentication while exposing an optional blank page-password control', () => {
     render(<LeftPanel />)
     fireEvent.click(screen.getByRole('button', { name: 'ComfyUI Servers' }))
     const popover = screen.getByLabelText('ComfyUI Servers popover')
@@ -77,8 +80,11 @@ describe('ComfyUI server token-only configuration', () => {
     fireEvent.click(within(serverList).getByRole('button', { name: /edit (server|endpoint) password test comfyui/i }))
 
     const dialog = screen.getByRole('dialog', { name: /edit comfyui server/i })
+    const passwordInput = within(dialog).getByLabelText(endpointPasswordLabel)
     const tokenInput = within(dialog).getByLabelText(endpointTokenLabel)
-    expect(within(dialog).queryByLabelText(endpointPasswordLabel)).not.toBeInTheDocument()
+    expect(passwordInput).toBeVisible()
+    expect(passwordInput).toHaveAttribute('type', 'password')
+    expect(passwordInput).toHaveValue('')
     expect(tokenInput).toHaveAttribute('type', 'password')
     expect(tokenInput).toHaveValue('fixture-legacy-token')
 
@@ -94,15 +100,18 @@ describe('ComfyUI server token-only configuration', () => {
 
   })
 
-  it('creates a new ComfyUI server with API-token-only authentication', () => {
+  it('creates a new ComfyUI server with a page password and fallback API token', () => {
     render(<LeftPanel />)
     fireEvent.click(screen.getByRole('button', { name: 'ComfyUI Servers' }))
     const popover = screen.getByLabelText('ComfyUI Servers popover')
     fireEvent.click(within(popover).getByRole('button', { name: /new|新建/i }))
     const dialog = screen.getByRole('dialog', { name: /new comfyui server|create comfyui server/i })
 
+    const passwordInput = within(dialog).getByLabelText(endpointPasswordLabel)
     const tokenInput = within(dialog).getByLabelText(endpointTokenLabel)
-    expect(within(dialog).queryByLabelText(endpointPasswordLabel)).not.toBeInTheDocument()
+    expect(passwordInput).toBeVisible()
+    expect(passwordInput).toHaveAttribute('type', 'password')
+    expect(passwordInput).toHaveValue('')
     expect(tokenInput).toBeVisible()
     expect(tokenInput).toHaveAttribute('type', 'password')
     expect(tokenInput).toHaveValue('')
@@ -112,13 +121,18 @@ describe('ComfyUI server token-only configuration', () => {
     fireEvent.change(within(dialog).getByLabelText(/url/i), {
       target: { value: 'http://127.0.0.1:8188' },
     })
+    fireEvent.change(passwordInput, { target: { value: 'fixture-created-page-password' } })
     fireEvent.change(tokenInput, { target: { value: 'fixture-created-api-token' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Add server' }))
 
     expect(projectStore.getState().project.comfy.endpoints.at(-1)).toMatchObject({
       name: 'Created Token ComfyUI',
       baseUrl: 'http://127.0.0.1:8188',
-      auth: { type: 'token', token: 'fixture-created-api-token' },
+      auth: {
+        type: 'password',
+        password: 'fixture-created-page-password',
+        token: 'fixture-created-api-token',
+      },
     })
   })
 
