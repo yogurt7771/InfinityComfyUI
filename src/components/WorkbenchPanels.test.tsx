@@ -1523,6 +1523,65 @@ describe('LeftPanel', () => {
     expect(file).toBeInstanceOf(frameWindow.File)
     expect(file.name).toBe('Infinity Workflow.json')
   })
+  it('reloads the workflow every time the editor is reopened without a new app-ready message', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
+    const state = panelProject()
+    state.comfy.endpoints = [
+      state.comfy.endpoints[0]!,
+      {
+        ...state.comfy.endpoints[0]!,
+        id: 'endpoint_remote',
+        name: 'Remote ComfyUI',
+        baseUrl: 'http://127.0.0.1:8188',
+        auth: { type: 'token', token: 'selected-workflow-token' },
+        capabilities: { supportedFunctions: ['fn_render'] },
+      },
+    ]
+    state.functions.fn_render.workflow = {
+      ...structuredClone(state.functions.fn_render.workflow),
+      uiJson: { nodes: [{ id: 6, type: 'CLIPTextEncode' }], links: [] },
+    }
+    projectStore.setState({
+      project: state,
+      projectLibrary: { [state.project.id]: state },
+      selectedNodeId: undefined,
+      selectedNodeIds: [],
+    } as unknown as Partial<ReturnType<typeof projectStore.getState>>)
+
+    render(<SettingsPage onClose={() => undefined} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Function Management' }))
+    const dialog = screen.getByRole('dialog', { name: 'Function Management' })
+    fireEvent.change(within(dialog).getByLabelText('Workflow editor ComfyUI server Flux Render'), {
+      target: { value: 'endpoint_remote' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Edit in ComfyUI' }))
+
+    const editorDialog = screen.getByRole('dialog', { name: 'ComfyUI Workflow Editor' })
+    const iframe = within(editorDialog).getByTitle(/^ComfyUI editor\b/) as HTMLIFrameElement
+    const frameWindow = iframe.contentWindow as unknown as { app?: unknown; File: typeof File }
+    const handleFile = vi.fn().mockResolvedValue(undefined)
+    frameWindow.app = {
+      graphToPrompt: vi.fn().mockResolvedValue({ workflow: { nodes: [] }, output: {} }),
+      handleFile,
+      graph: { serialize: () => ({ nodes: [{ id: 6 }] }) },
+    }
+
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        source: iframe.contentWindow,
+        origin: window.location.origin,
+        data: { type: 'infinity-comfy-app-ready' },
+      }),
+    )
+    await waitFor(() => expect(handleFile).toHaveBeenCalledTimes(1), { timeout: 5000 })
+
+    // 用户在 ComfyUI 里叉掉了工作流 tab（iframe 仍然挂载、app 还在），关闭对话框后再次点击 Edit。
+    fireEvent.click(screen.getByRole('button', { name: 'Close ComfyUI Workflow Editor' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Edit in ComfyUI' }))
+
+    await waitFor(() => expect(handleFile).toHaveBeenCalledTimes(2), { timeout: 5000 })
+  })
   it('resets the workflow editor ComfyUI selection when switching functions', () => {
     const state = panelProject()
     state.comfy.endpoints = [

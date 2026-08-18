@@ -1421,7 +1421,7 @@ type ComfyFrameWindow = Window & {
 
 const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
 
-async function waitForComfyEditorApp(resolveWindow: () => ComfyFrameWindow | null, messageSource: unknown) {
+async function waitForComfyEditorApp(resolveWindow: () => ComfyFrameWindow | null, messageSource: unknown, alreadyReady?: () => boolean) {
   let appReadyNotified = false
   const handleMessage = (event: MessageEvent) => {
     if (event.source !== messageSource || event.origin !== window.location.origin) return
@@ -1431,7 +1431,7 @@ async function waitForComfyEditorApp(resolveWindow: () => ComfyFrameWindow | nul
   try {
     for (let attempt = 0; attempt < 120; attempt += 1) {
       const app = resolveWindow()?.app
-      if (app?.graphToPrompt && appReadyNotified) return app
+      if (app?.graphToPrompt && (appReadyNotified || alreadyReady?.())) return app
       await wait(150)
     }
     const app = resolveWindow()?.app
@@ -1442,10 +1442,11 @@ async function waitForComfyEditorApp(resolveWindow: () => ComfyFrameWindow | nul
   }
 }
 
-function waitForComfyFrameApp(frame: HTMLIFrameElement) {
+function waitForComfyFrameApp(frame: HTMLIFrameElement, alreadyReady?: () => boolean) {
   return waitForComfyEditorApp(
     () => frame.contentWindow as ComfyFrameWindow | null,
     frame.contentWindow,
+    alreadyReady,
   )
 }
 
@@ -1503,6 +1504,7 @@ export function ComfyWorkflowEditorDialog({
     undefined,
   )
   const loadedWorkflowRef = useRef<{ generation: number; inputSignature: string } | undefined>(undefined)
+  const appReadyRef = useRef(false)
   const passwordAttemptedRef = useRef(false)
   const [frameKey, setFrameKey] = useState(0)
   const [phase, setPhase] = useState<ComfyEditorPhase>(endpoint ? 'login' : 'error')
@@ -1533,6 +1535,10 @@ export function ComfyWorkflowEditorDialog({
     const handleLoginMessage = (event: MessageEvent) => {
       const frame = frameRef.current
       if (!frame?.contentWindow || event.source !== frame.contentWindow || event.origin !== window.location.origin) return
+      if (event.data?.type === COMFY_PROXY_APP_READY_MESSAGE) {
+        appReadyRef.current = true
+        return
+      }
       if (event.data?.type === COMFY_PROXY_LOGIN_READY_MESSAGE && proxyPassword && !passwordAttemptedRef.current) {
         passwordAttemptedRef.current = true
         setPhase('connecting')
@@ -1554,6 +1560,7 @@ export function ComfyWorkflowEditorDialog({
     generationRef.current += 1
     initializingRef.current = undefined
     loadedWorkflowRef.current = undefined
+    appReadyRef.current = false
     passwordAttemptedRef.current = false
     setFrameReady(false)
     setSaving(false)
@@ -1571,14 +1578,7 @@ export function ComfyWorkflowEditorDialog({
     const frame = frameRef.current
     if (!open || !frame || !endpoint) return
     const generation = generationRef.current
-    if (
-      loadedWorkflowRef.current?.generation === generation &&
-      loadedWorkflowRef.current.inputSignature === inputSignature
-    ) {
-      setFrameReady(true)
-      setPhase('ready')
-      return
-    }
+    // 每次打开都重新注入工作流（用户可能在 ComfyUI 里关掉了工作流 tab），只去重并发中的初始化。
     if (
       initializingRef.current?.generation === generation &&
       initializingRef.current.inputSignature === inputSignature
@@ -1592,7 +1592,7 @@ export function ComfyWorkflowEditorDialog({
       setError(undefined)
       setPhase('connecting')
       setStatus('Loading the saved workflow through the local ComfyUI proxy…')
-      const app = await waitForComfyFrameApp(frame)
+      const app = await waitForComfyFrameApp(frame, () => appReadyRef.current)
       if (generation !== generationRef.current) return
       const frameWindow = frame.contentWindow as ComfyFrameWindow | null
 
@@ -1664,6 +1664,7 @@ export function ComfyWorkflowEditorDialog({
     generationRef.current += 1
     initializingRef.current = undefined
     loadedWorkflowRef.current = undefined
+    appReadyRef.current = false
     passwordAttemptedRef.current = false
     setFrameReady(false)
     setError(undefined)
@@ -1676,6 +1677,7 @@ export function ComfyWorkflowEditorDialog({
     generationRef.current += 1
     initializingRef.current = undefined
     loadedWorkflowRef.current = undefined
+    appReadyRef.current = false
     setFrameReady(false)
     setError(undefined)
 
@@ -1740,7 +1742,7 @@ export function ComfyWorkflowEditorDialog({
     if (!frameRef.current || !endpoint || !frameReady) return
     setSaving(true)
     try {
-      const app = await waitForComfyFrameApp(frameRef.current)
+      const app = await waitForComfyFrameApp(frameRef.current, () => appReadyRef.current)
       const frameWindow = frameRef.current.contentWindow as ComfyFrameWindow | null
       await saveComfyEditorApp(app, frameWindow ?? undefined)
     } catch (cause) {
