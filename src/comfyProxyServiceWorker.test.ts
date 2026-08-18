@@ -32,7 +32,20 @@ afterAll(() => {
 })
 
 describe('ComfyUI proxy service worker endpoint', () => {
-  it('serves the service worker script itself instead of forwarding it to ComfyUI', async () => {
+  it('serves the service worker script at the fixed proxy-root path (scope-safe, no escape chars)', async () => {
+    const response = await fetch(`${baseUrl}/__comfy_proxy/__infinity_sw.js?__infinity_comfy_token=test-token`)
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toContain('text/javascript')
+    const body = await response.text()
+    expect(body).toContain("addEventListener('fetch'")
+    expect(body).toContain('__infinity_comfy_token')
+    // 重定基逻辑：相对 import 逃出 proxyBase 时按所属页面还原
+    expect(body).toContain('encodedBasePattern')
+    expect(body).toContain('clients.get')
+  })
+
+  it('still serves the service worker script at the legacy per-base path instead of forwarding it', async () => {
     // No upstream listens on this port: a forwarded request would fail with 502.
     const target = encodeURIComponent('http://127.0.0.1:59998')
     const response = await fetch(
@@ -41,10 +54,6 @@ describe('ComfyUI proxy service worker endpoint', () => {
 
     expect(response.status).toBe(200)
     expect(response.headers.get('content-type')).toContain('text/javascript')
-    const body = await response.text()
-    expect(body).toContain(`/__comfy_proxy/${target}/`)
-    expect(body).toContain("addEventListener('fetch'")
-    expect(body).toContain('__infinity_comfy_token')
   })
 
   it('injects the app-ready announcement and service worker registration into proxied pages', async () => {

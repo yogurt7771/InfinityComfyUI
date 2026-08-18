@@ -254,18 +254,34 @@ const websocketProxyHeaders = (request, targetUrl, bearerToken) => {
   return headers
 }
 
-const comfyProxyServiceWorkerScript = (proxyBase) => `const proxyBase = ${JSON.stringify(proxyBase)};
+const comfyProxyServiceWorkerScript = () => `const proxyPrefix = ${JSON.stringify(COMFY_PROXY_PREFIX)};
 const proxyTokenParam = ${JSON.stringify(COMFY_PROXY_TOKEN_PARAM)};
 const proxyToken = new URL(self.location.href).searchParams.get(proxyTokenParam) || '';
+const encodedBasePattern = /^https?(:|%3A)/i;
+const selfScriptPath = proxyPrefix + '__infinity_sw.js';
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
-  if (url.pathname.startsWith(proxyBase)) return;
-  const rewritten = new URL(proxyBase + url.pathname.replace(/^\\/+/, '') + url.search, self.location.origin);
-  if (proxyToken && !rewritten.searchParams.has(proxyTokenParam)) rewritten.searchParams.set(proxyTokenParam, proxyToken);
-  event.respondWith(fetch(new Request(rewritten.toString(), event.request)));
+  if (url.pathname === selfScriptPath) return;
+  if (url.pathname.startsWith(proxyPrefix) && encodedBasePattern.test(url.pathname.slice(proxyPrefix.length))) return;
+  event.respondWith((async () => {
+    const client = event.clientId ? await self.clients.get(event.clientId) : undefined;
+    const clientPathname = client?.url ? new URL(client.url).pathname : '';
+    let target = url;
+    if (clientPathname.startsWith(proxyPrefix) && encodedBasePattern.test(clientPathname.slice(proxyPrefix.length))) {
+      const clientRest = clientPathname.slice(proxyPrefix.length);
+      const slashIndex = clientRest.indexOf('/');
+      const clientBase = proxyPrefix + (slashIndex === -1 ? clientRest + '/' : clientRest.slice(0, slashIndex + 1));
+      const relativePath = url.pathname.startsWith(proxyPrefix)
+        ? url.pathname.slice(proxyPrefix.length)
+        : url.pathname.replace(/^\\/+/, '');
+      target = new URL(clientBase + relativePath + url.search, self.location.origin);
+    }
+    if (proxyToken && !target.searchParams.has(proxyTokenParam)) target.searchParams.set(proxyTokenParam, proxyToken);
+    return fetch(new Request(target.toString(), event.request));
+  })());
 });
 `
 
@@ -339,9 +355,10 @@ const comfyProxyBridge = (proxyBase, targetBase, bearerToken) => `<script>
   window.setTimeout(() => window.clearInterval(infinityAppReadyTimer), 120000);
   if ('serviceWorker' in navigator) {
     const infinitySwToken = proxyAuthParams.get(proxyTokenParam) || '';
+    const infinitySwPath = ${JSON.stringify(COMFY_PROXY_PREFIX)} + '__infinity_sw.js';
     const infinitySwUrl =
-      proxyBase + '__infinity_sw.js' + (infinitySwToken ? '?' + proxyTokenParam + '=' + encodeURIComponent(infinitySwToken) : '');
-    navigator.serviceWorker.register(infinitySwUrl, { scope: proxyBase }).catch(() => {});
+      infinitySwPath + (infinitySwToken ? '?' + proxyTokenParam + '=' + encodeURIComponent(infinitySwToken) : '');
+    navigator.serviceWorker.register(infinitySwUrl, { scope: ${JSON.stringify(COMFY_PROXY_PREFIX)} }).catch(() => {});
     if (!navigator.serviceWorker.controller) {
       const infinitySwReloadKey = 'infinity-comfy-sw:' + proxyBase;
       navigator.serviceWorker.addEventListener('controllerchange', () => {
@@ -529,6 +546,13 @@ const setComfyProxyResponseHeaders = (response, headers, proxyBase, targetBase, 
 }
 
 const serveComfyProxy = async (request, response, requestUrl) => {
+  if (requestUrl.pathname === `${COMFY_PROXY_PREFIX}__infinity_sw.js`) {
+    response.statusCode = 200
+    response.setHeader('content-type', 'text/javascript; charset=utf-8')
+    response.setHeader('cache-control', 'no-store')
+    response.end(comfyProxyServiceWorkerScript())
+    return
+  }
   const parts = comfyProxyRequestParts(requestUrl.pathname + requestUrl.search)
   if (!parts) {
     response.statusCode = 404
@@ -537,10 +561,11 @@ const serveComfyProxy = async (request, response, requestUrl) => {
   }
   const { targetPath, targetBase, proxyBase } = parts
   if (targetPath === '/__infinity_sw.js') {
+    // 兼容旧路径（scope 含转义字符无法注册，仅为向后兼容保留输出）。
     response.statusCode = 200
     response.setHeader('content-type', 'text/javascript; charset=utf-8')
     response.setHeader('cache-control', 'no-store')
-    response.end(comfyProxyServiceWorkerScript(proxyBase))
+    response.end(comfyProxyServiceWorkerScript())
     return
   }
   const targetUrl = new URL(targetPath, `${targetBase}/`)
