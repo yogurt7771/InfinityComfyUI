@@ -2,11 +2,12 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   exportApiWorkflowFromComfyEditor,
   exportUiWorkflowFromComfyEditor,
+  loadUiWorkflowIntoComfyEditor,
   openApiWorkflowJsonFileInComfyEditor,
   openWorkflowJsonFileInComfyEditor,
   restoreApiWorkflowLinks,
 } from './comfyEditorBridge'
-import type { ComfyWorkflow } from './types'
+import type { ComfyUiWorkflow, ComfyWorkflow } from './types'
 
 describe('ComfyUI editor bridge', () => {
   it('exports UI workflow through the same graphToPrompt workflow payload as ComfyUI Export', async () => {
@@ -170,5 +171,102 @@ describe('ComfyUI editor bridge', () => {
 
     expect(app.handleFile).toHaveBeenCalledTimes(1)
     expect(source.connect).toHaveBeenCalledWith(0, target, 0)
+  })
+})
+
+describe('loadUiWorkflowIntoComfyEditor', () => {
+  const uiWorkflow = { nodes: [{ id: 1, type: 'KSampler' }] } as ComfyUiWorkflow
+
+  const healthyGraph = () => ({
+    _nodes: [{ type: 'KSampler' }],
+    serialize: () => ({ nodes: [{ id: 1, type: 'KSampler' }] }),
+  })
+
+  it('waits for node definitions before opening the workflow file', async () => {
+    vi.useFakeTimers()
+    try {
+      const registry: Record<string, unknown> = {}
+      const frameWindow = { File, LiteGraph: { registered_node_types: registry } }
+      const app = { handleFile: vi.fn().mockResolvedValue(undefined), graph: healthyGraph() }
+      setTimeout(() => {
+        registry.KSampler = {}
+      }, 1500)
+
+      const promise = loadUiWorkflowIntoComfyEditor(app, frameWindow, uiWorkflow)
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(app.handleFile).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1000)
+      await expect(promise).resolves.toEqual({ missingNodeTypes: [] })
+      expect(app.handleFile).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('re-injects while loaded nodes have unregistered types, then stops once healthy', async () => {
+    vi.useFakeTimers()
+    try {
+      const frameWindow = { File, LiteGraph: { registered_node_types: { KSampler: {} } } }
+      const brokenGraph = {
+        _nodes: [{ type: 'MissingPack.Node' }],
+        serialize: () => ({ nodes: [{ id: 1 }] }),
+      }
+      const fixedGraph = healthyGraph()
+      let injections = 0
+      const app = {
+        handleFile: vi.fn(async () => {
+          injections += 1
+          app.graph = injections === 1 ? brokenGraph : fixedGraph
+        }),
+        graph: brokenGraph as { _nodes: { type: string }[]; serialize: () => { nodes: unknown[] } },
+      }
+
+      const promise = loadUiWorkflowIntoComfyEditor(app, frameWindow, uiWorkflow)
+      await vi.advanceTimersByTimeAsync(1500)
+      await expect(promise).resolves.toEqual({ missingNodeTypes: [] })
+      expect(app.handleFile).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('returns missing node types after bounded retries instead of looping forever', async () => {
+    vi.useFakeTimers()
+    try {
+      const frameWindow = { File, LiteGraph: { registered_node_types: { KSampler: {} } } }
+      const app = {
+        handleFile: vi.fn().mockResolvedValue(undefined),
+        graph: {
+          _nodes: [{ type: 'MissingPack.Node' }],
+          serialize: () => ({ nodes: [{ id: 1 }] }),
+        },
+      }
+
+      const promise = loadUiWorkflowIntoComfyEditor(app, frameWindow, uiWorkflow)
+      await vi.advanceTimersByTimeAsync(30000)
+      await expect(promise).resolves.toEqual({ missingNodeTypes: ['MissingPack.Node'] })
+      expect(app.handleFile).toHaveBeenCalledTimes(6)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('throws when ComfyUI does not keep the loaded workflow', async () => {
+    vi.useFakeTimers()
+    try {
+      const frameWindow = { File, LiteGraph: { registered_node_types: { KSampler: {} } } }
+      const app = {
+        handleFile: vi.fn().mockResolvedValue(undefined),
+        graph: { _nodes: [], serialize: () => ({ nodes: [] }) },
+      }
+
+      const promise = loadUiWorkflowIntoComfyEditor(app, frameWindow, uiWorkflow)
+      const assertion = expect(promise).rejects.toThrow('did not keep it')
+      await vi.advanceTimersByTimeAsync(30000)
+      await assertion
+      expect(app.handleFile).toHaveBeenCalledTimes(6)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

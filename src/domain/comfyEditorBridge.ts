@@ -5,6 +5,7 @@ export type ComfyEditorGraph = {
   _nodes?: unknown[]
   _nodes_by_id?: Record<string, unknown>
   change?: () => void
+  serialize?: () => unknown
 }
 
 export type ComfyEditorAppLike = {
@@ -149,6 +150,77 @@ export async function openApiWorkflowJsonFileInComfyEditor(
 ) {
   await openWorkflowJsonFileInComfyEditor(app, workflow, filename, fileWindow)
   restoreApiWorkflowLinks(app, workflow)
+}
+
+export type ComfyEditorLiteGraphWindow = {
+  LiteGraph?: { registered_node_types?: Record<string, unknown> }
+}
+
+const uiWorkflowNodeCount = (workflow: ComfyUiWorkflow) => {
+  const nodes = (workflow as { nodes?: unknown[] }).nodes
+  return Array.isArray(nodes) ? nodes.length : undefined
+}
+
+const serializedGraphNodeCount = (graph?: ComfyEditorGraph) => {
+  const serialized = graph?.serialize?.() as { nodes?: unknown[] } | undefined
+  return Array.isArray(serialized?.nodes) ? serialized.nodes.length : undefined
+}
+
+// 加载后仍不在注册表里的图节点类型 = ComfyUI 里显示为红色的未知节点
+//（通常是 /api/object_info 尚未就绪或加载失败——该接口可能有大几十 MB、需要十几秒）。
+const unregisteredGraphNodeTypes = (
+  frameWindow: ComfyEditorLiteGraphWindow | null | undefined,
+  graph?: ComfyEditorGraph,
+) => {
+  const registry = frameWindow?.LiteGraph?.registered_node_types
+  if (!registry) return [] as string[]
+  const nodes = graph?._nodes
+  if (!Array.isArray(nodes)) return [] as string[]
+  const missing = new Set<string>()
+  for (const node of nodes) {
+    const type = (node as { type?: unknown } | undefined)?.type
+    if (typeof type === 'string' && type.length > 0 && !(type in registry)) missing.add(type)
+  }
+  return [...missing]
+}
+
+export type ComfyUiWorkflowLoadResult = { missingNodeTypes: string[] }
+
+const editorBridgeWait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
+export async function loadUiWorkflowIntoComfyEditor(
+  app: Pick<ComfyEditorAppLike, 'handleFile'> & {
+    graph?: ComfyEditorGraph
+    rootGraph?: ComfyEditorGraph
+    rootGraphInternal?: ComfyEditorGraph
+  },
+  frameWindow: (ComfyEditorLiteGraphWindow & { File: typeof File }) | null | undefined,
+  workflow: ComfyUiWorkflow,
+): Promise<ComfyUiWorkflowLoadResult> {
+  const expectedNodeCount = uiWorkflowNodeCount(workflow)
+  // 先等 node defs（object_info）就绪，避免注入出一整片未注册的红节点；
+  // 拿不到 LiteGraph 全局时无法判断，保持直接注入。
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const registry = frameWindow?.LiteGraph?.registered_node_types
+    if (!registry || Object.keys(registry).length > 0) break
+    await editorBridgeWait(500)
+  }
+  const retryDelays = [1000, 2000, 3000, 5000, 5000]
+  for (let attempt = 0; ; attempt += 1) {
+    await openWorkflowJsonFileInComfyEditor(app, workflow, 'Infinity Workflow.json', frameWindow ?? undefined)
+    const graph = app.graph ?? app.rootGraph ?? app.rootGraphInternal
+    const missingNodeTypes = unregisteredGraphNodeTypes(frameWindow, graph)
+    const countMatches = expectedNodeCount === undefined || serializedGraphNodeCount(graph) === expectedNodeCount
+    if (countMatches && missingNodeTypes.length === 0) return { missingNodeTypes: [] }
+    if (attempt >= retryDelays.length) {
+      if (!countMatches) {
+        throw new Error('ComfyUI loaded the workflow but did not keep it. Retry once the editor has finished restoring.')
+      }
+      // 节点数量对但类型未注册：图已载入（红节点可见），把缺失类型交给调用方提示。
+      return { missingNodeTypes }
+    }
+    await editorBridgeWait(retryDelays[attempt]!)
+  }
 }
 
 type ComfyEditorNode = {

@@ -56,8 +56,8 @@ import {
   exportApiWorkflowFromComfyEditor,
   exportUiWorkflowFromComfyEditor,
   loadApiWorkflowIntoComfyEditor,
+  loadUiWorkflowIntoComfyEditor,
   openApiWorkflowJsonFileInComfyEditor,
-  openWorkflowJsonFileInComfyEditor,
 } from '../domain/comfyEditorBridge'
 import type {
   ComfyEndpointConfig,
@@ -1361,7 +1361,7 @@ export const openComfyEditorInBrowser = (endpoint: ComfyEndpointConfig, workflow
       void (async () => {
         try {
           const app = await waitForComfyPopupApp(popup)
-          await openWorkflowJsonFileInComfyEditor(app, workflow, 'Infinity Workflow.json', popup as unknown as ComfyFrameWindow)
+          await loadUiWorkflowIntoComfyEditor(app, popup as unknown as ComfyFrameWindow, workflow)
         } catch {
           // The separate window may be closed or still loading; the embedded editor remains the source of truth.
         }
@@ -1402,6 +1402,7 @@ type ComfyFrameWindow = Window & {
   File: typeof File
   Request?: typeof Request
   Response: typeof Response
+  LiteGraph?: { registered_node_types?: Record<string, unknown> }
   app?: {
     graphToPrompt?: (
       graph?: ComfyFrameGraph,
@@ -1429,7 +1430,9 @@ async function waitForComfyEditorApp(resolveWindow: () => ComfyFrameWindow | nul
   }
   window.addEventListener('message', handleMessage)
   try {
-    for (let attempt = 0; attempt < 120; attempt += 1) {
+    // 重型 ComfyUI（几十个扩展 + 几十 MB 的 object_info）冷启动可能超过 60 秒，
+    // 与代理注入脚本的 120 秒就绪通告窗口对齐。
+    for (let attempt = 0; attempt < 800; attempt += 1) {
       const app = resolveWindow()?.app
       if (app?.graphToPrompt && (appReadyNotified || alreadyReady?.())) return app
       await wait(150)
@@ -1455,32 +1458,6 @@ function waitForComfyPopupApp(popup: Window) {
     () => (popup.closed ? null : (popup as unknown as ComfyFrameWindow)),
     popup,
   )
-}
-
-const uiWorkflowNodeCount = (workflow: ComfyUiWorkflow) => {
-  const nodes = (workflow as { nodes?: unknown[] }).nodes
-  return Array.isArray(nodes) ? nodes.length : undefined
-}
-
-const serializedGraphNodeCount = (graph?: ComfyFrameGraph) => {
-  const serialized = graph?.serialize?.() as { nodes?: unknown[] } | undefined
-  return Array.isArray(serialized?.nodes) ? serialized.nodes.length : undefined
-}
-
-async function loadUiWorkflowIntoComfyEditor(
-  app: NonNullable<ComfyFrameWindow['app']>,
-  frameWindow: ComfyFrameWindow | null,
-  workflow: ComfyUiWorkflow,
-) {
-  const expectedNodeCount = uiWorkflowNodeCount(workflow)
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    await openWorkflowJsonFileInComfyEditor(app, workflow, 'Infinity Workflow.json', frameWindow ?? undefined)
-    if (expectedNodeCount === undefined) return
-    const actualNodeCount = serializedGraphNodeCount(app.graph ?? app.rootGraph ?? app.rootGraphInternal)
-    if (actualNodeCount === expectedNodeCount) return
-    if (attempt === 0) await wait(1000)
-  }
-  throw new Error('ComfyUI loaded the workflow but did not keep it. Retry once the editor has finished restoring.')
 }
 
 export function ComfyWorkflowEditorDialog({
@@ -1597,9 +1574,13 @@ export function ComfyWorkflowEditorDialog({
       const frameWindow = frame.contentWindow as ComfyFrameWindow | null
 
       if (initialUiJson && app.handleFile) {
-        await loadUiWorkflowIntoComfyEditor(app, frameWindow, initialUiJson)
+        const loadResult = await loadUiWorkflowIntoComfyEditor(app, frameWindow, initialUiJson)
         if (generation !== generationRef.current) return
-        setStatus('Editable workflow loaded from the saved function.')
+        setStatus(
+          loadResult.missingNodeTypes.length > 0
+            ? `Workflow loaded, but ${loadResult.missingNodeTypes.length} node type(s) are not registered on this server (${loadResult.missingNodeTypes.slice(0, 3).join(', ')}${loadResult.missingNodeTypes.length > 3 ? ', …' : ''}). If ComfyUI is still starting, press Retry in a moment.`
+            : 'Editable workflow loaded from the saved function.',
+        )
       } else if (initialUiJson && app.loadGraphData) {
         await app.loadGraphData(initialUiJson)
         if (generation !== generationRef.current) return
