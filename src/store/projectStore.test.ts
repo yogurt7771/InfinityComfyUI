@@ -4924,7 +4924,7 @@ describe('project store actions', () => {
 
       expect(uploadImage).toHaveBeenCalledWith(expect.any(File), {
         subfolder: 'infinity-comfyui',
-        overwrite: true,
+        overwrite: false,
       })
       expect(queuedWorkflows[0]).toMatchObject({
         '76': { inputs: { image: 'infinity-comfyui/reference.png' } },

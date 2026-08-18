@@ -17,6 +17,7 @@ const task = (overrides: Partial<ExecutionTask>): ExecutionTask => ({
   seedPatchLog: [],
   endpointId: overrides.endpointId,
   comfyPromptId: overrides.comfyPromptId,
+  batchId: overrides.batchId,
   outputRefs: overrides.outputRefs ?? {},
   error: overrides.error,
   createdAt: overrides.createdAt ?? '2026-05-08T09:00:00.000Z',
@@ -148,6 +149,17 @@ describe('getProjectRunHistory', () => {
     )
 
     expect(history.map((item) => item.taskId)).toEqual(['task_new', 'task_middle', 'task_old'])
+  })
+
+  it('excludes batch run tasks from the project run history', () => {
+    const history = getProjectRunHistory(
+      project({
+        task_normal: task({ id: 'task_normal', createdAt: '2026-05-08T09:00:00.000Z' }),
+        task_batch: task({ id: 'task_batch', batchId: 'batch_1', createdAt: '2026-05-08T09:02:00.000Z' }),
+      }),
+    )
+
+    expect(history.map((item) => item.taskId)).toEqual(['task_normal'])
   })
 })
 

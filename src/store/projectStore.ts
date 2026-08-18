@@ -62,7 +62,7 @@ import { selectEndpoint } from '../domain/scheduler'
 import { createGenerationFunctionFromWorkflow, injectWorkflowInputs, workflowPrimitiveInputValue } from '../domain/workflow'
 import { isBuiltInFunction, withoutBuiltInProjectFunctions } from '../domain/builtInFunctions'
 import { normalizeTextDisplayMode } from '../domain/textDisplay'
-import type { MediaResourcePayload, MediaResourceKind } from '../domain/resourceFiles'
+import { readFileAsDataUrl, type MediaResourcePayload, type MediaResourceKind } from '../domain/resourceFiles'
 import type {
   CanvasEdge,
   CanvasNode,
@@ -91,9 +91,13 @@ import type {
   ProjectState,
   RequestFunctionConfig,
   AssetRecord,
+  BatchRun,
+  BatchRunItem,
+  BatchSeedMode,
   Resource,
   ResourceRef,
   ResourceType,
+  SeedPatchRecord,
   TextDisplayMode,
 } from '../domain/types'
 
@@ -132,6 +136,8 @@ type QueuedComfyResultRun = {
   inputValues: ResolvedRuntimeInputValues
   compiledWorkflowSnapshot?: ComfyWorkflow
   seedPatchLog?: ExecutionTask['seedPatchLog']
+  batchId?: string
+  fixedSeedPatch?: SeedPatchRecord[]
   runIndex: number
   runTotal: number
   createdAt: string
@@ -241,6 +247,14 @@ type ProjectStoreDeps = {
 
 type ImportableConfig = Pick<ConfigPackage, 'config'>
 type ImportableProject = Pick<FullProjectPackage, 'project'>
+export type BatchRunGroup = {
+  stem: string
+  files: Record<string, File>
+}
+export type BatchRunConfig = {
+  groups: BatchRunGroup[]
+  seedMode: BatchSeedMode
+}
 type ProjectCreateOptions = {
   name?: string
   description?: string
@@ -346,6 +360,11 @@ export type ProjectStoreState = {
   ) => Promise<void>
   rerunResultNode: (nodeId: string) => Promise<void>
   cancelResultRun: (nodeId: string) => void
+  startBatchRunFromResult: (sourceTaskId: string, config: BatchRunConfig) => Promise<string | undefined>
+  cancelBatchRun: (batchId: string) => void
+  retryBatchItem: (batchId: string, taskId: string) => Promise<void>
+  retryFailedBatchItems: (batchId: string) => Promise<void>
+  revealBatchItemOnCanvas: (batchId: string, taskId: string) => void
   undoLastProjectChange: () => void
   redoProjectChange: () => void
   connectNodes: (sourceNodeId: string, targetNodeId: string, options?: ConnectNodesOptions) => void
@@ -664,6 +683,7 @@ const initialProject = (now: string, options: ProjectCreateOptions & { id?: stri
       ...Object.fromEntries(localFunctions.map((fn) => [fn.id, fn])),
     },
     tasks: {},
+    batches: {},
     history: emptyProjectHistory(),
     templates: {},
     comfy: {
@@ -723,6 +743,7 @@ const withBuiltInFunctions = (project: ProjectState, now: string): ProjectState 
     ...project,
     history: project.history ?? emptyProjectHistory(),
     templates: project.templates ?? {},
+    batches: project.batches ?? {},
     functions: {
       ...project.functions,
       ...builtIns,
@@ -1586,6 +1607,19 @@ const persistedComfyFile = async (
   }
 }
 
+const contentHashedUploadFilename = async (filename: string, blob: Blob) => {
+  const dotIndex = filename.lastIndexOf('.')
+  const base = dotIndex > 0 ? filename.slice(0, dotIndex) : filename
+  const extension = dotIndex > 0 ? filename.slice(dotIndex) : ''
+  try {
+    const digest = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer())
+    const hash = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('').slice(0, 8)
+    return `${base}-${hash}${extension}`
+  } catch {
+    return filename
+  }
+}
+
 const prepareComfyInputValues = async (
   client: RuntimeComfyClient,
   inputs: FunctionInputDef[],
@@ -1596,21 +1630,23 @@ const prepareComfyInputValues = async (
   const prepared: RuntimeInputValues = { ...inputValues }
 
   for (const input of inputs) {
-    if (input.type !== 'image' || input.upload?.strategy !== 'comfy_upload') continue
+    if (input.type !== 'image' && input.type !== 'video' && input.type !== 'audio') continue
+    if (input.upload?.strategy !== 'comfy_upload') continue
     const value = prepared[input.key]
     if (!value || !isResourceRef(value)) continue
 
-    if (!client.uploadImage) throw new Error('ComfyUI image upload is not available')
+    if (!client.uploadImage) throw new Error('ComfyUI file upload is not available')
     const resource = resources[value.resourceId]
     if (!resource) throw new Error(`Resource not found: ${value.resourceId}`)
     const url = resourceUrl(resource)
-    if (!url) throw new Error(`Image resource is missing a URL: ${value.resourceId}`)
+    if (!url) throw new Error(`Media resource is missing a URL: ${value.resourceId}`)
 
     const blob = await loadResourceBlob(resource)
-    const file = new File([blob], resourceFilename(resource), { type: blob.type || resourceMimeType(resource) })
+    const uploadFilename = await contentHashedUploadFilename(resourceFilename(resource), blob)
+    const file = new File([blob], uploadFilename, { type: blob.type || resourceMimeType(resource) })
     const uploaded = await client.uploadImage(file, {
       subfolder: input.upload.targetSubfolder,
-      overwrite: true,
+      overwrite: false,
     })
 
     prepared[input.key] = uploadedImageValue(uploaded)
@@ -1733,6 +1769,32 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
     }
 
     const taskWasCanceled = (taskId: string) => get().project.tasks[taskId]?.status === 'canceled'
+
+    const syncBatchItemFromTask = (taskId: string) => {
+      const current = get()
+      const task = current.project.tasks[taskId]
+      const batchId = task?.batchId
+      if (!task || !batchId) return
+      const batch = current.project.batches?.[batchId]
+      if (!batch) return
+      const item = batch.items.find((entry) => entry.taskId === taskId)
+      if (!item) return
+      const nextError = task.error?.message
+      if (item.status === task.status && item.error === nextError) return
+
+      const items = batch.items.map((entry) =>
+        entry.taskId === taskId ? { ...entry, status: task.status, error: nextError } : entry,
+      )
+      const allTerminal = items.every((entry) => !activeTaskStatuses.has(entry.status))
+      const status: BatchRun['status'] =
+        batch.status === 'canceled' ? 'canceled' : allTerminal ? 'completed' : 'running'
+      set((state) => ({
+        project: {
+          ...state.project,
+          batches: { ...state.project.batches, [batchId]: { ...batch, items, status } },
+        },
+      }))
+    }
 
     const resourceIdsForResultNode = (node: CanvasNode, taskId?: string) => {
       const explicitIds = Array.isArray(node.data.resources)
@@ -1903,6 +1965,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           },
         }
       })
+      syncBatchItemFromTask(taskId)
       void resolvePendingDependencyTasks()
     }
 
@@ -2300,6 +2363,8 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         },
       }))
 
+      syncBatchItemFromTask(item.taskId)
+
       try {
         if (taskWasCanceled(item.taskId)) return
         const client = runtime.createComfyClient(endpoint)
@@ -2329,6 +2394,19 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           })
           workflowForRun = randomized.workflow
           seedPatchLog = randomized.patchLog
+          if (item.fixedSeedPatch && item.fixedSeedPatch.length > 0) {
+            const fixedSeedByPath = new Map(item.fixedSeedPatch.map((patch) => [patch.path, patch.newValue]))
+            seedPatchLog = seedPatchLog.map((entry) => {
+              const fixedSeed = fixedSeedByPath.get(entry.path)
+              if (fixedSeed === undefined) return entry
+              const inputKey = entry.path.slice(`${entry.nodeId}.inputs.`.length)
+              const workflowNode = workflowForRun[entry.nodeId]
+              if (workflowNode?.inputs && inputKey in workflowNode.inputs) {
+                workflowNode.inputs[inputKey] = fixedSeed
+              }
+              return { ...entry, newValue: fixedSeed }
+            })
+          }
         }
 
         set((current) => ({
@@ -2447,12 +2525,14 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
         if (taskWasCanceled(item.taskId)) return
         const completedAt = runtime.now()
-        const outputResourceNodes = outputResourceNodesForRefs(
-          resourceRefs,
-          { ...get().project.resources, ...newResources },
-          item.resultNodeId,
-          get().project.canvas.nodes,
-        )
+        const outputResourceNodes = item.batchId
+          ? []
+          : outputResourceNodesForRefs(
+              resourceRefs,
+              { ...get().project.resources, ...newResources },
+              item.resultNodeId,
+              get().project.canvas.nodes,
+            )
         set((current) => ({
           project: {
             ...current.project,
@@ -2491,6 +2571,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
           },
         }))
+        syncBatchItemFromTask(item.taskId)
         void resolvePendingDependencyTasks()
       } catch (err) {
         if (taskWasCanceled(item.taskId)) return
@@ -2537,6 +2618,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
           },
         }))
+        syncBatchItemFromTask(item.taskId)
         void resolvePendingDependencyTasks()
       } finally {
         item.resolveCompletion()
@@ -7982,7 +8064,300 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           },
         },
       }))
+      syncBatchItemFromTask(taskId)
       void resolvePendingDependencyTasks()
+    },
+
+    startBatchRunFromResult: async (sourceTaskId, config) => {
+      const state = get()
+      const sourceTask = state.project.tasks[sourceTaskId]
+      if (!sourceTask) throw new Error(`Source task not found: ${sourceTaskId}`)
+      const templateFunction = functionDefinitionForTask(sourceTask)
+      if (!templateFunction) throw new Error('Function definition is missing for the source task')
+      if (templateFunction.workflow.format !== 'comfyui_api_json') {
+        throw new Error('Batch run only supports ComfyUI workflow functions')
+      }
+
+      const groups = config.groups.filter((group) => Object.keys(group.files).length > 0)
+      if (groups.length === 0) throw new Error('Batch run needs at least one complete file group')
+      const seedMode: BatchSeedMode = config.seedMode === 'fixed' ? 'fixed' : 'random'
+
+      const bindingKeys = templateFunction.inputs
+        .map((input) => input.key)
+        .filter((key) => groups.some((group) => group.files[key]))
+      if (bindingKeys.length === 0) throw new Error('Batch run files do not match any batchable input')
+      const bindings: BatchRun['bindings'] = []
+      for (const key of bindingKeys) {
+        const input = templateFunction.inputs.find((item) => item.key === key)!
+        if (input.type === 'text') {
+          bindings.push({ inputKey: key, kind: 'text' })
+        } else if (input.type === 'image' || input.type === 'video' || input.type === 'audio') {
+          bindings.push({ inputKey: key, kind: 'file' })
+        } else {
+          throw new Error(`Input "${input.label}" (${input.type}) does not support batch run`)
+        }
+      }
+
+      const now = runtime.now()
+      const batchId = runtime.idFactory()
+      const fileInputKeys = new Set(bindings.filter((binding) => binding.kind === 'file').map((binding) => binding.inputKey))
+      const batchFunction: GenerationFunction = {
+        ...templateFunction,
+        inputs: templateFunction.inputs.map((input) =>
+          fileInputKeys.has(input.key)
+            ? { ...input, upload: { strategy: 'comfy_upload', targetSubfolder: 'infinity-comfyui' } }
+            : input,
+        ),
+      }
+      const fixedSeedPatch =
+        seedMode === 'fixed'
+          ? randomizeWorkflowSeeds(templateFunction.workflow.rawJson, {
+              now: runtime.now,
+              randomInt: runtime.randomInt,
+            }).patchLog
+          : undefined
+
+      const templateInputValues = inputValuesFromTaskSnapshot(sourceTask)
+      const sourceResultNode = taskResultNode(state.project, sourceTaskId)
+      const functionNode = state.project.canvas.nodes.find(
+        (node) => node.id === sourceTask.functionNodeId && node.type === 'function',
+      )
+      const newResources: Record<string, Resource> = {}
+      const newAssets: ProjectState['assets'] = {}
+      const queuedTasks: Record<string, ExecutionTask> = {}
+      const queuedNodes: CanvasNode[] = []
+      const queuedRuns: QueuedComfyRun[] = []
+      const items: BatchRunItem[] = []
+      const runRange = functionRunRange(state.project, sourceTask.functionNodeId, groups.length)
+
+      for (let index = 0; index < groups.length; index += 1) {
+        const group = groups[index]!
+        const runIndex = runRange.start + index
+        const taskId = runtime.idFactory()
+        const resultNodeId = runtime.idFactory()
+        const inputValues: RuntimeInputValues = structuredClone(templateInputValues)
+        const files: Record<string, string> = {}
+
+        for (const binding of bindings) {
+          const file = group.files[binding.inputKey]
+          if (!file) throw new Error(`Group "${group.stem}" is missing a file for input "${binding.inputKey}"`)
+          files[binding.inputKey] = file.name
+          if (binding.kind === 'text') {
+            inputValues[binding.inputKey] = await file.text()
+            continue
+          }
+          const input = batchFunction.inputs.find((item) => item.key === binding.inputKey)!
+          const assetId = runtime.idFactory()
+          const resourceId = runtime.idFactory()
+          const dataUrl = await readFileAsDataUrl(file)
+          const media: MediaResourcePayload = {
+            url: dataUrl,
+            filename: file.name,
+            mimeType: file.type || `${input.type}/*`,
+            sizeBytes: file.size,
+          }
+          newAssets[assetId] = {
+            id: assetId,
+            name: file.name,
+            mimeType: media.mimeType,
+            sizeBytes: media.sizeBytes,
+            blobUrl: dataUrl,
+            createdAt: now,
+          }
+          newResources[resourceId] = {
+            id: resourceId,
+            type: input.type,
+            name: file.name,
+            value: mediaValueWithAsset(assetId, media),
+            source: { kind: 'user_upload' },
+            metadata: { createdAt: now },
+          }
+          inputValues[binding.inputKey] = { resourceId, type: input.type }
+        }
+
+        const mergedResources = { ...state.project.resources, ...newResources }
+        const task: ExecutionTask = {
+          id: taskId,
+          functionNodeId: sourceTask.functionNodeId,
+          functionId: sourceTask.functionId,
+          runIndex,
+          runTotal: runRange.total,
+          status: 'queued',
+          inputRefs: inputResourceRefs(inputValues),
+          inputSnapshot: resourceInputSnapshot(inputValues, mergedResources),
+          inputValuesSnapshot: executionInputSnapshot(batchFunction, inputValues, mergedResources),
+          paramsSnapshot: { runCount: groups.length, mode: 'comfy', batch: true },
+          functionSnapshot: batchFunction,
+          workflowTemplateSnapshot: batchFunction.workflow.rawJson,
+          compiledWorkflowSnapshot: {},
+          seedPatchLog: [],
+          batchId,
+          outputRefs: {},
+          createdAt: now,
+          updatedAt: now,
+        }
+        const fallbackPosition = {
+          x: (sourceResultNode?.position.x ?? 0) + index * 40,
+          y: (sourceResultNode?.position.y ?? 0) + index * 40,
+        }
+        const resultNode: CanvasNode = {
+          id: resultNodeId,
+          type: 'result_group',
+          position: functionNode
+            ? nextResultNodePosition([...state.project.canvas.nodes, ...queuedNodes], functionNode, batchFunction)
+            : fallbackPosition,
+          data: {
+            sourceFunctionNodeId: sourceTask.functionNodeId,
+            functionId: sourceTask.functionId,
+            taskId,
+            runIndex,
+            runTotal: runRange.total,
+            title: `批量 ${group.stem}`,
+            resources: [],
+            status: 'queued',
+            seedPatchLog: [],
+            createdAt: now,
+            batchId,
+            batchHidden: true,
+            batchStem: group.stem,
+          },
+        }
+
+        queuedTasks[taskId] = task
+        queuedNodes.push(resultNode)
+        items.push({ taskId, stem: group.stem, files, status: 'queued' })
+
+        let resolveCompletion: () => void = () => undefined
+        const completion = new Promise<void>((resolve) => {
+          resolveCompletion = resolve
+        })
+        queuedRuns.push({
+          taskId,
+          resultNodeId,
+          functionNodeId: sourceTask.functionNodeId,
+          functionId: sourceTask.functionId,
+          functionDef: batchFunction,
+          inputValues: asResolvedInputValues(inputValues),
+          batchId,
+          fixedSeedPatch,
+          runIndex,
+          runTotal: runRange.total,
+          createdAt: now,
+          completion,
+          resolveCompletion,
+        })
+      }
+
+      const batch: BatchRun = {
+        id: batchId,
+        sourceTaskId,
+        bindings,
+        seedMode,
+        status: 'running',
+        items,
+        createdAt: Date.now(),
+      }
+
+      set((current) => ({
+        project: {
+          ...current.project,
+          project: { ...current.project.project, updatedAt: now },
+          resources: { ...current.project.resources, ...newResources },
+          assets: { ...current.project.assets, ...newAssets },
+          tasks: { ...tasksWithRunTotal(current.project.tasks, sourceTask.functionNodeId, runRange.total), ...queuedTasks },
+          batches: { ...current.project.batches, [batchId]: batch },
+          canvas: {
+            ...current.project.canvas,
+            nodes: [...nodesWithRunTotal(current.project.canvas.nodes, sourceTask.functionNodeId, runRange.total), ...queuedNodes],
+          },
+        },
+      }))
+
+      comfyQueue.push(...queuedRuns)
+      ensureComfyWorkers()
+      return batchId
+    },
+
+    cancelBatchRun: (batchId) => {
+      const batch = get().project.batches?.[batchId]
+      if (!batch || batch.status !== 'running') return
+
+      set((current) => ({
+        project: {
+          ...current.project,
+          batches: { ...current.project.batches, [batchId]: { ...batch, status: 'canceled' } },
+        },
+      }))
+      for (const item of batch.items) {
+        const task = get().project.tasks[item.taskId]
+        if (!task || !activeTaskStatuses.has(task.status)) continue
+        const resultNode = taskResultNode(get().project, item.taskId)
+        if (resultNode) get().cancelResultRun(resultNode.id)
+      }
+    },
+
+    retryBatchItem: async (batchId, taskId) => {
+      const batch = get().project.batches?.[batchId]
+      const task = get().project.tasks[taskId]
+      if (!batch || !task || task.batchId !== batchId) return
+      if (activeTaskStatuses.has(task.status)) return
+      const resultNode = taskResultNode(get().project, taskId)
+      if (!resultNode) return
+
+      set((current) => {
+        const currentBatch = current.project.batches?.[batchId]
+        if (!currentBatch) return current
+        return {
+          project: {
+            ...current.project,
+            batches: {
+              ...current.project.batches,
+              [batchId]: {
+                ...currentBatch,
+                status: 'running',
+                items: currentBatch.items.map((item) =>
+                  item.taskId === taskId ? { ...item, status: 'queued' as const, error: undefined } : item,
+                ),
+              },
+            },
+          },
+        }
+      })
+      await get().rerunResultNode(resultNode.id)
+    },
+
+    retryFailedBatchItems: async (batchId) => {
+      const batch = get().project.batches?.[batchId]
+      if (!batch) return
+      for (const item of batch.items) {
+        const task = get().project.tasks[item.taskId]
+        if (!task || (task.status !== 'failed' && task.status !== 'canceled')) continue
+        await get().retryBatchItem(batchId, item.taskId)
+      }
+    },
+
+    revealBatchItemOnCanvas: (batchId, taskId) => {
+      const state = get()
+      const task = state.project.tasks[taskId]
+      if (!task || task.batchId !== batchId) return
+      const resultNode = taskResultNode(state.project, taskId)
+      if (!resultNode) return
+      const refs = Object.values(task.outputRefs ?? {}).flat()
+      if (refs.length === 0) return
+      const nodesToAdd = outputResourceNodesForRefs(refs, state.project.resources, resultNode.id, state.project.canvas.nodes)
+      if (nodesToAdd.length === 0) return
+
+      const now = runtime.now()
+      set((current) => ({
+        project: {
+          ...current.project,
+          project: { ...current.project.project, updatedAt: now },
+          canvas: {
+            ...current.project.canvas,
+            nodes: [...current.project.canvas.nodes, ...nodesToAdd.map((node) => markNewCanvasNode(node, now))],
+          },
+        },
+      }))
     },
 
     undoLastProjectChange: () => {

@@ -90,6 +90,7 @@ export function getSelectedNodesRunHistory(project: ProjectState, selectedNodeId
 
 export function getProjectRunHistory(project: ProjectState): NodeRunHistoryItem[] {
   return Object.values(project.tasks)
+    .filter((task) => !task.batchId)
     .sort(sortTasksNewest)
     .map((task) => toHistoryItem(project, task))
 }

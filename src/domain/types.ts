@@ -478,6 +478,7 @@ export type ExecutionTask = {
   seedPatchLog: SeedPatchRecord[]
   endpointId?: string
   comfyPromptId?: string
+  batchId?: string
   outputRefs: Record<string, ResourceRef[]>
   error?: {
     code: string
@@ -488,6 +489,26 @@ export type ExecutionTask = {
   startedAt?: string
   updatedAt: string
   completedAt?: string
+}
+
+export type BatchSeedMode = 'random' | 'fixed'
+
+export type BatchRunItem = {
+  taskId: string
+  stem: string
+  files: Record<string, string>
+  status: ExecutionTask['status']
+  error?: string
+}
+
+export type BatchRun = {
+  id: string
+  sourceTaskId: string
+  bindings: { inputKey: string; kind: 'file' | 'text' }[]
+  seedMode: BatchSeedMode
+  status: 'running' | 'completed' | 'canceled'
+  items: BatchRunItem[]
+  createdAt: number
 }
 
 export type ProjectState = {
@@ -504,6 +525,7 @@ export type ProjectState = {
   assets: Record<string, AssetRecord>
   functions: Record<string, GenerationFunction>
   tasks: Record<string, ExecutionTask>
+  batches?: Record<string, BatchRun>
   history?: ProjectHistoryState
   templates?: Record<string, CanvasTemplate>
   comfy: {

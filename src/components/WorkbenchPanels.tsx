@@ -9,6 +9,7 @@ import {
   History,
   Image as ImageIcon,
   KeyRound,
+  Layers,
   Network,
   Pencil,
   Plus,
@@ -79,6 +80,8 @@ import { ResourcePreview } from './ResourcePreview'
 import { FullResourcePreviewModal } from './ResourcePreviewModal'
 import { ModalFrame } from './ModalFrame'
 import { ConfirmationDialog } from './ConfirmationDialog'
+import { BatchRunDialog } from './batch/BatchRunDialog'
+import { BatchPanel } from './batch/BatchPanel'
 
 const resourceTypes: ResourceType[] = ['text', 'number', 'boolean', 'image', 'video', 'audio']
 const outputSources: FunctionOutputDef['extract']['source'][] = [
@@ -712,17 +715,29 @@ function RunRecordCard({
   onFocusNode,
   onOpenHistory,
   onPreviewResource,
+  onStartBatch,
 }: {
   project: ProjectState
   item: ReturnType<typeof getProjectRunHistory>[number]
   onFocusNode: (nodeId: string) => void
   onOpenHistory: (runLabel: string, endpointId: string | undefined, promptId: string | undefined) => void
   onPreviewResource: (resource: Resource) => void
+  onStartBatch?: (taskId: string) => void
 }) {
   const task = project.tasks[item.taskId]
   const durationLabel = taskDurationLabel(task)
   const createdAtLabel = formatHistoryTimestamp(task?.createdAt)
   const outputResources = task ? taskOutputResources(project, task) : []
+  const batchFunction = task ? (task.functionSnapshot ?? project.functions[task.functionId]) : undefined
+  const canBatch = Boolean(
+    task &&
+      !task.batchId &&
+      batchFunction?.workflow.format === 'comfyui_api_json' &&
+      batchFunction.inputs.some(
+        (input) =>
+          input.type === 'image' || input.type === 'video' || input.type === 'audio' || input.type === 'text',
+      ),
+  )
 
   return (
     <article className={`run-record-card run-record-card-${item.status}`}>
@@ -774,6 +789,16 @@ function RunRecordCard({
             aria-label={`Locate ${item.runLabel} result node`}
           >
             Locate
+          </button>
+        ) : null}
+        {canBatch && onStartBatch ? (
+          <button
+            type="button"
+            onClick={() => onStartBatch(item.taskId)}
+            aria-label={`批量应用到文件 ${item.runLabel}`}
+            title="批量应用到文件…"
+          >
+            批量
           </button>
         ) : null}
         {item.historyPath && item.endpointId && item.comfyPromptId ? (
@@ -3983,7 +4008,7 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
   )
 }
 
-type LeftDockPanel = 'assets' | 'history' | 'functions' | 'servers' | 'tasks' | 'runQueue'
+type LeftDockPanel = 'assets' | 'history' | 'functions' | 'servers' | 'tasks' | 'runQueue' | 'batches'
 
 export function LeftPanel() {
   const project = useProjectStore((state) => state.project)
@@ -4031,6 +4056,8 @@ export function LeftPanel() {
   const serversOpen = openDock === 'servers'
   const tasksOpen = openDock === 'tasks'
   const runQueueOpen = openDock === 'runQueue'
+  const batchesOpen = openDock === 'batches'
+  const [batchDialogTaskId, setBatchDialogTaskId] = useState<string>()
   const resources = Object.values(project.resources)
   const functions = useMemo(() => Object.values(project.functions), [project.functions])
   const managedFunctions = useMemo(() => functions.filter((fn) => !isBuiltInFunction(fn)), [functions])
@@ -4050,7 +4077,7 @@ export function LeftPanel() {
     [project.tasks],
   )
   const activeProjectTasks = useMemo(
-    () => projectTasks.filter((task) => activeTaskStatuses.has(task.status)),
+    () => projectTasks.filter((task) => !task.batchId && activeTaskStatuses.has(task.status)),
     [projectTasks],
   )
   const activeSelectedNodeIds = useMemo(
@@ -4390,6 +4417,16 @@ export function LeftPanel() {
         >
           <Route size={20} />
         </button>
+        <button
+          type="button"
+          className={`assets-dock-button${batchesOpen ? ' is-active' : ''}`}
+          aria-label="批量运行"
+          aria-expanded={batchesOpen}
+          aria-controls="batch-runs-popover"
+          onClick={() => toggleDock('batches')}
+        >
+          <Layers size={20} />
+        </button>
       </div>
       {assetsOpen ? (
         <section id="assets-popover" className="side-panel left-panel asset-popover" aria-label="Assets popover">
@@ -4677,6 +4714,7 @@ export function LeftPanel() {
                   onFocusNode={focusCanvasNode}
                   onOpenHistory={openHistory}
                   onPreviewResource={setPreviewResource}
+                  onStartBatch={setBatchDialogTaskId}
                 />
               ))}
             </div>
@@ -4686,6 +4724,23 @@ export function LeftPanel() {
             </div>
           )}
         </section>
+      ) : null}
+      {batchesOpen ? (
+        <section
+          id="batch-runs-popover"
+          className="side-panel left-panel asset-popover left-dock-popover batch-runs-popover"
+          aria-label="批量运行 popover"
+        >
+          <div className="panel-title asset-popover-title">
+            <Layers size={16} />
+            <h2>批量运行</h2>
+            <span>{Object.keys(project.batches ?? {}).length}</span>
+          </div>
+          <BatchPanel />
+        </section>
+      ) : null}
+      {batchDialogTaskId ? (
+        <BatchRunDialog sourceTaskId={batchDialogTaskId} onClose={() => setBatchDialogTaskId(undefined)} />
       ) : null}
       <FullResourcePreviewModal
         resource={previewResource}
