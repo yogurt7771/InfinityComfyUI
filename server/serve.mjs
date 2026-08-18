@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
@@ -14,6 +15,83 @@ const distRoot = path.resolve(process.env.DIST_DIR ?? path.join(__dirname, '..',
 const host = process.env.HOST ?? '0.0.0.0'
 const port = Number(process.env.PORT ?? 7930)
 const loopbackProxyHost = process.env.COMFY_PROXY_LOOPBACK_HOST?.trim()
+
+const AUTH_LOGIN_PATH = '/__infinity_login'
+const AUTH_COOKIE_NAME = 'infinity_auth'
+const authPassword = process.env.INFINITY_AUTH_PASSWORD ?? ''
+const authEnabled = authPassword.length > 0
+const authSessionToken = createHash('sha256').update(`infinity-comfyui:${authPassword}`).digest('hex')
+
+function safeEqual(a, b) {
+  const bufA = Buffer.from(String(a))
+  const bufB = Buffer.from(String(b))
+  return bufA.length === bufB.length && timingSafeEqual(bufA, bufB)
+}
+
+function requestHasAuthCookie(request) {
+  if (!authEnabled) return true
+  const cookieHeader = request.headers.cookie ?? ''
+  for (const part of cookieHeader.split(';')) {
+    const [name, ...rest] = part.trim().split('=')
+    if (name === AUTH_COOKIE_NAME && safeEqual(rest.join('='), authSessionToken)) return true
+  }
+  return false
+}
+
+function loginPageHtml(failed) {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Infinity ComfyUI 登录</title>
+<style>
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #0f1115; color: #e6e8eb; font-family: system-ui, sans-serif; }
+  form { background: #1a1d24; padding: 32px; border-radius: 12px; width: 300px; display: flex; flex-direction: column; gap: 14px; }
+  h1 { font-size: 18px; margin: 0; text-align: center; }
+  input { padding: 10px 12px; border-radius: 8px; border: 1px solid #333a45; background: #0f1115; color: inherit; font-size: 14px; }
+  button { padding: 10px; border: 0; border-radius: 8px; background: #4f7cff; color: #fff; font-size: 14px; cursor: pointer; }
+  .error { color: #ff6b6b; font-size: 13px; text-align: center; margin: 0; }
+</style>
+</head>
+<body>
+<form method="post" action="${AUTH_LOGIN_PATH}">
+  <h1>Infinity ComfyUI</h1>
+  ${failed ? '<p class="error">密码错误，请重试</p>' : ''}
+  <input type="password" name="password" placeholder="访问密码" autofocus required>
+  <button type="submit">登录</button>
+</form>
+</body>
+</html>`
+}
+
+async function handleAuthLogin(request, response) {
+  const body = (await readRequestBody(request)).toString('utf8')
+  const password = new URLSearchParams(body).get('password') ?? ''
+  if (safeEqual(password, authPassword)) {
+    response.statusCode = 303
+    response.setHeader('set-cookie', `${AUTH_COOKIE_NAME}=${authSessionToken}; Path=/; HttpOnly; SameSite=Lax`)
+    response.setHeader('location', '/')
+    response.end()
+    return
+  }
+  response.statusCode = 401
+  response.setHeader('content-type', 'text/html; charset=utf-8')
+  response.end(loginPageHtml(true))
+}
+
+function requireAuth(request, response) {
+  if (requestHasAuthCookie(request)) return true
+  response.statusCode = 401
+  if (String(request.headers.accept ?? '').includes('text/html')) {
+    response.setHeader('content-type', 'text/html; charset=utf-8')
+    response.end(loginPageHtml(false))
+  } else {
+    response.setHeader('content-type', 'text/plain; charset=utf-8')
+    response.end('Unauthorized')
+  }
+  return false
+}
 
 const blockedProxyHeaders = new Set([
   'connection',
@@ -549,6 +627,11 @@ const server = createServer((request, response) => {
     response.end(JSON.stringify({ application: 'Infinity ComfyUI', runtime: 'docker', proxy: 'v5.17.1' }))
     return
   }
+  if (authEnabled && request.url === AUTH_LOGIN_PATH && request.method === 'POST') {
+    void handleAuthLogin(request, response)
+    return
+  }
+  if (!requireAuth(request, response)) return
   if (request.url?.startsWith(COMFY_PROXY_PREFIX)) {
     void handleComfyProxy(request, response)
     return
@@ -557,6 +640,11 @@ const server = createServer((request, response) => {
 })
 
 server.on('upgrade', (request, socket, head) => {
+  if (!requestHasAuthCookie(request)) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
+    socket.destroy()
+    return
+  }
   void (async () => {
     const fail = (status = '502 Bad Gateway') => {
       if (!socket.destroyed) {

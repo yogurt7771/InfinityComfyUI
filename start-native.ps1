@@ -27,7 +27,16 @@ if (-not (Test-Path 'app-dist\index.html')) {
     if ($LASTEXITCODE -ne 0) { Write-Host '构建失败' -ForegroundColor Red; Read-Host '按回车退出'; exit 1 }
 }
 
-# 4. 打开浏览器并启动服务
+# 4. 访问鉴权（可选）：已设置环境变量则沿用，否则询问一次
+if (-not $env:INFINITY_AUTH_PASSWORD) {
+    $inputPwd = Read-Host '设置访问密码（直接回车 = 不启用鉴权）'
+    if ($inputPwd) { $env:INFINITY_AUTH_PASSWORD = $inputPwd }
+}
+if ($env:INFINITY_AUTH_PASSWORD) {
+    Write-Host '访问鉴权已启用' -ForegroundColor Yellow
+}
+
+# 5. 打开浏览器并启动服务
 $url = "http://127.0.0.1:$port"
 Start-Process $url
 Write-Host "Infinity ComfyUI 正在启动: $url （按 Ctrl+C 停止）" -ForegroundColor Green
