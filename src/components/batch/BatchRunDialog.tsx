@@ -123,28 +123,27 @@ export function BatchRunDialog({ sourceTaskId, onClose }: { sourceTaskId: string
 
   if (!task || !functionDef) {
     return (
-      <ModalFrame label="批量运行" onClose={onClose}>
-        <div className="manager-header">
-          <h2>批量应用到文件</h2>
-        </div>
-        <p>找不到模板运行记录，无法批量运行。</p>
-        <div className="local-action-footer">
-          <button type="button" onClick={onClose}>
-            关闭
-          </button>
+      <ModalFrame label="批量运行" onClose={onClose} dialogClassName="manager-modal batch-dialog">
+        <div className="batch-dialog-body">
+          <h2 className="batch-dialog-title">批量应用到文件</h2>
+          <p className="batch-dialog-note">找不到模板运行记录，无法批量运行。</p>
+          <div className="local-action-footer">
+            <button type="button" onClick={onClose}>
+              关闭
+            </button>
+          </div>
         </div>
       </ModalFrame>
     )
   }
 
   return (
-    <ModalFrame label="批量运行" onClose={onClose}>
-      <div className="manager-header">
-        <h2>批量应用到文件 · {functionDef.name}</h2>
-      </div>
-      <p className="dock-popover-note">
-        以该运行的完整配置为模板，按文件主名（不含扩展名）配对成组，每组运行一次。未勾选的输入沿用模板原值。
-      </p>
+    <ModalFrame label="批量运行" onClose={onClose} dialogClassName="manager-modal batch-dialog">
+      <div className="batch-dialog-body">
+        <h2 className="batch-dialog-title">批量应用到文件 · {functionDef.name}</h2>
+        <p className="batch-dialog-note">
+          以该运行的完整配置为模板，按文件主名（不含扩展名）配对成组，每组运行一次。未勾选的输入沿用模板原值。
+        </p>
       <div className="batch-input-list" aria-label="批量输入设置">
         {batchableInputs.map((input) => {
           const selection = selections[input.key] ?? { enabled: false, files: [] }
@@ -262,6 +261,7 @@ export function BatchRunDialog({ sourceTaskId, onClose }: { sourceTaskId: string
           <Play size={14} />
           开始批量（{completeGroups.length} 组）
         </button>
+      </div>
       </div>
     </ModalFrame>
   )

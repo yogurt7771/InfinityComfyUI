@@ -7986,11 +7986,37 @@ body[data-theme='light'] .function-run-dialog .local-action-footer button:not(.p
     #f8fafc;
 }
 
+.batch-dialog {
+  grid-template-rows: minmax(0, 1fr);
+  width: min(680px, calc(100vw - 44px));
+}
+
+.batch-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 20px;
+  overflow: auto;
+}
+
+.batch-dialog-title {
+  margin: 0;
+  color: var(--ink);
+  font-size: 16px;
+}
+
+.batch-dialog-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .batch-input-list {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin: 12px 0;
+  margin: 0;
 }
 
 .batch-input-row {
@@ -8007,6 +8033,15 @@ body[data-theme='light'] .function-run-dialog .local-action-footer button:not(.p
   min-width: 180px;
 }
 
+/* 复位全局 input { width:100%; height:34px } 对勾选框的拉伸 */
+.batch-input-toggle input[type='checkbox'],
+.batch-seed-options input[type='radio'] {
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  flex: 0 0 auto;
+}
+
 .batch-input-toggle small {
   margin-left: 6px;
   opacity: 0.6;
@@ -8018,7 +8053,9 @@ body[data-theme='light'] .function-run-dialog .local-action-footer button:not(.p
 }
 
 .batch-preview {
-  margin: 12px 0;
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
 }
 
 .batch-skipped-list,
@@ -8046,13 +8083,15 @@ body[data-theme='light'] .function-run-dialog .local-action-footer button:not(.p
   display: flex;
   align-items: center;
   gap: 14px;
-  margin: 12px 0;
+  margin: 0;
+  flex-wrap: wrap;
 }
 
 .batch-seed-options label {
   display: flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
 }
 
 .batch-list {
