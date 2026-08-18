@@ -269,15 +269,21 @@ self.addEventListener('fetch', (event) => {
   event.respondWith((async () => {
     const client = event.clientId ? await self.clients.get(event.clientId) : undefined;
     const clientPathname = client?.url ? new URL(client.url).pathname : '';
+    const referrer = event.request.referrer ? new URL(event.request.referrer).pathname : '';
+    const ownerPathname = encodedBasePattern.test(clientPathname.slice(proxyPrefix.length)) && clientPathname.startsWith(proxyPrefix)
+      ? clientPathname
+      : referrer.startsWith(proxyPrefix) && encodedBasePattern.test(referrer.slice(proxyPrefix.length))
+        ? referrer
+        : '';
     let target = url;
-    if (clientPathname.startsWith(proxyPrefix) && encodedBasePattern.test(clientPathname.slice(proxyPrefix.length))) {
-      const clientRest = clientPathname.slice(proxyPrefix.length);
-      const slashIndex = clientRest.indexOf('/');
-      const clientBase = proxyPrefix + (slashIndex === -1 ? clientRest + '/' : clientRest.slice(0, slashIndex + 1));
+    if (ownerPathname) {
+      const ownerRest = ownerPathname.slice(proxyPrefix.length);
+      const slashIndex = ownerRest.indexOf('/');
+      const ownerBase = proxyPrefix + (slashIndex === -1 ? ownerRest + '/' : ownerRest.slice(0, slashIndex + 1));
       const relativePath = url.pathname.startsWith(proxyPrefix)
         ? url.pathname.slice(proxyPrefix.length)
         : url.pathname.replace(/^\\/+/, '');
-      target = new URL(clientBase + relativePath + url.search, self.location.origin);
+      target = new URL(ownerBase + relativePath + url.search, self.location.origin);
     }
     if (proxyToken && !target.searchParams.has(proxyTokenParam)) target.searchParams.set(proxyTokenParam, proxyToken);
     return fetch(new Request(target.toString(), event.request));
