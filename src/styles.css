@@ -1468,6 +1468,10 @@ div.server-list-item {
   top: 292px;
 }
 
+.batch-runs-popover {
+  top: 348px;
+}
+
 .dock-popover-note {
   margin: -4px 0 10px;
   color: var(--muted);
@@ -8128,6 +8132,8 @@ body[data-theme='light'] .function-run-dialog .local-action-footer button:not(.p
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .batch-item-header {
@@ -8137,12 +8143,42 @@ body[data-theme='light'] .function-run-dialog .local-action-footer button:not(.p
   gap: 6px;
 }
 
+.batch-item-header strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batch-item-header .job-status {
+  flex: 0 0 auto;
+}
+
 .batch-item-files {
+  display: block;
   opacity: 0.65;
-  word-break: break-all;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .batch-item-actions {
   display: flex;
   gap: 8px;
+}
+
+.batch-progress {
+  height: 6px;
+  margin: 2px 4px 4px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.22);
+  overflow: hidden;
+}
+
+.batch-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #0d9488, #2dd4bf);
+  transition: width 240ms ease;
 }

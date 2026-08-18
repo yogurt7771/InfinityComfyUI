@@ -554,7 +554,7 @@ describe('LeftPanel', () => {
     expect(within(serverList).getByText('Saved Local ComfyUI')).toBeVisible()
   })
 
-  it('collapses the asset list popover when the pointer leaves the assets dock', () => {
+  it('collapses the asset list popover when the pointer leaves the assets dock', async () => {
     render(<LeftPanel />)
 
     fireEvent.click(screen.getByRole('button', { name: 'Assets' }))
@@ -562,7 +562,9 @@ describe('LeftPanel', () => {
 
     fireEvent.mouseLeave(screen.getByRole('complementary', { name: 'Assets panel' }))
 
-    expect(screen.queryByLabelText('Asset list')).not.toBeInTheDocument()
+    // 弹层延迟关闭，避免斜向移动时闪关
+    expect(screen.getByLabelText('Asset list')).toBeVisible()
+    await waitFor(() => expect(screen.queryByLabelText('Asset list')).not.toBeInTheDocument())
   })
 
   it('shows visual operation history with asset previews and undo/redo actions', () => {

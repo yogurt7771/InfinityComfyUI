@@ -1,6 +1,8 @@
 import { useState } from 'react'
-import { ImagePlus, RefreshCcw, XCircle } from 'lucide-react'
+import JSZip from 'jszip'
+import { Download, ImagePlus, LayoutGrid, RefreshCcw, XCircle } from 'lucide-react'
 import type { BatchRun, ExecutionTask, Resource } from '../../domain/types'
+import { dataUrlToBlob } from '../../domain/projectAssets'
 import { useProjectStore } from '../../store/projectStore'
 import { ResourcePreview } from '../ResourcePreview'
 import { FullResourcePreviewModal } from '../ResourcePreviewModal'
@@ -93,14 +95,64 @@ function BatchRunCard({ batch }: { batch: BatchRun }) {
   const project = useProjectStore((state) => state.project)
   const cancelBatchRun = useProjectStore((state) => state.cancelBatchRun)
   const retryFailedBatchItems = useProjectStore((state) => state.retryFailedBatchItems)
+  const revealBatchOnCanvas = useProjectStore((state) => state.revealBatchOnCanvas)
   const [expanded, setExpanded] = useState(batch.status === 'running')
+  const [downloading, setDownloading] = useState(false)
 
   const doneCount = batch.items.filter((item) => terminalItemStatuses.has(item.status)).length
   const failedCount = batch.items.filter((item) => item.status === 'failed' || item.status === 'canceled').length
+  const succeededCount = batch.items.filter((item) => item.status === 'succeeded').length
   const sourceTask = project.tasks[batch.sourceTaskId]
   const functionName = sourceTask
     ? (sourceTask.functionSnapshot?.name ?? project.functions[sourceTask.functionId]?.name ?? sourceTask.functionId)
     : batch.sourceTaskId
+
+  const downloadResults = async () => {
+    setDownloading(true)
+    try {
+      const zip = new JSZip()
+      const usedPaths = new Set<string>()
+      for (const item of batch.items) {
+        if (item.status !== 'succeeded') continue
+        const task = project.tasks[item.taskId]
+        const refs = Object.values(task?.outputRefs ?? {}).flat()
+        for (const ref of refs) {
+          const resource = project.resources[ref.resourceId]
+          const value = resource?.value
+          if (!resource || typeof value !== 'object' || value === null || !('url' in value) || typeof value.url !== 'string') {
+            continue
+          }
+          let blob = dataUrlToBlob(value.url)
+          if (!blob) {
+            try {
+              blob = await fetch(value.url).then((response) => response.blob())
+            } catch {
+              continue
+            }
+          }
+          if (!blob) continue
+          const filename =
+            'filename' in value && typeof value.filename === 'string' && value.filename
+              ? value.filename
+              : (resource.name ?? ref.resourceId)
+          let path = `${item.stem}/${filename}`
+          for (let dedup = 2; usedPaths.has(path); dedup += 1) path = `${item.stem}/${dedup}-${filename}`
+          usedPaths.add(path)
+          zip.file(path, blob)
+        }
+      }
+      if (usedPaths.size === 0) return
+      const bundle = await zip.generateAsync({ type: 'blob' })
+      const url = URL.createObjectURL(bundle)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `${functionName}-批量结果.zip`
+      anchor.click()
+      URL.revokeObjectURL(url)
+    } finally {
+      setDownloading(false)
+    }
+  }
 
   return (
     <article className={`batch-card batch-card-${batch.status}`}>
@@ -122,6 +174,16 @@ function BatchRunCard({ batch }: { batch: BatchRun }) {
           </span>
         </span>
       </button>
+      <div
+        className="batch-progress"
+        role="progressbar"
+        aria-label="批量进度"
+        aria-valuemin={0}
+        aria-valuemax={batch.items.length}
+        aria-valuenow={doneCount}
+      >
+        <span style={{ width: `${batch.items.length > 0 ? (doneCount / batch.items.length) * 100 : 0}%` }} />
+      </div>
       <div className="batch-card-actions">
         {batch.status === 'running' ? (
           <button type="button" aria-label="取消批量" onClick={() => cancelBatchRun(batch.id)}>
@@ -134,6 +196,23 @@ function BatchRunCard({ batch }: { batch: BatchRun }) {
             <RefreshCcw size={13} />
             重跑失败项（{failedCount}）
           </button>
+        ) : null}
+        {succeededCount > 0 ? (
+          <>
+            <button
+              type="button"
+              aria-label="打包下载批量结果"
+              disabled={downloading}
+              onClick={() => void downloadResults()}
+            >
+              <Download size={13} />
+              {downloading ? '打包中…' : '打包下载'}
+            </button>
+            <button type="button" aria-label="批量结果加入画布" onClick={() => revealBatchOnCanvas(batch.id)}>
+              <LayoutGrid size={13} />
+              加入画布
+            </button>
+          </>
         ) : null}
       </div>
       {expanded ? (

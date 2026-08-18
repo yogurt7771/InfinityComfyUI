@@ -4196,8 +4196,26 @@ export function LeftPanel() {
     [activeSelectedNodeIds, project],
   )
   const refreshHistoryRows = useCallback(() => setHistoryRows(buildHistoryDockRows(project)), [project])
-  const closeDock = () => setOpenDock(undefined)
+  const closeDockTimerRef = useRef<number | undefined>(undefined)
+  const cancelDockClose = () => {
+    if (closeDockTimerRef.current === undefined) return
+    window.clearTimeout(closeDockTimerRef.current)
+    closeDockTimerRef.current = undefined
+  }
+  const closeDock = () => {
+    cancelDockClose()
+    setOpenDock(undefined)
+  }
+  // 鼠标从 dock 按钮斜向移向弹层会短暂离开 aside，延迟关闭避免弹层闪关
+  const scheduleCloseDock = () => {
+    cancelDockClose()
+    closeDockTimerRef.current = window.setTimeout(() => {
+      closeDockTimerRef.current = undefined
+      setOpenDock(undefined)
+    }, 350)
+  }
   const toggleDock = (panel: LeftDockPanel) => {
+    cancelDockClose()
     setOpenDock((current) => {
       const nextPanel = current === panel ? undefined : panel
       if (nextPanel === 'history') setHistoryRows(buildHistoryDockRows(project))
@@ -4349,8 +4367,8 @@ export function LeftPanel() {
 
   useEffect(
     () => () => {
-      if (previewTimerRef.current === undefined) return
-      window.clearTimeout(previewTimerRef.current)
+      if (previewTimerRef.current !== undefined) window.clearTimeout(previewTimerRef.current)
+      if (closeDockTimerRef.current !== undefined) window.clearTimeout(closeDockTimerRef.current)
     },
     [],
   )
@@ -4380,7 +4398,8 @@ export function LeftPanel() {
     <aside
       className={`assets-dock ${openDock ? 'is-open' : ''}`}
       aria-label="Assets panel"
-      onMouseLeave={closeDock}
+      onMouseEnter={cancelDockClose}
+      onMouseLeave={scheduleCloseDock}
       onKeyDown={(event) => {
         if (event.key === 'Escape') closeDock()
       }}

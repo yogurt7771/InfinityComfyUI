@@ -236,6 +236,61 @@ describe('batch run', () => {
     expect(batchResultNodes.every((node) => node.data.batchHidden === true)).toBe(true)
   })
 
+  it('lays out batch input and output resources on canvas in rows', async () => {
+    const queuedWorkflows: unknown[] = []
+    const clientMocks = createBatchClientMocks(queuedWorkflows)
+    const slice = createProjectSlice({
+      now: () => '2026-05-08T09:00:00.000Z',
+      randomInt: () => 42,
+      createComfyClient: () => clientMocks,
+      comfyRunOptions: { maxPollAttempts: 1, pollIntervalMs: 1 },
+    })
+    const { sourceTask } = await setupBatchSourceTask(slice)
+
+    const batchId = await slice
+      .getState()
+      .startBatchRunFromResult(sourceTask.id, { groups: batchGroups(['a', 'b']), seedMode: 'random' })
+    await waitForState(slice, (project) => project.batches?.[batchId!]?.status === 'completed')
+
+    const resourceNodeCountBefore = slice
+      .getState()
+      .project.canvas.nodes.filter((node) => node.type === 'resource').length
+
+    slice.getState().revealBatchOnCanvas(batchId!)
+
+    const project = slice.getState().project
+    const batch = project.batches![batchId!]!
+    // 每项 1 个输入资源（image；text 绑定直接内联为字符串值，不产生资源）和 1 个输出，共 2 项
+    const resourceNodes = project.canvas.nodes.filter((node) => node.type === 'resource')
+    expect(resourceNodes).toHaveLength(resourceNodeCountBefore + 4)
+
+    let previousRowY = Number.NEGATIVE_INFINITY
+    for (const item of batch.items) {
+      const task = project.tasks[item.taskId]!
+      const inputResourceIds = Object.values(task.inputRefs)
+        .filter((ref) => 'resourceId' in ref)
+        .map((ref) => ref.resourceId)
+      const inputNodes = resourceNodes.filter((node) => inputResourceIds.includes(String(node.data.resourceId)))
+      expect(inputNodes).toHaveLength(1)
+      const rowY = Math.min(...inputNodes.map((node) => node.position.y))
+      expect(rowY).toBeGreaterThan(previousRowY)
+      previousRowY = rowY
+
+      const outputRef = task.outputRefs.image![0]!
+      const outputNode = resourceNodes.find((node) => node.data.resourceId === outputRef.resourceId)
+      expect(outputNode).toBeDefined()
+      // 输出列在输入列右侧，且与输入同行
+      expect(outputNode!.position.x).toBeGreaterThan(inputNodes[0]!.position.x)
+      expect(outputNode!.position.y).toBe(rowY)
+    }
+
+    // 幂等：重复调用不再新增节点
+    slice.getState().revealBatchOnCanvas(batchId!)
+    expect(
+      slice.getState().project.canvas.nodes.filter((node) => node.type === 'resource'),
+    ).toHaveLength(resourceNodeCountBefore + 4)
+  })
+
   it('applies one fixed seed to every group when seedMode is fixed', async () => {
     const queuedWorkflows: unknown[] = []
     const clientMocks = createBatchClientMocks(queuedWorkflows)

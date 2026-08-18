@@ -365,6 +365,7 @@ export type ProjectStoreState = {
   retryBatchItem: (batchId: string, taskId: string) => Promise<void>
   retryFailedBatchItems: (batchId: string) => Promise<void>
   revealBatchItemOnCanvas: (batchId: string, taskId: string) => void
+  revealBatchOnCanvas: (batchId: string) => void
   undoLastProjectChange: () => void
   redoProjectChange: () => void
   connectNodes: (sourceNodeId: string, targetNodeId: string, options?: ConnectNodesOptions) => void
@@ -8355,6 +8356,86 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           canvas: {
             ...current.project.canvas,
             nodes: [...current.project.canvas.nodes, ...nodesToAdd.map((node) => markNewCanvasNode(node, now))],
+          },
+        },
+      }))
+    },
+
+    // 把批次所有成功项的输入/输出资源放上画布：每项一行，输入在左、输出在右，
+    // 血缘边由 canvasEdges 的 lineage 逻辑自动连接
+    revealBatchOnCanvas: (batchId) => {
+      const state = get()
+      const batch = state.project.batches?.[batchId]
+      if (!batch) return
+      const succeededItems = batch.items.filter((item) => item.status === 'succeeded')
+      if (succeededItems.length === 0) return
+
+      const firstResultNode = succeededItems
+        .map((item) => taskResultNode(state.project, item.taskId))
+        .find((node): node is CanvasNode => Boolean(node))
+      const inputX = firstResultNode ? firstResultNode.position.x : 0
+      const outputX = inputX + 340
+      const rowGapY = 320
+
+      const placedResourceIds = new Set(
+        state.project.canvas.nodes
+          .filter((node) => node.type === 'resource' && typeof node.data.resourceId === 'string')
+          .map((node) => String(node.data.resourceId)),
+      )
+      const newNodes: CanvasNode[] = []
+      let rowY = firstResultNode ? firstResultNode.position.y : 0
+
+      for (const item of succeededItems) {
+        const task = state.project.tasks[item.taskId]
+        const resultNode = taskResultNode(state.project, item.taskId)
+        if (!task || !resultNode) continue
+
+        const inputRefs = Object.values(task.inputRefs ?? {}).filter((ref): ref is ResourceRef => isResourceRef(ref))
+        const uniqueInputRefs = inputRefs.filter(
+          (ref, index) => inputRefs.findIndex((entry) => entry.resourceId === ref.resourceId) === index,
+        )
+        const outputRefs = Object.values(task.outputRefs ?? {}).flat()
+        const uniqueOutputRefs = outputRefs.filter(
+          (ref, index) => outputRefs.findIndex((entry) => entry.resourceId === ref.resourceId) === index,
+        )
+
+        let slotCount = 0
+        for (const ref of uniqueInputRefs) {
+          const resource = state.project.resources[ref.resourceId]
+          if (!resource || placedResourceIds.has(ref.resourceId)) continue
+          placedResourceIds.add(ref.resourceId)
+          newNodes.push({
+            id: resourceNodeId(ref.resourceId),
+            type: 'resource',
+            position: { x: inputX, y: rowY + slotCount * rowGapY },
+            data: { resourceId: ref.resourceId, resourceType: resource.type },
+          })
+          slotCount += 1
+        }
+
+        const outputNodes = outputResourceNodesForRefs(
+          uniqueOutputRefs,
+          state.project.resources,
+          resultNode.id,
+          [...state.project.canvas.nodes, ...newNodes],
+        )
+        outputNodes.forEach((node, index) => {
+          placedResourceIds.add(String(node.data.resourceId))
+          newNodes.push({ ...node, position: { x: outputX, y: rowY + index * rowGapY } })
+        })
+
+        rowY += Math.max(slotCount, outputNodes.length, 1) * rowGapY + 40
+      }
+
+      if (newNodes.length === 0) return
+      const now = runtime.now()
+      set((current) => ({
+        project: {
+          ...current.project,
+          project: { ...current.project.project, updatedAt: now },
+          canvas: {
+            ...current.project.canvas,
+            nodes: [...current.project.canvas.nodes, ...newNodes.map((node) => markNewCanvasNode(node, now))],
           },
         },
       }))
