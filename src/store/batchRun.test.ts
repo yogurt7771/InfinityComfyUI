@@ -379,6 +379,63 @@ describe('batch run', () => {
     ).toBe(true)
   })
 
+  it('marks interrupted batch runs as failed after a page reload', async () => {
+    let hangPrompts = false
+    let releasePrompt: (() => void) | undefined
+    const slice = createProjectSlice({
+      now: () => '2026-05-08T09:00:00.000Z',
+      randomInt: () => 42,
+      createComfyClient: () => ({
+        uploadImage: vi.fn(async (file: File, _options?: { subfolder?: string; overwrite?: boolean }) => ({ name: file.name, subfolder: 'infinity-comfyui', type: 'input' })),
+        queuePrompt: vi.fn(async () => {
+          if (hangPrompts) {
+            await new Promise<void>((resolve) => {
+              releasePrompt = resolve
+            })
+          }
+          return { prompt_id: 'prompt_x', number: 1 }
+        }),
+        getHistory: vi.fn(async () => ({})),
+        interrupt: vi.fn(async () => ({})),
+      }),
+      comfyRunOptions: { maxPollAttempts: 1, pollIntervalMs: 1 },
+    })
+    const { sourceTask } = await setupBatchSourceTask(slice)
+    hangPrompts = true
+
+    const batchId = await slice
+      .getState()
+      .startBatchRunFromResult(sourceTask.id, { groups: batchGroups(['a', 'b', 'c']), seedMode: 'random' })
+    await waitForState(slice, (project) =>
+      Object.values(project.tasks).some((task) => task.batchId === batchId && task.status === 'running'),
+    )
+
+    // 模拟页面刷新后持久化恢复：内存队列已丢失，活动中的任务统一标记为中断失败
+    slice.getState().failInterruptedRuns()
+
+    const project = slice.getState().project
+    const batch = project.batches![batchId!]!
+    expect(batch.status).toBe('completed')
+    const batchTasks = Object.values(project.tasks).filter((task) => task.batchId === batchId)
+    expect(batchTasks).toHaveLength(3)
+    expect(batchTasks.every((task) => task.status === 'failed' && task.error?.code === 'interrupted')).toBe(true)
+    expect(batch.items.every((item) => item.status === 'failed')).toBe(true)
+    const interruptedIds = new Set(batchTasks.map((task) => task.id))
+    const resultNodes = project.canvas.nodes.filter(
+      (node) => node.type === 'result_group' && typeof node.data.taskId === 'string' && interruptedIds.has(node.data.taskId),
+    )
+    expect(resultNodes.length).toBeGreaterThan(0)
+    expect(resultNodes.every((node) => node.data.status === 'failed')).toBe(true)
+
+    // 再次调用应为 no-op（已没有活动状态的任务）
+    const projectAfterFirstPass = slice.getState().project
+    slice.getState().failInterruptedRuns()
+    expect(slice.getState().project).toBe(projectAfterFirstPass)
+
+    // 释放挂起的运行，避免测试结束后仍有未完成的异步任务
+    releasePrompt?.()
+  })
+
   it('uploads video and audio inputs with hashed filenames when strategy is comfy_upload', async () => {
     const queuedWorkflows: unknown[] = []
     const uploadImage = vi.fn(async (file: File, _options?: { subfolder?: string; overwrite?: boolean }) => ({ name: file.name, subfolder: 'infinity-comfyui', type: 'input' }))

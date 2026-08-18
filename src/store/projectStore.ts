@@ -366,6 +366,7 @@ export type ProjectStoreState = {
   retryFailedBatchItems: (batchId: string) => Promise<void>
   revealBatchItemOnCanvas: (batchId: string, taskId: string) => void
   revealBatchOnCanvas: (batchId: string) => void
+  failInterruptedRuns: () => void
   undoLastProjectChange: () => void
   redoProjectChange: () => void
   connectNodes: (sourceNodeId: string, targetNodeId: string, options?: ConnectNodesOptions) => void
@@ -8441,6 +8442,53 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       }))
     },
 
+    // 页面刷新/重启后内存中的执行队列已丢失，遗留的运行中任务永远不会再更新；
+    // 统一标记为失败，批量面板里可用"重跑失败项"恢复
+    failInterruptedRuns: () => {
+      const now = runtime.now()
+      const errorMessage = '页面刷新或重启后运行中断，可重跑'
+      set((current) => {
+        const interrupted = Object.values(current.project.tasks).filter((task) => activeTaskStatuses.has(task.status))
+        if (interrupted.length === 0) return current
+        const interruptedIds = new Set(interrupted.map((task) => task.id))
+        const tasks = { ...current.project.tasks }
+        for (const task of interrupted) {
+          tasks[task.id] = {
+            ...task,
+            status: 'failed',
+            error: { code: 'interrupted', message: errorMessage },
+            updatedAt: now,
+          }
+        }
+        const nodes = current.project.canvas.nodes.map((node) =>
+          node.type === 'result_group' && typeof node.data.taskId === 'string' && interruptedIds.has(node.data.taskId)
+            ? { ...node, data: { ...node.data, status: 'failed' } }
+            : node,
+        )
+        const batches = { ...current.project.batches }
+        for (const batch of Object.values(batches)) {
+          if (!batch || !batch.items.some((item) => interruptedIds.has(item.taskId))) continue
+          const items = batch.items.map((item) =>
+            interruptedIds.has(item.taskId) ? { ...item, status: 'failed' as const, error: errorMessage } : item,
+          )
+          const allTerminal = items.every((item) => !activeTaskStatuses.has(item.status))
+          batches[batch.id] = {
+            ...batch,
+            items,
+            status: batch.status === 'canceled' ? 'canceled' : allTerminal ? 'completed' : 'running',
+          }
+        }
+        return {
+          project: {
+            ...current.project,
+            tasks,
+            batches,
+            canvas: { ...current.project.canvas, nodes },
+          },
+        }
+      })
+    },
+
     undoLastProjectChange: () => {
       set((state) => {
         const currentProject = ensureProjectHistory(state.project)
@@ -9583,6 +9631,10 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
     },
 
     markEndpoint: (endpointId, status, message) => {
+      const current = get().project.comfy.endpoints.find((endpoint) => endpoint.id === endpointId)
+      // 5 秒健康轮询会反复写入相同状态；引用保持不变可避免整棵 project 树无意义重建
+      //（例如嵌入 ComfyUI 编辑器会因 endpoint prop 引用变化而周期性重灌工作流）。
+      if (current?.health?.status === status && current.health.message === message) return
       const now = runtime.now()
       set((state) => ({
         project: {
@@ -9809,6 +9861,7 @@ const startIndexedDbProjectPersistence = () => {
 
   void loadIndexedDbProjectLibrary(applyLoadedState).then((loadSucceeded) => {
     loadSettled = true
+    projectStore.getState().failInterruptedRuns()
     applyWithoutSchedulingSave({ projectPersistenceReady: true })
     if (loadSucceeded) {
       lastSavedLibraryKey = undefined
@@ -9896,6 +9949,7 @@ const startDesktopProjectPersistence = (storage: DesktopProjectStorage) => {
       const now = new Date().toISOString()
       const safeToPersist = savedLibrary === undefined || loadProjectLibrary(savedLibrary, now, applyLoadedState)
       loadSettled = true
+      projectStore.getState().failInterruptedRuns()
       applyWithoutSchedulingSave({ projectPersistenceReady: true })
       if (safeToPersist) {
         lastSavedLibraryKey = undefined

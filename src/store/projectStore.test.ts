@@ -194,6 +194,35 @@ describe('project store actions', () => {
     ])
   })
 
+  it('keeps endpoint and project identity stable when markEndpoint receives an unchanged status', () => {
+    const slice = createProjectSlice({
+      now: () => '2026-05-09T00:00:00.000Z',
+    })
+
+    slice.getState().markEndpoint('endpoint_local', 'online')
+    const projectAfterFirstMark = slice.getState().project
+    const endpointAfterFirstMark = projectAfterFirstMark.comfy.endpoints.find(
+      (endpoint) => endpoint.id === 'endpoint_local',
+    )
+    expect(endpointAfterFirstMark?.health?.status).toBe('online')
+
+    // 健康轮询每 5 秒重复写入相同状态：相同状态不得重建引用，否则嵌入编辑器会被反复重灌工作流。
+    slice.getState().markEndpoint('endpoint_local', 'online')
+    expect(slice.getState().project).toBe(projectAfterFirstMark)
+    expect(slice.getState().project.comfy.endpoints.find((endpoint) => endpoint.id === 'endpoint_local')).toBe(
+      endpointAfterFirstMark,
+    )
+
+    slice.getState().markEndpoint('endpoint_local', 'offline', 'connection refused')
+    const endpointAfterChange = slice.getState().project.comfy.endpoints.find(
+      (endpoint) => endpoint.id === 'endpoint_local',
+    )
+    expect(endpointAfterChange).not.toBe(endpointAfterFirstMark)
+    expect(endpointAfterChange?.health).toEqual(
+      expect.objectContaining({ status: 'offline', message: 'connection refused' }),
+    )
+  })
+
   it('runs the built-in OpenAI LLM node with optional image inputs and creates text output', async () => {
     const ids = ['node_openai', 'task_1', 'node_result_1', 'res_text_1']
     const createComfyClient = vi.fn()

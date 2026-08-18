@@ -1576,7 +1576,7 @@ export function ComfyWorkflowEditorDialog({
 
   const initializeFrame = useCallback(async () => {
     const frame = frameRef.current
-    if (!open || !frame || !endpoint) return
+    if (!open || !frame || !endpointId) return
     const generation = generationRef.current
     // 每次打开都重新注入工作流（用户可能在 ComfyUI 里关掉了工作流 tab），只去重并发中的初始化。
     if (
@@ -1654,7 +1654,9 @@ export function ComfyWorkflowEditorDialog({
         initializingRef.current = undefined
       }
     }
-  }, [endpoint, initialApiJson, initialUiJson, inputSignature, open])
+    // 依赖 endpointId 等原始值而非 endpoint 对象：健康轮询可能重建 endpoint 引用，
+    // 若依赖对象会导致 initializeFrame 每次轮询后重新触发、反复重灌工作流（编辑器闪烁）。
+  }, [endpointId, initialApiJson, initialUiJson, inputSignature, open])
 
   useEffect(() => {
     if (open) void initializeFrame()
