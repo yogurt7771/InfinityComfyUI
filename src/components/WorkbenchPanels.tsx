@@ -46,6 +46,7 @@ import { downloadConfigPackage, downloadProjectPackage, readPackageFile } from '
 import { normalizeComfyEndpointCredentials, parseComfyEndpointUrl } from '../domain/comfyEndpoint'
 import { parseComfyApiWorkflowJson } from '../domain/workflow'
 import {
+  COMFY_PROXY_APP_READY_MESSAGE,
   COMFY_PROXY_LOGIN_HANDLED_MESSAGE,
   COMFY_PROXY_LOGIN_READY_MESSAGE,
   comfyProxyUrl,
@@ -1329,14 +1330,14 @@ const setEndpointFunctionAvailability = (
   onUpdateEndpoint(endpoint.id, endpointCapabilitiesPatch(endpoint, nextFunctions))
 }
 
-export const openComfyEditorInBrowser = (endpoint: ComfyEndpointConfig) => {
+export const openComfyEditorInBrowser = (endpoint: ComfyEndpointConfig, workflow?: ComfyUiWorkflow) => {
   try {
     parseComfyEndpointUrl(endpoint.baseUrl)
     const bearerToken =
       endpoint.auth?.type === 'token' || endpoint.auth?.type === 'password' ? endpoint.auth.token : undefined
     const password = endpoint.auth?.type === 'password' ? endpoint.auth.password : undefined
     const popup = window.open(comfyProxyUrl(endpoint.baseUrl, { bearerToken }), '_blank')
-    if (!popup) return 'ComfyUI could not open. Allow pop-ups for this site and try again.'
+    if (!popup) return { error: 'ComfyUI could not open. Allow pop-ups for this site and try again.' }
     if (password) {
       let passwordSent = false
       const stop = () => {
@@ -1356,11 +1357,24 @@ export const openComfyEditorInBrowser = (endpoint: ComfyEndpointConfig) => {
       const timeout = window.setTimeout(stop, 60000)
       window.addEventListener('message', handleLoginMessage)
     }
-    return undefined
+    if (workflow) {
+      void (async () => {
+        try {
+          const app = await waitForComfyPopupApp(popup)
+          await openWorkflowJsonFileInComfyEditor(app, workflow, 'Infinity Workflow.json', popup as unknown as ComfyFrameWindow)
+        } catch {
+          // The separate window may be closed or still loading; the embedded editor remains the source of truth.
+        }
+      })()
+    }
+    return { popup }
   } catch (error) {
-    return error instanceof TypeError
-      ? error.message
-      : 'ComfyUI could not open. Check the server URL and try again.'
+    return {
+      error:
+        error instanceof TypeError
+          ? error.message
+          : 'ComfyUI could not open. Check the server URL and try again.',
+    }
   }
 }
 
@@ -1385,6 +1399,7 @@ type ComfyFrameGraph = {
 
 type ComfyFrameWindow = Window & {
   fetch: typeof fetch
+  File: typeof File
   Request?: typeof Request
   Response: typeof Response
   app?: {
@@ -1406,14 +1421,65 @@ type ComfyFrameWindow = Window & {
 
 const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
 
-async function waitForComfyFrameApp(frame: HTMLIFrameElement) {
-  for (let attempt = 0; attempt < 120; attempt += 1) {
-    const frameWindow = frame.contentWindow as ComfyFrameWindow | null
-    const app = frameWindow?.app
-    if (app?.graphToPrompt) return app
-    await wait(150)
+async function waitForComfyEditorApp(resolveWindow: () => ComfyFrameWindow | null, messageSource: unknown) {
+  let appReadyNotified = false
+  const handleMessage = (event: MessageEvent) => {
+    if (event.source !== messageSource || event.origin !== window.location.origin) return
+    if (event.data?.type === COMFY_PROXY_APP_READY_MESSAGE) appReadyNotified = true
   }
-  throw new Error('ComfyUI editor is not ready yet')
+  window.addEventListener('message', handleMessage)
+  try {
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      const app = resolveWindow()?.app
+      if (app?.graphToPrompt && appReadyNotified) return app
+      await wait(150)
+    }
+    const app = resolveWindow()?.app
+    if (app?.graphToPrompt) return app
+    throw new Error('ComfyUI editor is not ready yet')
+  } finally {
+    window.removeEventListener('message', handleMessage)
+  }
+}
+
+function waitForComfyFrameApp(frame: HTMLIFrameElement) {
+  return waitForComfyEditorApp(
+    () => frame.contentWindow as ComfyFrameWindow | null,
+    frame.contentWindow,
+  )
+}
+
+function waitForComfyPopupApp(popup: Window) {
+  return waitForComfyEditorApp(
+    () => (popup.closed ? null : (popup as unknown as ComfyFrameWindow)),
+    popup,
+  )
+}
+
+const uiWorkflowNodeCount = (workflow: ComfyUiWorkflow) => {
+  const nodes = (workflow as { nodes?: unknown[] }).nodes
+  return Array.isArray(nodes) ? nodes.length : undefined
+}
+
+const serializedGraphNodeCount = (graph?: ComfyFrameGraph) => {
+  const serialized = graph?.serialize?.() as { nodes?: unknown[] } | undefined
+  return Array.isArray(serialized?.nodes) ? serialized.nodes.length : undefined
+}
+
+async function loadUiWorkflowIntoComfyEditor(
+  app: NonNullable<ComfyFrameWindow['app']>,
+  frameWindow: ComfyFrameWindow | null,
+  workflow: ComfyUiWorkflow,
+) {
+  const expectedNodeCount = uiWorkflowNodeCount(workflow)
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await openWorkflowJsonFileInComfyEditor(app, workflow, 'Infinity Workflow.json', frameWindow ?? undefined)
+    if (expectedNodeCount === undefined) return
+    const actualNodeCount = serializedGraphNodeCount(app.graph ?? app.rootGraph ?? app.rootGraphInternal)
+    if (actualNodeCount === expectedNodeCount) return
+    if (attempt === 0) await wait(1000)
+  }
+  throw new Error('ComfyUI loaded the workflow but did not keep it. Retry once the editor has finished restoring.')
 }
 
 export function ComfyWorkflowEditorDialog({
@@ -1446,6 +1512,7 @@ export function ComfyWorkflowEditorDialog({
   const [error, setError] = useState<string>()
   const [saving, setSaving] = useState(false)
   const [frameReady, setFrameReady] = useState(false)
+  const [comfyPopup, setComfyPopup] = useState<Window | null>(null)
 
   const endpointId = endpoint?.id
   const endpointBaseUrl = endpoint?.baseUrl
@@ -1527,9 +1594,10 @@ export function ComfyWorkflowEditorDialog({
       setStatus('Loading the saved workflow through the local ComfyUI proxy…')
       const app = await waitForComfyFrameApp(frame)
       if (generation !== generationRef.current) return
+      const frameWindow = frame.contentWindow as ComfyFrameWindow | null
 
       if (initialUiJson && app.handleFile) {
-        await openWorkflowJsonFileInComfyEditor(app, initialUiJson, 'Infinity Workflow.json')
+        await loadUiWorkflowIntoComfyEditor(app, frameWindow, initialUiJson)
         if (generation !== generationRef.current) return
         setStatus('Editable workflow loaded from the saved function.')
       } else if (initialUiJson && app.loadGraphData) {
@@ -1537,7 +1605,7 @@ export function ComfyWorkflowEditorDialog({
         if (generation !== generationRef.current) return
         setStatus('Editable workflow loaded from the saved function.')
       } else if (initialApiJson && app.handleFile) {
-        await openApiWorkflowJsonFileInComfyEditor(app, initialApiJson)
+        await openApiWorkflowJsonFileInComfyEditor(app, initialApiJson, 'Infinity API Workflow.json', frameWindow ?? undefined)
         if (generation !== generationRef.current) return
         setStatus('API workflow loaded because no editable UI workflow is stored.')
       } else if (initialApiJson && app.loadApiJson) {
@@ -1646,30 +1714,51 @@ export function ComfyWorkflowEditorDialog({
     if (open) void initializeFrame()
   }
 
+  const saveComfyEditorApp = async (app: NonNullable<ComfyFrameWindow['app']>, captureWindow?: ComfyFrameWindow) => {
+    if (!endpoint) return
+    const uiJson = await exportUiWorkflowFromComfyEditor(app)
+    const rawJson = await exportApiWorkflowFromComfyEditor(app, captureWindow)
+    loadedWorkflowRef.current = {
+      generation: generationRef.current,
+      inputSignature: comfyWorkflowInputSignature(uiJson, rawJson),
+    }
+    onSave({
+      rawJson,
+      uiJson,
+      editor: {
+        kind: 'comfyui_embedded',
+        endpointId: endpoint.id,
+        baseUrl: endpoint.baseUrl,
+        savedAt: new Date().toISOString(),
+      },
+    })
+    setError(undefined)
+    onClose()
+  }
+
   const saveFromComfy = async () => {
     if (!frameRef.current || !endpoint || !frameReady) return
     setSaving(true)
     try {
       const app = await waitForComfyFrameApp(frameRef.current)
       const frameWindow = frameRef.current.contentWindow as ComfyFrameWindow | null
-      const uiJson = await exportUiWorkflowFromComfyEditor(app)
-      const rawJson = await exportApiWorkflowFromComfyEditor(app, frameWindow ?? undefined)
-      loadedWorkflowRef.current = {
-        generation: generationRef.current,
-        inputSignature: comfyWorkflowInputSignature(uiJson, rawJson),
-      }
-      onSave({
-        rawJson,
-        uiJson,
-        editor: {
-          kind: 'comfyui_embedded',
-          endpointId: endpoint.id,
-          baseUrl: endpoint.baseUrl,
-          savedAt: new Date().toISOString(),
-        },
-      })
-      setError(undefined)
-      onClose()
+      await saveComfyEditorApp(app, frameWindow ?? undefined)
+    } catch (cause) {
+      setPhase('error')
+      setError(cause instanceof Error ? cause.message : 'Failed to export the workflow from ComfyUI.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const saveFromComfyPopup = async () => {
+    const popup = comfyPopup as ComfyFrameWindow | null
+    if (!endpoint || !popup || popup.closed) return
+    setSaving(true)
+    try {
+      const app = popup.app
+      if (!app?.graphToPrompt) throw new Error('ComfyUI editor in the separate window is not ready yet.')
+      await saveComfyEditorApp(app, popup)
     } catch (cause) {
       setPhase('error')
       setError(cause instanceof Error ? cause.message : 'Failed to export the workflow from ComfyUI.')
@@ -1704,11 +1793,24 @@ export function ComfyWorkflowEditorDialog({
             </button>
             <button
               type="button"
-              onClick={() => endpoint && setError(openComfyEditorInBrowser(endpoint))}
+              onClick={() => {
+                if (!endpoint) return
+                const result = openComfyEditorInBrowser(endpoint, initialUiJson)
+                setError(result.error)
+                setComfyPopup(result.popup ?? null)
+              }}
               disabled={!endpoint}
             >
               <ExternalLink size={14} />
               Open separately
+            </button>
+            <button
+              type="button"
+              onClick={saveFromComfyPopup}
+              disabled={saving || !comfyPopup || comfyPopup.closed}
+            >
+              <Download size={14} />
+              Save from window
             </button>
             <button type="button" className="primary-action" onClick={saveFromComfy} disabled={!frameReady || saving}>
               {saving ? 'Saving…' : 'Save from ComfyUI'}

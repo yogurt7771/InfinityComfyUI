@@ -3,6 +3,7 @@ export const COMFY_PROXY_TOKEN_PARAM = '__infinity_comfy_token'
 export const COMFY_PROXY_LOGIN_MESSAGE = 'infinity-comfy-login'
 export const COMFY_PROXY_LOGIN_READY_MESSAGE = `${COMFY_PROXY_LOGIN_MESSAGE}-ready`
 export const COMFY_PROXY_LOGIN_HANDLED_MESSAGE = `${COMFY_PROXY_LOGIN_MESSAGE}-handled`
+export const COMFY_PROXY_APP_READY_MESSAGE = 'infinity-comfy-app-ready'
 
 export type ComfyProxyUrlOptions = {
   bearerToken?: string

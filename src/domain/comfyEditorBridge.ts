@@ -133,9 +133,11 @@ export async function openWorkflowJsonFileInComfyEditor(
   app: Pick<ComfyEditorAppLike, 'handleFile'>,
   workflow: ComfyWorkflow | ComfyUiWorkflow,
   filename = 'Infinity Workflow.json',
+  fileWindow?: { File: typeof File },
 ) {
   if (!app.handleFile) throw new Error('ComfyUI file open handler is not available')
-  const file = new File([JSON.stringify(workflow, null, 2)], filename, { type: 'application/json' })
+  const FileConstructor = fileWindow?.File ?? File
+  const file = new FileConstructor([JSON.stringify(workflow, null, 2)], filename, { type: 'application/json' })
   await app.handleFile(file)
 }
 
@@ -143,8 +145,9 @@ export async function openApiWorkflowJsonFileInComfyEditor(
   app: ComfyEditorAppLike,
   workflow: ComfyWorkflow,
   filename = 'Infinity API Workflow.json',
+  fileWindow?: { File: typeof File },
 ) {
-  await openWorkflowJsonFileInComfyEditor(app, workflow, filename)
+  await openWorkflowJsonFileInComfyEditor(app, workflow, filename, fileWindow)
   restoreApiWorkflowLinks(app, workflow)
 }
 

@@ -102,6 +102,34 @@ describe('ComfyUI editor bridge', () => {
     await expect(file.text()).resolves.toBe(JSON.stringify(uiWorkflow, null, 2))
   })
 
+  it('constructs the workflow File inside the editor frame realm when a frame window is given', async () => {
+    const handleFile = vi.fn().mockResolvedValue(undefined)
+    class FrameFile {
+      parts: unknown[]
+      name: string
+      options?: { type?: string }
+      constructor(parts: unknown[], name: string, options?: { type?: string }) {
+        this.parts = parts
+        this.name = name
+        this.options = options
+      }
+    }
+
+    await openWorkflowJsonFileInComfyEditor(
+      { handleFile },
+      { nodes: [] },
+      'Infinity Workflow.json',
+      { File: FrameFile as unknown as typeof File },
+    )
+
+    expect(handleFile).toHaveBeenCalledTimes(1)
+    const file = handleFile.mock.calls[0]?.[0] as FrameFile
+    expect(file).toBeInstanceOf(FrameFile)
+    expect(file).not.toBeInstanceOf(File)
+    expect(file.name).toBe('Infinity Workflow.json')
+    expect(file.options?.type).toBe('application/json')
+  })
+
   it('restores links for numeric API workflow node ids after ComfyUI loadApiJson drops them', () => {
     const source = { id: 1, connect: vi.fn() }
     const target = { id: 2, inputs: [{ name: 'model' }] }

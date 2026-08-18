@@ -315,6 +315,23 @@ function scriptSafeJson(value) {
   return JSON.stringify(value).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
 }
 
+function comfyProxyServiceWorkerScript(proxyBase) {
+  return `const proxyBase = ${scriptSafeJson(proxyBase)};
+const proxyTokenParam = ${scriptSafeJson(COMFY_PROXY_TOKEN_PARAM)};
+const proxyToken = new URL(self.location.href).searchParams.get(proxyTokenParam) || '';
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
+self.addEventListener('fetch', (event) => {
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith(proxyBase)) return;
+  const rewritten = new URL(proxyBase + url.pathname.replace(/^\\/+/, '') + url.search, self.location.origin);
+  if (proxyToken && !rewritten.searchParams.has(proxyTokenParam)) rewritten.searchParams.set(proxyTokenParam, proxyToken);
+  event.respondWith(fetch(new Request(rewritten.toString(), event.request)));
+});
+`
+}
+
 function comfyProxyBridge(proxyBase, targetBase, bearerToken) {
   return `<script>
 (() => {
@@ -373,6 +390,31 @@ function comfyProxyBridge(proxyBase, targetBase, bearerToken) {
     if (event.data?.type !== 'infinity-comfy-login') return;
     submitInfinityLogin(event.data.password);
   });
+  let infinityAppReadyAnnounced = false;
+  const infinityAppReadyTimer = window.setInterval(() => {
+    if (infinityAppReadyAnnounced) return;
+    if (!window.app?.vueAppReady || !window.app?.graph) return;
+    infinityAppReadyAnnounced = true;
+    window.clearInterval(infinityAppReadyTimer);
+    window.setTimeout(() => {
+      infinityLoginSource()?.postMessage({ type: 'infinity-comfy-app-ready' }, location.origin);
+    }, 500);
+  }, 250);
+  window.setTimeout(() => window.clearInterval(infinityAppReadyTimer), 120000);
+  if ('serviceWorker' in navigator) {
+    const infinitySwToken = proxyAuthParams.get(proxyTokenParam) || '';
+    const infinitySwUrl =
+      proxyBase + '__infinity_sw.js' + (infinitySwToken ? '?' + proxyTokenParam + '=' + encodeURIComponent(infinitySwToken) : '');
+    navigator.serviceWorker.register(infinitySwUrl, { scope: proxyBase }).catch(() => {});
+    if (!navigator.serviceWorker.controller) {
+      const infinitySwReloadKey = 'infinity-comfy-sw:' + proxyBase;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (sessionStorage.getItem(infinitySwReloadKey)) return;
+        sessionStorage.setItem(infinitySwReloadKey, '1');
+        location.reload();
+      });
+    }
+  }
   const withProxyAuth = (value) => {
     try {
       const parsed = new URL(value, location.href);
@@ -555,6 +597,13 @@ async function handleComfyProxy(request, response) {
       return
     }
     const { requestUrl, targetPath, targetBase, proxyBase } = parts
+    if (targetPath === '/__infinity_sw.js') {
+      response.statusCode = 200
+      response.setHeader('content-type', 'text/javascript; charset=utf-8')
+      response.setHeader('cache-control', 'no-store')
+      response.end(comfyProxyServiceWorkerScript(proxyBase))
+      return
+    }
     const targetUrl = proxiedTargetUrl(allowedComfyProxyTargetUrl(targetBase, targetPath))
     targetUrl.search = requestUrl.search
     targetUrl.searchParams.delete(COMFY_PROXY_TOKEN_PARAM)
