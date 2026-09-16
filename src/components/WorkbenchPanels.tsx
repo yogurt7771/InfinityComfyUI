@@ -1361,7 +1361,9 @@ export const openComfyEditorInBrowser = (endpoint: ComfyEndpointConfig, workflow
       void (async () => {
         try {
           const app = await waitForComfyPopupApp(popup)
-          await loadUiWorkflowIntoComfyEditor(app, popup as unknown as ComfyFrameWindow, workflow)
+          await loadUiWorkflowIntoComfyEditor(app, popup as unknown as ComfyFrameWindow, workflow, {
+            isCurrent: () => !popup.closed,
+          })
         } catch {
           // The separate window may be closed or still loading; the embedded editor remains the source of truth.
         }
@@ -1422,7 +1424,7 @@ type ComfyFrameWindow = Window & {
 
 const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
 
-async function waitForComfyEditorApp(resolveWindow: () => ComfyFrameWindow | null, messageSource: unknown, alreadyReady?: () => boolean) {
+async function waitForComfyEditorApp(resolveWindow: () => ComfyFrameWindow | null, messageSource: unknown, alreadyReady?: () => boolean, isCurrent?: () => boolean) {
   let appReadyNotified = false
   const handleMessage = (event: MessageEvent) => {
     if (event.source !== messageSource || event.origin !== window.location.origin) return
@@ -1433,6 +1435,7 @@ async function waitForComfyEditorApp(resolveWindow: () => ComfyFrameWindow | nul
     // 重型 ComfyUI（几十个扩展 + 几十 MB 的 object_info）冷启动可能超过 60 秒，
     // 与代理注入脚本的 120 秒就绪通告窗口对齐。
     for (let attempt = 0; attempt < 800; attempt += 1) {
+      if (isCurrent?.() === false) throw new Error('ComfyUI workflow loading was cancelled')
       const app = resolveWindow()?.app
       if (app?.graphToPrompt && (appReadyNotified || alreadyReady?.())) return app
       await wait(150)
@@ -1445,11 +1448,12 @@ async function waitForComfyEditorApp(resolveWindow: () => ComfyFrameWindow | nul
   }
 }
 
-function waitForComfyFrameApp(frame: HTMLIFrameElement, alreadyReady?: () => boolean) {
+function waitForComfyFrameApp(frame: HTMLIFrameElement, alreadyReady?: () => boolean, isCurrent?: () => boolean) {
   return waitForComfyEditorApp(
     () => frame.contentWindow as ComfyFrameWindow | null,
     frame.contentWindow,
     alreadyReady,
+    isCurrent,
   )
 }
 
@@ -1457,6 +1461,8 @@ function waitForComfyPopupApp(popup: Window) {
   return waitForComfyEditorApp(
     () => (popup.closed ? null : (popup as unknown as ComfyFrameWindow)),
     popup,
+    undefined,
+    () => !popup.closed,
   )
 }
 
@@ -1569,12 +1575,13 @@ export function ComfyWorkflowEditorDialog({
       setError(undefined)
       setPhase('connecting')
       setStatus('Loading the saved workflow through the local ComfyUI proxy…')
-      const app = await waitForComfyFrameApp(frame, () => appReadyRef.current)
+      const isCurrent = () => generation === generationRef.current
+      const app = await waitForComfyFrameApp(frame, () => appReadyRef.current, isCurrent)
       if (generation !== generationRef.current) return
       const frameWindow = frame.contentWindow as ComfyFrameWindow | null
 
       if (initialUiJson && app.handleFile) {
-        const loadResult = await loadUiWorkflowIntoComfyEditor(app, frameWindow, initialUiJson)
+        const loadResult = await loadUiWorkflowIntoComfyEditor(app, frameWindow, initialUiJson, { isCurrent })
         if (generation !== generationRef.current) return
         setStatus(
           loadResult.missingNodeTypes.length > 0
@@ -1641,6 +1648,10 @@ export function ComfyWorkflowEditorDialog({
 
   useEffect(() => {
     if (open) void initializeFrame()
+    return () => {
+      generationRef.current += 1
+      initializingRef.current = undefined
+    }
   }, [initializeFrame, open])
 
   const reloadFrame = () => {

@@ -161,6 +161,26 @@ const uiWorkflowNodeCount = (workflow: ComfyUiWorkflow) => {
   return Array.isArray(nodes) ? nodes.length : undefined
 }
 
+const uiWorkflowSubgraphs = (workflow: ComfyUiWorkflow) => {
+  const definitions = workflow.definitions
+  return plainObject(definitions) && Array.isArray(definitions.subgraphs) ? definitions.subgraphs.filter(plainObject) : []
+}
+
+const uiWorkflowNodeTypes = (workflow: ComfyUiWorkflow) => {
+  const subgraphs = uiWorkflowSubgraphs(workflow)
+  const localTypes = new Set(subgraphs.map((subgraph) => subgraph.id))
+  const types = new Set<string>()
+  for (const graph of [workflow, ...subgraphs]) {
+    if (!plainObject(graph) || !Array.isArray(graph.nodes)) continue
+    for (const node of graph.nodes) {
+      if (plainObject(node) && typeof node.type === 'string' && node.type && !localTypes.has(node.type)) {
+        types.add(node.type)
+      }
+    }
+  }
+  return [...types]
+}
+
 const serializedGraphNodeCount = (graph?: ComfyEditorGraph) => {
   const serialized = graph?.serialize?.() as { nodes?: unknown[] } | undefined
   return Array.isArray(serialized?.nodes) ? serialized.nodes.length : undefined
@@ -196,20 +216,35 @@ export async function loadUiWorkflowIntoComfyEditor(
   },
   frameWindow: (ComfyEditorLiteGraphWindow & { File: typeof File }) | null | undefined,
   workflow: ComfyUiWorkflow,
+  options: { isCurrent?: () => boolean } = {},
 ): Promise<ComfyUiWorkflowLoadResult> {
   const expectedNodeCount = uiWorkflowNodeCount(workflow)
-  // 先等 node defs（object_info）就绪，避免注入出一整片未注册的红节点；
-  // 拿不到 LiteGraph 全局时无法判断，保持直接注入。
-  for (let attempt = 0; attempt < 30; attempt += 1) {
+  const requiredNodeTypes = uiWorkflowNodeTypes(workflow)
+  const localNodeTypes = new Set(uiWorkflowSubgraphs(workflow).map((subgraph) => subgraph.id))
+  const assertCurrent = () => {
+    if (options.isCurrent?.() === false) throw new Error('ComfyUI workflow loading was cancelled')
+  }
+  const missingWorkflowNodeTypes = () => {
     const registry = frameWindow?.LiteGraph?.registered_node_types
-    if (!registry || Object.keys(registry).length > 0) break
+    return registry ? requiredNodeTypes.filter((type) => !(type in registry)) : []
+  }
+  // 内置前端节点会先注册，注册表非空不代表 object_info 已加载。
+  // 等到目标工作流需要的类型都已注册；与编辑器冷启动的 120 秒等待窗口一致。
+  for (let attempt = 0; attempt < 240; attempt += 1) {
+    assertCurrent()
+    if (missingWorkflowNodeTypes().length === 0) break
     await editorBridgeWait(500)
   }
   const retryDelays = [1000, 2000, 3000, 5000, 5000]
   for (let attempt = 0; ; attempt += 1) {
+    assertCurrent()
     await openWorkflowJsonFileInComfyEditor(app, workflow, 'Infinity Workflow.json', frameWindow ?? undefined)
+    assertCurrent()
     const graph = app.graph ?? app.rootGraph ?? app.rootGraphInternal
-    const missingNodeTypes = unregisteredGraphNodeTypes(frameWindow, graph)
+    const missingNodeTypes = [...new Set([
+      ...missingWorkflowNodeTypes(),
+      ...unregisteredGraphNodeTypes(frameWindow, graph).filter((type) => !localNodeTypes.has(type)),
+    ])]
     const countMatches = expectedNodeCount === undefined || serializedGraphNodeCount(graph) === expectedNodeCount
     if (countMatches && missingNodeTypes.length === 0) return { missingNodeTypes: [] }
     if (attempt >= retryDelays.length) {
