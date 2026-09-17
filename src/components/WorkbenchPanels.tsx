@@ -1654,6 +1654,13 @@ export function ComfyWorkflowEditorDialog({
     }
   }, [initializeFrame, open])
 
+  useEffect(() => {
+    if (!open) {
+      appReadyRef.current = false
+      passwordAttemptedRef.current = false
+    }
+  }, [open])
+
   const reloadFrame = () => {
     generationRef.current += 1
     initializingRef.current = undefined
@@ -1813,7 +1820,7 @@ export function ComfyWorkflowEditorDialog({
             </button>
           </div>
         </div>
-        {frameSrc ? (
+        {frameSrc && open ? (
           <div className="comfy-editor-frame-wrap">
             <iframe
               key={`${endpointId ?? 'none'}:${endpointBaseUrl ?? ''}:${frameKey}`}

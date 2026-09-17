@@ -1,3 +1,4 @@
+import { get, set } from 'idb-keyval'
 import type { AssetRecord, MediaResourceValue, ProjectState, Resource } from './types'
 
 export type ProjectAssetFileSource = 'embedded' | 'data_url' | 'comfyui' | 'external_reference'
@@ -93,7 +94,26 @@ export const blobToDataUrl = async (blob: Blob, fallbackMimeType = 'application/
   return `data:${blob.type || fallbackMimeType};base64,${bytesToBase64(bytes)}`
 }
 
+const cachedAssetPrefix = 'infinity-asset:'
+
+export const cacheProjectAssetBlob = async (assetId: string, blob: Blob, fallbackMimeType = 'application/octet-stream') => {
+  if (typeof indexedDB === 'undefined') return blobToDataUrl(blob, fallbackMimeType)
+  const url = `${cachedAssetPrefix}${encodeURIComponent(assetId)}`
+  const storedBlob = blob.type ? blob : blob.slice(0, blob.size, fallbackMimeType)
+  await set(url, storedBlob)
+  return url
+}
+
+export const readCachedProjectAssetBlob = async (url: string) => {
+  if (!url.startsWith(cachedAssetPrefix)) return undefined
+  const blob = await get<Blob>(url)
+  if (!blob) throw new Error('The local project asset is unavailable')
+  return blob
+}
+
 const loadUrlBlob = async (url: string) => {
+  const cachedBlob = await readCachedProjectAssetBlob(url)
+  if (cachedBlob) return cachedBlob
   const dataBlob = dataUrlToBlob(url)
   if (dataBlob) return dataBlob
   const response = await fetch(url)

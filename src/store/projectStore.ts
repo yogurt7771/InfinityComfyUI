@@ -56,7 +56,7 @@ import {
   type LocalTransformOutputValue,
 } from '../domain/localTransforms'
 import { createConfigPackage, createProjectPackage, type ConfigPackage, type FullProjectPackage } from '../domain/projectPackage'
-import { blobToDataUrl } from '../domain/projectAssets'
+import { blobToDataUrl, cacheProjectAssetBlob, readCachedProjectAssetBlob } from '../domain/projectAssets'
 import { randomizeWorkflowSeeds } from '../domain/seed'
 import { selectEndpoint } from '../domain/scheduler'
 import { createGenerationFunctionFromWorkflow, injectWorkflowInputs, workflowPrimitiveInputValue } from '../domain/workflow'
@@ -485,9 +485,9 @@ const compactHistoryProjectAssets = (project: ProjectHistorySnapshot): ProjectHi
 })
 
 const projectHistorySnapshot = (project: ProjectState): ProjectHistorySnapshot => {
-  const snapshot = structuredClone(project)
+  const snapshot = withoutBuiltInProjectFunctions(project)
   delete snapshot.history
-  return compactHistoryProjectAssets(withoutBuiltInProjectFunctions(snapshot) as ProjectHistorySnapshot)
+  return structuredClone(compactHistoryProjectAssets(snapshot as ProjectHistorySnapshot))
 }
 
 const historySnapshotKey = (snapshot: ProjectHistorySnapshot) => JSON.stringify(snapshot)
@@ -1534,6 +1534,8 @@ const dataUrlToBlob = (url: string) => {
 }
 
 const fetchUrlBlob = async (url: string) => {
+  const cachedBlob = await readCachedProjectAssetBlob(url)
+  if (cachedBlob) return cachedBlob
   const dataBlob = dataUrlToBlob(url)
   if (dataBlob) return dataBlob
   const response = await fetch(url)
@@ -1590,13 +1592,16 @@ const persistedComfyFile = async (
   endpoint: ComfyEndpointConfig,
   file: ComfyFileRef,
   fallbackMimeType: string,
+  assetId: string,
 ) => {
   const externalUrl = comfyViewUrl(endpoint, file)
   try {
     const blob = client.viewFile ? await client.viewFile(file) : await fetchUrlBlob(externalUrl)
     const mimeType = blob.type || fallbackMimeType
+    const blobUrl = await cacheProjectAssetBlob(assetId, blob, mimeType)
     return {
-      url: await blobToDataUrl(blob, mimeType),
+      url: blobUrl.startsWith('data:') ? blobUrl : externalUrl,
+      blobUrl,
       mimeType,
       sizeBytes: blob.size,
     }
@@ -2147,13 +2152,13 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             }
 
             const assetId = runtime.idFactory()
-            const persisted = await persistedComfyFile(client, endpoint, file, outputMimeType(output.type, file.filename))
+            const persisted = await persistedComfyFile(client, endpoint, file, outputMimeType(output.type, file.filename), assetId)
             nextAssets[assetId] = {
               id: assetId,
               name: file.filename,
               mimeType: persisted.mimeType,
               sizeBytes: persisted.sizeBytes,
-              blobUrl: persisted.url,
+              blobUrl: persisted.blobUrl ?? persisted.url,
               createdAt: completedAt,
             }
             nextResources[ref.resourceId] = {
@@ -2455,14 +2460,14 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           for (const file of output.files) {
             const assetId = runtime.idFactory()
             const resourceId = runtime.idFactory()
-            const persisted = await persistedComfyFile(client, endpoint, file, outputMimeType(output.type, file.filename))
+            const persisted = await persistedComfyFile(client, endpoint, file, outputMimeType(output.type, file.filename), assetId)
 
             newAssets[assetId] = {
               id: assetId,
               name: file.filename,
               mimeType: persisted.mimeType,
               sizeBytes: persisted.sizeBytes,
-              blobUrl: persisted.url,
+              blobUrl: persisted.blobUrl ?? persisted.url,
               createdAt: runtime.now(),
             }
             newResources[resourceId] = {
@@ -9738,7 +9743,10 @@ const serializeProjectLibrary = (state: ProjectStoreState): ProjectLibraryPackag
   }
 }
 
-const serializedProjectLibraryKey = (state: ProjectStoreState) => JSON.stringify(serializeProjectLibrary(state))
+type ProjectLibrarySaveState = Pick<ProjectStoreState, 'project' | 'projectLibrary'>
+
+const sameProjectLibraryState = (state: ProjectLibrarySaveState, saved?: ProjectLibrarySaveState) =>
+  state.project === saved?.project && state.projectLibrary === saved?.projectLibrary
 
 const loadProjectLibrary = (
   payload: ProjectLibraryPackage | undefined,
@@ -9801,8 +9809,8 @@ const startIndexedDbProjectPersistence = () => {
   let saveTimer: number | undefined
   let loadSettled = false
   let suppressSaveScheduling = false
-  let lastSavedLibraryKey: string | undefined
-  let scheduledLibraryKey: string | undefined
+  let lastSavedLibraryState: ProjectLibrarySaveState | undefined
+  let scheduledLibraryState: ProjectLibrarySaveState | undefined
   let saveInFlight = false
 
   projectStore.setState({ projectPersistenceReady: false })
@@ -9821,26 +9829,24 @@ const startIndexedDbProjectPersistence = () => {
     if (suppressSaveScheduling) return
     if (!loadSettled) return
 
-    const nextLibraryKey = serializedProjectLibraryKey(state)
-    if (nextLibraryKey === lastSavedLibraryKey) return
-    if (saveTimer !== undefined && nextLibraryKey === scheduledLibraryKey) return
+    if (sameProjectLibraryState(state, lastSavedLibraryState)) return
+    if (saveTimer !== undefined && sameProjectLibraryState(state, scheduledLibraryState)) return
 
     if (saveTimer !== undefined) window.clearTimeout(saveTimer)
-    scheduledLibraryKey = nextLibraryKey
+    scheduledLibraryState = state
     saveTimer = window.setTimeout(() => {
       saveTimer = undefined
-      scheduledLibraryKey = undefined
+      scheduledLibraryState = undefined
       runProjectLibrarySave(state)
     }, PROJECT_PERSIST_IDLE_MS)
   }
 
   const saveProjectLibrary = async (state: ProjectStoreState) => {
     const nextLibrary = serializeProjectLibrary(state)
-    const nextLibraryKey = JSON.stringify(nextLibrary)
-    if (nextLibraryKey === lastSavedLibraryKey) return true
+    if (sameProjectLibraryState(state, lastSavedLibraryState)) return true
     try {
       await Promise.all([setIdb(PROJECT_STORAGE_KEY, persistentProjectSnapshot(state.project)), setIdb(PROJECT_LIBRARY_STORAGE_KEY, nextLibrary)])
-      lastSavedLibraryKey = nextLibraryKey
+      lastSavedLibraryState = state
       return true
     } catch {
       return false
@@ -9853,7 +9859,7 @@ const startIndexedDbProjectPersistence = () => {
     void saveProjectLibrary(state).then(() => {
       saveInFlight = false
       const currentState = projectStore.getState()
-      if (serializedProjectLibraryKey(currentState) !== lastSavedLibraryKey) {
+      if (!sameProjectLibraryState(currentState, lastSavedLibraryState)) {
         scheduleSaveProjectLibrary(currentState)
       }
     })
@@ -9864,10 +9870,10 @@ const startIndexedDbProjectPersistence = () => {
     projectStore.getState().failInterruptedRuns()
     applyWithoutSchedulingSave({ projectPersistenceReady: true })
     if (loadSucceeded) {
-      lastSavedLibraryKey = undefined
+      lastSavedLibraryState = undefined
       runProjectLibrarySave(projectStore.getState())
     } else {
-      lastSavedLibraryKey = serializedProjectLibraryKey(projectStore.getState())
+      lastSavedLibraryState = projectStore.getState()
     }
   })
 
@@ -9884,8 +9890,8 @@ const startDesktopProjectPersistence = (storage: DesktopProjectStorage) => {
   let saveTimer: number | undefined
   let loadSettled = false
   let suppressSaveScheduling = false
-  let lastSavedLibraryKey: string | undefined
-  let scheduledLibraryKey: string | undefined
+  let lastSavedLibraryState: ProjectLibrarySaveState | undefined
+  let scheduledLibraryState: ProjectLibrarySaveState | undefined
   let saveInFlight = false
 
   projectStore.setState({ projectPersistenceReady: false })
@@ -9904,27 +9910,25 @@ const startDesktopProjectPersistence = (storage: DesktopProjectStorage) => {
     if (suppressSaveScheduling) return
     if (!loadSettled) return
 
-    const nextLibraryKey = serializedProjectLibraryKey(state)
-    if (nextLibraryKey === lastSavedLibraryKey) return
-    if (saveTimer !== undefined && nextLibraryKey === scheduledLibraryKey) return
+    if (sameProjectLibraryState(state, lastSavedLibraryState)) return
+    if (saveTimer !== undefined && sameProjectLibraryState(state, scheduledLibraryState)) return
 
     if (saveTimer !== undefined) window.clearTimeout(saveTimer)
-    scheduledLibraryKey = nextLibraryKey
+    scheduledLibraryState = state
     saveTimer = window.setTimeout(() => {
       saveTimer = undefined
-      scheduledLibraryKey = undefined
+      scheduledLibraryState = undefined
       runProjectLibrarySave(state)
     }, PROJECT_PERSIST_IDLE_MS)
   }
 
   const saveProjectLibrary = async (state: ProjectStoreState) => {
     const nextLibrary = serializeProjectLibrary(state)
-    const nextLibraryKey = JSON.stringify(nextLibrary)
-    if (nextLibraryKey === lastSavedLibraryKey) return true
+    if (sameProjectLibraryState(state, lastSavedLibraryState)) return true
     try {
       const result = await storage.saveProjectLibrary(nextLibrary)
       if (!result?.ok) return false
-      lastSavedLibraryKey = nextLibraryKey
+      lastSavedLibraryState = state
       return true
     } catch {
       return false
@@ -9937,7 +9941,7 @@ const startDesktopProjectPersistence = (storage: DesktopProjectStorage) => {
     void saveProjectLibrary(state).then(() => {
       saveInFlight = false
       const currentState = projectStore.getState()
-      if (serializedProjectLibraryKey(currentState) !== lastSavedLibraryKey) {
+      if (!sameProjectLibraryState(currentState, lastSavedLibraryState)) {
         scheduleSaveProjectLibrary(currentState)
       }
     })
@@ -9952,15 +9956,15 @@ const startDesktopProjectPersistence = (storage: DesktopProjectStorage) => {
       projectStore.getState().failInterruptedRuns()
       applyWithoutSchedulingSave({ projectPersistenceReady: true })
       if (safeToPersist) {
-        lastSavedLibraryKey = undefined
+        lastSavedLibraryState = undefined
         runProjectLibrarySave(projectStore.getState())
       } else {
-        lastSavedLibraryKey = serializedProjectLibraryKey(projectStore.getState())
+        lastSavedLibraryState = projectStore.getState()
       }
     })
     .catch(() => {
       loadSettled = true
-      lastSavedLibraryKey = serializedProjectLibraryKey(projectStore.getState())
+      lastSavedLibraryState = projectStore.getState()
       applyWithoutSchedulingSave({ projectPersistenceReady: true })
     })
 

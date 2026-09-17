@@ -1525,7 +1525,7 @@ describe('LeftPanel', () => {
     expect(file).toBeInstanceOf(frameWindow.File)
     expect(file.name).toBe('Infinity Workflow.json')
   })
-  it('reloads the workflow every time the editor is reopened without a new app-ready message', async () => {
+  it('releases the closed editor iframe and reloads the workflow after a fresh app-ready message on reopening', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
     const state = panelProject()
     state.comfy.endpoints = [
@@ -1578,11 +1578,27 @@ describe('LeftPanel', () => {
     )
     await waitFor(() => expect(handleFile).toHaveBeenCalledTimes(1), { timeout: 5000 })
 
-    // 用户在 ComfyUI 里叉掉了工作流 tab（iframe 仍然挂载、app 还在），关闭对话框后再次点击 Edit。
     fireEvent.click(screen.getByRole('button', { name: 'Close ComfyUI Workflow Editor' }))
+    expect(screen.queryByTitle(/^ComfyUI editor\b/)).not.toBeInTheDocument()
+    expect(iframe.isConnected).toBe(false)
     fireEvent.click(within(dialog).getByRole('button', { name: 'Edit in ComfyUI' }))
 
-    await waitFor(() => expect(handleFile).toHaveBeenCalledTimes(2), { timeout: 5000 })
+    const reopenedIframe = screen.getByTitle(/^ComfyUI editor\b/) as HTMLIFrameElement
+    expect(reopenedIframe).not.toBe(iframe)
+    const reopenedWindow = reopenedIframe.contentWindow as unknown as { app?: unknown; File: typeof File }
+    const reopenedHandleFile = vi.fn().mockResolvedValue(undefined)
+    reopenedWindow.app = {
+      graphToPrompt: vi.fn().mockResolvedValue({ workflow: { nodes: [] }, output: {} }),
+      handleFile: reopenedHandleFile,
+      graph: { serialize: () => ({ nodes: [{ id: 6 }] }) },
+    }
+    window.dispatchEvent(new MessageEvent('message', {
+      source: reopenedIframe.contentWindow,
+      origin: window.location.origin,
+      data: { type: 'infinity-comfy-app-ready' },
+    }))
+    await waitFor(() => expect(reopenedHandleFile).toHaveBeenCalledTimes(1), { timeout: 5000 })
+    expect(handleFile).toHaveBeenCalledTimes(1)
   })
   it('resets the workflow editor ComfyUI selection when switching functions', () => {
     const state = panelProject()

@@ -2,8 +2,7 @@ import { useState } from 'react'
 import JSZip from 'jszip'
 import { Download, ImagePlus, LayoutGrid, RefreshCcw, XCircle } from 'lucide-react'
 import type { BatchRun, ExecutionTask, Resource } from '../../domain/types'
-import { dataUrlToBlob } from '../../domain/projectAssets'
-import { useProjectStore } from '../../store/projectStore'
+import { projectStore, useProjectStore } from '../../store/projectStore'
 import { ResourcePreview } from '../ResourcePreview'
 import { FullResourcePreviewModal } from '../ResourcePreviewModal'
 
@@ -122,15 +121,12 @@ function BatchRunCard({ batch }: { batch: BatchRun }) {
           if (!resource || typeof value !== 'object' || value === null || !('url' in value) || typeof value.url !== 'string') {
             continue
           }
-          let blob = dataUrlToBlob(value.url)
-          if (!blob) {
-            try {
-              blob = await fetch(value.url).then((response) => response.blob())
-            } catch {
-              continue
-            }
+          let blob: Blob
+          try {
+            blob = await projectStore.getState().fetchResourceBlob(ref.resourceId)
+          } catch {
+            continue
           }
-          if (!blob) continue
           const filename =
             'filename' in value && typeof value.filename === 'string' && value.filename
               ? value.filename
