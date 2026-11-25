@@ -9300,7 +9300,9 @@ body[data-theme='light'] .function-run-dialog .local-action-footer button:not(.p
 
 /* Which output slot a result came from (multi-output runs, batches, removed slots) */
 :is(body[data-theme], body) .resource-output-slot {
+  /* The slot is what tells same-type results apart: keep it whole and let the function name truncate instead. */
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   max-width: 160px;
   min-height: 22px;
@@ -9310,8 +9312,8 @@ body[data-theme='light'] .function-run-dialog .local-action-footer button:not(.p
   border-radius: 999px;
   color: var(--ink);
   background: color-mix(in srgb, var(--teal) 12%, var(--panel));
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
