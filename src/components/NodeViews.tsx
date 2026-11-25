@@ -20,6 +20,7 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react'
+import { describeResultSlot, resultSlotText } from '../domain/resultSlots'
 import { defaultOpenAILlmConfig, isOpenAILlmFunction, mergedOpenAILlmConfig } from '../domain/openaiLlm'
 import { defaultGeminiLlmConfig, isGeminiLlmFunction, mergedGeminiLlmConfig } from '../domain/geminiLlm'
 import { defaultOpenAIImageConfig, isOpenAIImageFunction, mergedOpenAIImageConfig } from '../domain/openaiImage'
@@ -117,6 +118,8 @@ type WorkbenchNodeData = {
   onUpdateFunctionRunCount: (nodeId: string, runCount: number) => void
   onResizeNode?: (nodeId: string, size: { width: number; height: number }) => void
   collapsed?: boolean
+  /** Set on a result whose output slot returned nothing (the run itself succeeded). */
+  outputMissing?: boolean
   onSetNodesCollapsed?: (nodeIds: string[], collapsed: boolean) => void
   onSetGroupCollapsed?: (groupNodeId: string, collapsed: boolean) => void
   onEnterGroup?: (groupNodeId: string) => void
@@ -2174,7 +2177,13 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
   const taskId = resource?.source.taskId ?? nodeData.taskId
   const task = taskId ? nodeData.tasksById?.[taskId] : undefined
   const taskStatus = task?.status
-  const assetStatus = resource?.source.kind === 'function_output' ? taskStatus ?? nodeData.status : undefined
+  // A slot that returned nothing fails on its own even though the run (task) succeeded.
+  const assetStatus =
+    resource?.source.kind === 'function_output'
+      ? nodeData.outputMissing === true && nodeData.status === 'failed'
+        ? 'failed'
+        : taskStatus ?? nodeData.status
+      : undefined
   const showAssetStatus = typeof assetStatus === 'string' && visibleAssetStatuses.has(assetStatus)
   const isAssetActive = typeof assetStatus === 'string' && liveAssetDurationStatuses.has(assetStatus)
   const assetErrorMessage =
@@ -2191,6 +2200,11 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
       task?.functionSnapshot ??
       resource?.metadata?.functionSnapshot
     : undefined
+  const resultSlot = resultSlotText(
+    resource
+      ? describeResultSlot(resource, task, sourceFunctionId ? nodeData.functionsById[sourceFunctionId] : undefined)
+      : undefined,
+  )
   const canRerunAsset = Boolean(
     resource?.source.kind === 'function_output' &&
       task &&
@@ -2346,6 +2360,11 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
           >
             {sourceFunction.name}
           </button>
+        ) : null}
+        {resultSlot ? (
+          <span className="resource-output-slot" aria-label={`Output slot ${resultSlot}`} title={`From output slot ${resultSlot}`}>
+            {resultSlot}
+          </span>
         ) : null}
       </div>
       {resource?.type === 'text' ? (

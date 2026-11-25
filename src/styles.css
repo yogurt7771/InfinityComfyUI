@@ -9297,3 +9297,21 @@ body[data-theme='light'] .function-run-dialog .local-action-footer button:not(.p
   padding: 0 10px;
   font-size: 12px;
 }
+
+/* Which output slot a result came from (multi-output runs, batches, removed slots) */
+:is(body[data-theme], body) .resource-output-slot {
+  display: inline-flex;
+  align-items: center;
+  max-width: 160px;
+  min-height: 22px;
+  padding: 0 8px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--teal) 45%, var(--line));
+  border-radius: 999px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--teal) 12%, var(--panel));
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

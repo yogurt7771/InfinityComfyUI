@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import JSZip from 'jszip'
 import { Download, ImagePlus, LayoutGrid, RefreshCcw, XCircle } from 'lucide-react'
-import type { BatchRun, ExecutionTask, Resource } from '../../domain/types'
+import type { BatchRun, ExecutionTask, GenerationFunction, ProjectState, Resource } from '../../domain/types'
 import { projectStore, useProjectStore } from '../../store/projectStore'
 import { ResourcePreview } from '../ResourcePreview'
 import { FullResourcePreviewModal } from '../ResourcePreviewModal'
@@ -22,6 +22,30 @@ const itemStatusLabel = (status: ExecutionTask['status']) => {
   return '排队中'
 }
 
+type SlotResults = { key: string; label: string; resources: Resource[] }
+
+/** A task's results grouped by output slot, in the function's slot order (not the order ComfyUI returned them). */
+const resultsBySlot = (task: ExecutionTask | undefined, project: ProjectState): SlotResults[] => {
+  if (!task) return []
+  const functionDef: GenerationFunction | undefined = task.functionSnapshot ?? project.functions[task.functionId]
+  const keys = Object.keys(task.outputRefs ?? {})
+  const order = new Map(functionDef?.outputs.map((output, index) => [output.key, index]) ?? [])
+  return keys
+    .sort((left, right) => (order.get(left) ?? keys.length) - (order.get(right) ?? keys.length))
+    .map((key) => {
+      const output = functionDef?.outputs.find((item) => item.key === key)
+      return {
+        key,
+        label: output?.label || key,
+        resources: (task.outputRefs[key] ?? [])
+          .map((ref) => project.resources[ref.resourceId])
+          .filter((resource): resource is Resource => Boolean(resource)),
+      }
+    })
+}
+
+const safePathPart = (value: string) => value.replace(/[\\/:*?"<>|]+/g, '_').trim() || 'output'
+
 function BatchItemCard({ batch, item }: { batch: BatchRun; item: BatchRun['items'][number] }) {
   const project = useProjectStore((state) => state.project)
   const retryBatchItem = useProjectStore((state) => state.retryBatchItem)
@@ -29,10 +53,10 @@ function BatchItemCard({ batch, item }: { batch: BatchRun; item: BatchRun['items
   const [previewResource, setPreviewResource] = useState<Resource | undefined>()
 
   const task = project.tasks[item.taskId]
-  const outputResources = Object.values(task?.outputRefs ?? {})
-    .flat()
-    .map((ref) => project.resources[ref.resourceId])
-    .filter((resource): resource is Resource => Boolean(resource))
+  const slots = resultsBySlot(task, project)
+  const multiSlot = slots.length > 1
+  const outputResources = slots.flatMap((slot) => slot.resources)
+  const slotLabelOf = new Map(slots.flatMap((slot) => slot.resources.map((resource) => [resource.id, slot.label] as const)))
   const terminal = terminalItemStatuses.has(item.status)
 
   return (
@@ -50,7 +74,8 @@ function BatchItemCard({ batch, item }: { batch: BatchRun; item: BatchRun['items
               key={resource.id}
               type="button"
               className="run-output-preview"
-              aria-label={`预览 ${resource.name ?? resource.id}`}
+              aria-label={`预览 ${multiSlot ? `${slotLabelOf.get(resource.id)}: ` : ''}${resource.name ?? resource.id}`}
+              title={multiSlot ? slotLabelOf.get(resource.id) : undefined}
               onClick={() => setPreviewResource(resource)}
             >
               <ResourcePreview resource={resource} />
@@ -113,28 +138,34 @@ function BatchRunCard({ batch }: { batch: BatchRun }) {
       const usedPaths = new Set<string>()
       for (const item of batch.items) {
         if (item.status !== 'succeeded') continue
-        const task = project.tasks[item.taskId]
-        const refs = Object.values(task?.outputRefs ?? {}).flat()
-        for (const ref of refs) {
-          const resource = project.resources[ref.resourceId]
-          const value = resource?.value
-          if (!resource || typeof value !== 'object' || value === null || !('url' in value) || typeof value.url !== 'string') {
-            continue
+        const slots = resultsBySlot(project.tasks[item.taskId], project)
+        for (const slot of slots) {
+          // Several output slots: one folder per slot, so a mask and a final image of the same type stay apart.
+          const folder = slots.length > 1 ? `${item.stem}/${safePathPart(slot.label)}` : item.stem
+          for (const [index, resource] of slot.resources.entries()) {
+            const value = resource.value
+            let filename: string
+            let content: Blob | string
+            if (resource.type === 'text' && typeof value === 'string') {
+              filename = `${safePathPart(slot.label)}${slot.resources.length > 1 ? `-${index + 1}` : ''}.txt`
+              content = value
+            } else {
+              if (typeof value !== 'object' || value === null || !('url' in value) || typeof value.url !== 'string') continue
+              try {
+                content = await projectStore.getState().fetchResourceBlob(resource.id)
+              } catch {
+                continue
+              }
+              filename =
+                'filename' in value && typeof value.filename === 'string' && value.filename
+                  ? value.filename
+                  : (resource.name ?? resource.id)
+            }
+            let path = `${folder}/${filename}`
+            for (let dedup = 2; usedPaths.has(path); dedup += 1) path = `${folder}/${dedup}-${filename}`
+            usedPaths.add(path)
+            zip.file(path, content)
           }
-          let blob: Blob
-          try {
-            blob = await projectStore.getState().fetchResourceBlob(ref.resourceId)
-          } catch {
-            continue
-          }
-          const filename =
-            'filename' in value && typeof value.filename === 'string' && value.filename
-              ? value.filename
-              : (resource.name ?? ref.resourceId)
-          let path = `${item.stem}/${filename}`
-          for (let dedup = 2; usedPaths.has(path); dedup += 1) path = `${item.stem}/${dedup}-${filename}`
-          usedPaths.add(path)
-          zip.file(path, blob)
         }
       }
       if (usedPaths.size === 0) return

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Edge } from '@xyflow/react'
 import {
@@ -1368,6 +1368,94 @@ describe('CanvasWorkspace', () => {
     expect(within(dialog).getByRole('button', { name: 'Edit workflow in ComfyUI' })).toBeEnabled()
     expect(within(dialog).getByRole('button', { name: 'Run and replace current output' })).toBeInTheDocument()
     expect(dialog).not.toHaveTextContent('Decoy Workflow')
+  })
+
+  it('tags each result with its output slot and batch position, and compares the same slot of two results', async () => {
+    const now = '2026-06-25T00:00:00.000Z'
+    const slotFunction: GenerationFunction = {
+      id: 'fn_slots',
+      name: 'Fox Render',
+      workflow: { format: 'comfyui_api_json', rawJson: { '9': { class_type: 'SaveImage', inputs: {} }, '12': { class_type: 'PreviewImage', inputs: {} } } },
+      inputs: [],
+      outputs: [
+        { key: 'image', label: 'Final', type: 'image', bind: { nodeId: '9', nodeTitle: 'Save' }, extract: { source: 'history', multiple: true } },
+        { key: 'image_2', label: 'Mask', type: 'image', bind: { nodeId: '12', nodeTitle: 'Preview' }, extract: { source: 'history', multiple: true } },
+      ],
+      createdAt: now,
+      updatedAt: now,
+    }
+    const result = (id: string, outputKey: string): Resource => ({
+      ...imageResource,
+      id,
+      name: `${id}.png`,
+      source: { kind: 'function_output', taskId: 'task_slots', functionNodeId: 'task_slots', outputKey },
+      metadata: { workflowFunctionId: 'fn_slots', functionSnapshot: slotFunction, createdAt: now },
+    })
+    const node = (id: string, x: number): CanvasNode => ({
+      id: `node_${id}`,
+      type: 'resource',
+      position: { x, y: 0 },
+      data: { resourceId: id, resourceType: 'image' },
+    })
+    projectStore.setState({
+      project: {
+        ...originalProject,
+        project: { ...originalProject.project, id: 'project_multi_slot' },
+        functions: { ...originalProject.functions, fn_slots: slotFunction },
+        canvas: { nodes: [node('res_final', 0), node('res_final_b', 0), node('res_mask', 400)], edges: [], viewport: { x: 0, y: 0, zoom: 1 } },
+        resources: { res_final: result('res_final', 'image'), res_final_b: result('res_final_b', 'image'), res_mask: result('res_mask', 'image_2') },
+        tasks: {
+          task_slots: {
+            id: 'task_slots',
+            functionNodeId: 'task_slots',
+            functionId: 'fn_slots',
+            runIndex: 1,
+            runTotal: 1,
+            status: 'succeeded',
+            inputRefs: {},
+            inputSnapshot: {},
+            paramsSnapshot: {},
+            workflowTemplateSnapshot: {},
+            compiledWorkflowSnapshot: {},
+            seedPatchLog: [],
+            outputRefs: {
+              image: [{ resourceId: 'res_final', type: 'image' }, { resourceId: 'res_final_b', type: 'image' }],
+              image_2: [{ resourceId: 'res_mask', type: 'image' }],
+            },
+            createdAt: now,
+            updatedAt: now,
+            completedAt: now,
+          },
+        } as unknown as ProjectState['tasks'],
+      },
+      selectedNodeId: undefined,
+      selectedNodeIds: [],
+    } as Partial<ReturnType<typeof projectStore.getState>>)
+
+    const { container } = render(<CanvasWorkspace />)
+    const slotTag = (resourceId: string) =>
+      container.querySelector(`.react-flow__node[data-id="node_${resourceId}"] .resource-output-slot`)?.textContent
+    // Same type, told apart by slot; one slot's batch numbered within that slot.
+    await waitFor(() => expect(slotTag('res_final')).toBe('Final 1/2'))
+    expect(slotTag('res_final_b')).toBe('Final 2/2')
+    expect(slotTag('res_mask')).toBe('Mask')
+
+    // Renaming the slot relabels its old results; disabling it keeps them, marked as removed.
+    act(() => {
+      projectStore.getState().updateFunction('fn_slots', {
+        outputs: [{ ...slotFunction.outputs[0]!, label: 'Beauty' }],
+      })
+    })
+    await waitFor(() => expect(slotTag('res_final')).toBe('Beauty 1/2'))
+    expect(slotTag('res_mask')).toBe('Mask (removed)')
+
+    act(() => {
+      projectStore.setState({ selectedNodeId: 'node_res_final', selectedNodeIds: ['node_res_final', 'node_res_mask'] } as Partial<
+        ReturnType<typeof projectStore.getState>
+      >)
+    })
+    const ribbon = await screen.findByRole('toolbar', { name: 'Selection quick actions' })
+    expect(within(ribbon).getByRole('button', { name: 'Compare selected runs' })).toBeInTheDocument()
   })
 
   it('opens the workflow behind a selected result in ComfyUI from the ribbon, with its rerun dialog underneath', async () => {

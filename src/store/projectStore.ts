@@ -1133,6 +1133,24 @@ const nonOverlappingNodePosition = (
   }
 }
 
+/** Under `anchor` in the same column (first free spot going down); a slot's batch results stay in its column. */
+const positionBelowNode = (
+  existingNodes: CanvasNode[],
+  functions: Record<string, GenerationFunction>,
+  anchor: CanvasNode | undefined,
+  fallback: { x: number; y: number },
+  size: { width: number; height: number },
+) => {
+  if (!anchor) return nonOverlappingNodePosition(existingNodes, functions, fallback, size)
+  const existingRects = existingNodes.map((node) => nodeRect(node.position, canvasNodeEstimatedSize(node, functions)))
+  const top = anchor.position.y + canvasNodeEstimatedSize(anchor, functions).height + 24
+  for (let row = 0; row < 48; row += 1) {
+    const candidate = { x: anchor.position.x, y: top + row * NODE_PLACEMENT_STEP_Y }
+    if (!existingRects.some((rect) => rectsOverlap(nodeRect(candidate, size), rect))) return candidate
+  }
+  return nonOverlappingNodePosition(existingNodes, functions, fallback, size)
+}
+
 const markNewCanvasNode = (node: CanvasNode, now: string): CanvasNode => ({
   ...node,
   data: {
@@ -2188,9 +2206,26 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         const nextAssets: ProjectState['assets'] = {}
         const nextOutputRefs: Record<string, ResourceRef[]> = {}
         const extraNodes: CanvasNode[] = []
+        const emptySlotMessages: Record<string, string> = {}
+        const resultNodeFor = (resourceId: string | undefined) =>
+          resourceId
+            ? [...get().project.canvas.nodes, ...extraNodes].find(
+                (node) => node.type === 'resource' && node.data.resourceId === resourceId,
+              )
+            : undefined
 
         for (const [outputIndex, output] of outputs.entries()) {
           const refs = item.outputRefs[output.key] ? [...item.outputRefs[output.key]] : []
+          const slotLabel = item.functionDef.outputs.find((def) => def.key === output.key)?.label || output.key
+          // More files than placeholders = one slot returned a batch: stack them under that slot's first result.
+          const batchPosition = (valueIndex: number) =>
+            positionBelowNode(
+              [...get().project.canvas.nodes, ...extraNodes],
+              get().project.functions,
+              resultNodeFor(refs[valueIndex - 1]?.resourceId),
+              commandOutputPosition(item.position, item.runIndex - 1, outputIndex),
+              { width: 230, height: 180 },
+            )
           let valueIndex = 0
 
           for (const file of output.files) {
@@ -2208,12 +2243,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
                   {
                     id: resourceNodeId(resourceId),
                     type: 'resource',
-                    position: nonOverlappingNodePosition(
-                      [...get().project.canvas.nodes, ...extraNodes],
-                      get().project.functions,
-                      commandOutputPosition(item.position, item.runIndex - 1, outputIndex + valueIndex),
-                      { width: 230, height: 180 },
-                    ),
+                    position: batchPosition(valueIndex),
                     data: {
                       resourceId,
                       resourceType: output.type,
@@ -2270,6 +2300,10 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
           for (const text of output.texts ?? []) {
             let ref = refs[valueIndex]
+            if (ref && ref.type !== 'text') {
+              ref = { ...ref, type: 'text' }
+              refs[valueIndex] = ref
+            }
             if (!ref) {
               const resourceId = runtime.idFactory()
               ref = { resourceId, type: 'text' }
@@ -2279,12 +2313,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
                   {
                     id: resourceNodeId(resourceId),
                     type: 'resource',
-                    position: nonOverlappingNodePosition(
-                      [...get().project.canvas.nodes, ...extraNodes],
-                      get().project.functions,
-                      commandOutputPosition(item.position, item.runIndex - 1, outputIndex + valueIndex),
-                      { width: 230, height: 180 },
-                    ),
+                    position: batchPosition(valueIndex),
                     data: {
                       resourceId,
                       resourceType: 'text',
@@ -2304,7 +2333,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             nextResources[ref.resourceId] = {
               id: ref.resourceId,
               type: 'text',
-              name: output.key,
+              name: slotLabel,
               value: text,
               source: { kind: 'function_output', functionNodeId: item.taskId, taskId: item.taskId, outputKey: output.key },
               metadata: {
@@ -2317,6 +2346,10 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             valueIndex += 1
           }
 
+          // The slot's node returned nothing: say so on its result instead of showing an empty success.
+          if (valueIndex === 0 && refs[0]) {
+            emptySlotMessages[refs[0].resourceId] = `Output "${slotLabel}" returned nothing from ComfyUI.`
+          }
           nextOutputRefs[output.key] = refs
         }
 
@@ -2354,7 +2387,19 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
                           completedAt,
                         },
                       }
-                    : node,
+                    : emptySlotMessages[String(node.data.resourceId)]
+                      ? {
+                          ...node,
+                          data: {
+                            ...node.data,
+                            endpointId: endpoint.id,
+                            status: 'failed',
+                            outputMissing: true,
+                            error: { message: emptySlotMessages[String(node.data.resourceId)]! },
+                            completedAt,
+                          },
+                        }
+                      : node,
                 ),
                 ...extraNodes,
               ],
@@ -6257,10 +6302,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         options?.replace?.resourceId && state.project.resources[options.replace.resourceId]
           ? options.replace.resourceId
           : undefined
+      // A result is only replaced by the same slot. If that slot was disabled, the old result stays as it is and the
+      // run adds new results; the one exception is a repaired legacy text "Result" output, which becomes the first slot.
       const replaceOutputKey =
         replaceResourceId && options?.replace?.outputKey && functionDef.outputs.some((output) => output.key === options.replace?.outputKey)
           ? options.replace.outputKey
-          : replaceResourceId
+          : replaceResourceId && functionDef !== storedFunctionDef
             ? functionDef.outputs[0]?.key
             : undefined
       let replacementConsumed = false

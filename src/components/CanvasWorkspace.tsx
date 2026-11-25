@@ -115,6 +115,7 @@ import {
 } from '../domain/workflow'
 import { useProjectStore } from '../store/projectStore'
 import { useComfyNodeTypes } from './useComfyNodeTypes'
+import { compareImagePair } from '../domain/resultSlots'
 import { shouldIgnoreCanvasShortcut } from './canvasKeyboard'
 import { buildFlowNodeRenderIndex, flowNodeRenderDependencies, stabilizeFlowNodes } from './canvasFlowNodes'
 import { partitionRunInputs } from './functionRunInputs'
@@ -812,19 +813,6 @@ function LocalQuickActionIcon({ kind }: { kind?: string }) {
   if (kind === 'video_info') return <Video aria-hidden="true" size={14} />
   if (kind === 'audio_info') return <Volume2 aria-hidden="true" size={14} />
   return <Info aria-hidden="true" size={14} />
-}
-
-const resultImageResource = (node: CanvasNode | undefined, resourcesById: Record<string, Resource>) => {
-  if (!node || node.type !== 'result_group' || !Array.isArray(node.data.resources)) return undefined
-
-  for (const ref of node.data.resources) {
-    if (typeof ref !== 'object' || ref === null || !('resourceId' in ref)) continue
-    const resourceId = String((ref as { resourceId: unknown }).resourceId)
-    const resource = resourcesById[resourceId]
-    if (resource?.type === 'image' && mediaValue(resource)?.url) return resource
-  }
-
-  return undefined
 }
 
 const storedNodeSize = (node: CanvasNode) => {
@@ -2792,9 +2780,8 @@ function CanvasSurface() {
     const [leftNodeId, rightNodeId] = activeSelectedNodeIds
     const leftNode = project.canvas.nodes.find((node) => node.id === leftNodeId)
     const rightNode = project.canvas.nodes.find((node) => node.id === rightNodeId)
-    const left = resultImageResource(leftNode, project.resources)
-    const right = resultImageResource(rightNode, project.resources)
-    return left && right ? { left, right } : undefined
+    // Two result nodes (or result groups) of image runs; multi-slot runs compare the same slot with itself.
+    return compareImagePair(leftNode, rightNode, project.resources)
   }, [activeSelectedNodeIds, project.canvas.nodes, project.resources])
 
   const [nodes, setNodes] = useNodesState(flowNodes)
