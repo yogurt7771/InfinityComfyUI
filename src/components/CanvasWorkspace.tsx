@@ -97,6 +97,7 @@ import {
 } from '../domain/workflow'
 import { useProjectStore } from '../store/projectStore'
 import { shouldIgnoreCanvasShortcut } from './canvasKeyboard'
+import { buildFlowNodeRenderIndex, flowNodeRenderDependencies, stabilizeFlowNodes } from './canvasFlowNodes'
 import type {
   CanvasNode,
   ExecutionTask,
@@ -549,24 +550,13 @@ const applyStableNodeChanges = (changes: NodeChange[], current: Node[]) => {
   return sameLocalFlowNodeState(current, next) ? current : next
 }
 
-const sameShallowNodeData = (left: Node['data'], right: Node['data']) => {
-  if (left === right) return true
-  const leftKeys = Object.keys(left)
-  const rightKeys = Object.keys(right)
-  return leftKeys.length === rightKeys.length && leftKeys.every((key) => Object.is(left[key], right[key]))
-}
-
-export const stabilizeFlowNodeData = (previous: Node[], next: Node[]) => {
-  if (previous.length === 0 || next.length === 0) return next
-  const previousById = new Map(previous.map((node) => [node.id, node]))
-  let reusedData = false
-  const stabilized = next.map((node) => {
-    const prior = previousById.get(node.id)
-    if (!prior || !sameShallowNodeData(prior.data, node.data) || prior.data === node.data) return node
-    reusedData = true
-    return { ...node, data: prior.data }
-  })
-  return reusedData ? stabilized : next
+// Keeps a callback's identity stable while always calling its latest version.
+function useStableCallback<Args extends unknown[], Result>(callback: (...args: Args) => Result) {
+  const latest = useRef(callback)
+  useLayoutEffect(() => {
+    latest.current = callback
+  }, [callback])
+  return useCallback((...args: Args) => latest.current(...args), [])
 }
 
 const selectionGroupChildNodeIds = (node: SelectionHighlightNodeLike, nodeIds: Set<string>) =>
@@ -2293,7 +2283,7 @@ function CanvasSurface() {
     [groupChildNodeIdsById],
   )
 
-  const openFunctionRunForResource = useCallback(
+  const openFunctionRunForResource = useStableCallback(
     (resourceId: string) => {
       const resource = project.resources[resourceId]
       const taskId = resource?.source.taskId
@@ -2331,17 +2321,9 @@ function CanvasSurface() {
         },
       })
     },
-    [
-      flowNodeLayoutContext,
-      openFunctionRunDialog,
-      project.canvas.nodes,
-      project.functions,
-      project.resources,
-      project.tasks,
-    ],
   )
 
-  const rerunResource = useCallback(
+  const rerunResource = useStableCallback(
     (resourceId: string) => {
       const resource = project.resources[resourceId]
       const taskId = resource?.source.taskId
@@ -2388,15 +2370,6 @@ function CanvasSurface() {
       }
       void runTemporaryFunctionAtPosition(functionDef, inputValues, position, 1, options)
     },
-    [
-      project.canvas.nodes,
-      project.functions,
-      project.resources,
-      project.tasks,
-      rerunResultNode,
-      runFunctionAtPosition,
-      runTemporaryFunctionAtPosition,
-    ],
   )
 
   useEffect(() => {
@@ -2421,6 +2394,7 @@ function CanvasSurface() {
     return () => window.removeEventListener('infinity-focus-node', focusNode)
   }, [project.canvas.nodes, setCenter])
 
+  const flowNodeRenderIndex = useMemo(() => buildFlowNodeRenderIndex(project.resources), [project.resources])
   const flowNodes = useMemo<Node[]>(() => {
     return visibleNodes.map((node) => ({
         id: node.id,
@@ -2440,6 +2414,12 @@ function CanvasSurface() {
         data: {
           ...node.data,
           nodeReferences: nodeReferenceMap[node.id] ?? EMPTY_NODE_REFERENCES,
+          renderDependencies: flowNodeRenderDependencies(
+            node,
+            { resources: project.resources, tasks: project.tasks, functions: project.functions },
+            nodeReferenceMap[node.id] ?? EMPTY_NODE_REFERENCES,
+            flowNodeRenderIndex,
+          ),
           resourcesById: project.resources,
           functionsById: project.functions,
           tasksById: project.tasks,
@@ -2471,6 +2451,7 @@ function CanvasSurface() {
       deleteNode,
       focusCanvasNode,
       flowNodeLayoutContext,
+      flowNodeRenderIndex,
       zIndexByNodeId,
       nodeReferenceMap,
       openFunctionRunForResource,
@@ -2527,7 +2508,7 @@ function CanvasSurface() {
 
   useEffect(() => {
     if (selectionBoxActive.current) return
-    setNodes((current) => stabilizeFlowNodeData(current, flowNodes))
+    setNodes((current) => stabilizeFlowNodes(current, flowNodes))
   }, [flowNodes, setNodes])
 
   useEffect(() => {
@@ -2886,7 +2867,7 @@ function CanvasSurface() {
     return () => window.removeEventListener('infinity-trace-node', handleTraceNode)
   }, [expandTraceHighlightForNode])
 
-  const handleSelectionChange = useCallback<OnSelectionChangeFunc>(
+  const applyFlowSelectionChange = useCallback<OnSelectionChangeFunc>(
     ({ nodes: changedNodes, edges: changedEdges }) => {
       const changedNodeIds = expandGroupSelectionIds(changedNodes.map((node) => node.id))
       if (selectionBoxActive.current) {
@@ -2956,6 +2937,10 @@ function CanvasSurface() {
       visibleNodes,
     ],
   )
+  // React Flow re-runs its selection listener whenever the onSelectionChange identity changes, replaying
+  // its not-yet-synced selection. A changing identity therefore wrote stale selections back into the store
+  // after every external selection change (A -> B -> A -> ...), so the handler passed to React Flow is stable.
+  const handleSelectionChange: OnSelectionChangeFunc = useStableCallback(applyFlowSelectionChange)
 
   const handleNodesChange = useCallback(
     (changes: NodeChange[]) => {
@@ -3766,10 +3751,10 @@ function CanvasSurface() {
     return false
   }
 
-  const eventHitsCanvasNode = (event: ReactMouseEvent, target: HTMLElement | null) =>
+  const eventHitsCanvasNode = (event: ReactMouseEvent, target: Element | null) =>
     Boolean(target?.closest('.react-flow__node')) || pointInsideCanvasNode(event.clientX, event.clientY)
 
-  const eventTargetsSelectedGroupBlank = (event: ReactMouseEvent, target: HTMLElement | null) => {
+  const eventTargetsSelectedGroupBlank = (event: ReactMouseEvent, target: Element | null) => {
     const targetNode = target?.closest('.react-flow__node') as HTMLElement | null
     const targetSelectedGroupNode = target?.closest('.react-flow__node-group.selected') as HTMLElement | null
     const targetIsSelectedGroupNode =
@@ -4121,6 +4106,13 @@ function CanvasSurface() {
     if (inputPickMode) return
     clearCanvasSelection()
   }, [clearCanvasSelection, inputPickMode])
+  // React Flow hands these to every NodeWrapper/EdgeWrapper; stable identities keep a project change from
+  // re-rendering every wrapper on the canvas.
+  const onNodeClick: NodeMouseHandler = useStableCallback(handleNodeClick)
+  const onNodeDoubleClick: NodeMouseHandler = useStableCallback(handleNodeDoubleClick)
+  const onNodeContextMenu: NodeMouseHandler = useStableCallback(handleNodeContextMenu)
+  const onEdgeClick: EdgeMouseHandler = useStableCallback(handleEdgeClick)
+
 
   return (
     <section
@@ -4130,7 +4122,7 @@ function CanvasSurface() {
       onClickCapture={(event) => {
         handleHandleClick(event)
         if (event.defaultPrevented || inputPickMode) return
-        const target = event.target instanceof HTMLElement ? event.target : null
+        const target = event.target instanceof Element ? event.target : null
         if (pointerMovedSinceCanvasMouseDown(event)) return
         if (!eventTargetsSelectedGroupBlank(event, target)) return
         event.preventDefault()
@@ -4145,7 +4137,8 @@ function CanvasSurface() {
         if (inputPickMode) return
         canvasPointerDown.current =
           event.button === 0 ? { x: event.clientX, y: event.clientY } : undefined
-        const target = event.target instanceof HTMLElement ? event.target : null
+        // Element, not HTMLElement: clicks on SVG icons inside buttons must still match the closest() checks.
+        const target = event.target instanceof Element ? event.target : null
         if (eventHitsCanvasNode(event, target)) return
         if (
           target?.closest(
@@ -4197,12 +4190,12 @@ function CanvasSurface() {
         onSelectionEnd={handleSelectionEnd}
         onSelectionChange={handleSelectionChange}
         onConnect={handleConnect}
-        onEdgeClick={handleEdgeClick}
+        onEdgeClick={onEdgeClick}
         onConnectStart={handleConnectStart}
         onConnectEnd={handleConnectEnd}
-        onNodeClick={handleNodeClick}
-        onNodeDoubleClick={handleNodeDoubleClick}
-        onNodeContextMenu={handleNodeContextMenu}
+        onNodeClick={onNodeClick}
+        onNodeDoubleClick={onNodeDoubleClick}
+        onNodeContextMenu={onNodeContextMenu}
         onNodeDragStop={handleNodeDragStop}
         onPaneClick={handlePaneClick}
         zoomOnDoubleClick={false}
