@@ -1,3 +1,4 @@
+import type { ComfyNodeTypeInfo, ComfyNodeTypes } from './comfyNodeTypes'
 import type {
   ComfyWorkflow,
   ComfyUiWorkflow,
@@ -263,9 +264,10 @@ const inferredInputType = (node: WorkflowNode, title: string, key: string, value
 
 const comparableClassType = (node: WorkflowNode) => normalized(node.class_type ?? '').replace(/[^a-z0-9]+/g, '')
 
-// SaveImage is not the only way a workflow ends in an image: PreviewImage and custom save nodes (WAS "Image Save",
-// "easy imageSave", SaveAnimatedWEBP...) put their files in history too. SaveImageWebsocket never does.
-const imageOutputKind = (node: WorkflowNode): 'save' | 'preview' | undefined => {
+// Name rules: only used for nodes the server's node list does not describe (offline, or imported old data).
+// SaveImage is not the only image ending: PreviewImage and custom save nodes (WAS "Image Save", "easy imageSave",
+// SaveAnimatedWEBP...) put their files in history too. SaveImageWebsocket never does.
+const imageOutputKindByName = (node: WorkflowNode): 'save' | 'preview' | undefined => {
   const classType = comparableClassType(node)
   if (classType.includes('websocket')) return undefined
   if ((classType.includes('image') && classType.includes('save')) || classType.includes('saveanimated')) return 'save'
@@ -273,29 +275,58 @@ const imageOutputKind = (node: WorkflowNode): 'save' | 'preview' | undefined => 
   return undefined
 }
 
-const outputNodeMatches = (node: WorkflowNode, type: ResourceType) => {
+const outputTypeByName = (node: WorkflowNode): ResourceType | undefined => {
   const classType = normalized(node.class_type ?? '')
-  if (type === 'image') return imageOutputKind(node) !== undefined
-  if (type === 'video') return classType.includes('video') && (classType.includes('save') || classType.includes('combine'))
-  if (type === 'audio') return classType.includes('audio') && (classType.includes('save') || classType.includes('preview'))
-  if (type === 'text') {
-    return (
-      classType.includes('text') &&
-      (classType.includes('save') || classType.includes('preview') || classType.includes('show') || classType.includes('output'))
-    )
+  if (imageOutputKindByName(node)) return 'image'
+  if (classType.includes('video') && (classType.includes('save') || classType.includes('combine'))) return 'video'
+  if (classType.includes('audio') && (classType.includes('save') || classType.includes('preview'))) return 'audio'
+  if (
+    classType.includes('text') &&
+    (classType.includes('save') || classType.includes('preview') || classType.includes('show') || classType.includes('output'))
+  ) {
+    return 'text'
   }
-
-  return false
+  return undefined
 }
 
-const isLikelyOutputNode = (node: WorkflowNode) =>
-  (['image', 'video', 'audio', 'text'] as const).some((type) => outputNodeMatches(node, type))
+const resourceTypeForComfyType: Record<string, ResourceType> = {
+  IMAGE: 'image',
+  MASK: 'image',
+  VIDEO: 'video',
+  AUDIO: 'audio',
+  STRING: 'text',
+}
+const OUTPUT_TYPE_PRIORITY: ResourceType[] = ['video', 'image', 'audio', 'text']
+
+// An output node produces what flows into it: SaveImage takes IMAGE, SaveVideo takes VIDEO. Only linked inputs count,
+// so widget values such as SaveImage's filename_prefix string never make it a text output.
+const outputTypeByNodeType = (node: WorkflowNode, info: ComfyNodeTypeInfo): ResourceType | undefined => {
+  if (!info.outputNode) return undefined
+  const linkedTypes = new Set<ResourceType>()
+  for (const [key, value] of Object.entries(node.inputs ?? {})) {
+    if (!isGraphLinkValue(value) || (value as unknown[]).length !== 2) continue
+    for (const comfyType of info.inputTypes[key] ?? []) {
+      const type = resourceTypeForComfyType[comfyType]
+      if (type) linkedTypes.add(type)
+    }
+  }
+  return OUTPUT_TYPE_PRIORITY.find((type) => linkedTypes.has(type))
+}
+
+const isOutputNode = (node: WorkflowNode, nodeTypes?: ComfyNodeTypes) => {
+  const info = node.class_type ? nodeTypes?.[node.class_type] : undefined
+  return info ? info.outputNode : outputTypeByName(node) !== undefined
+}
 
 const inputBindKey = (nodeId: string, path: string) => `${nodeId}:${path}`
 
 export const isMediaResourceType = (type: ResourceType) => type === 'image' || type === 'video' || type === 'audio'
 
-export const workflowInputCandidates = (workflow: ComfyWorkflow, existingInputs: FunctionInputDef[] = []): WorkflowInputCandidate[] => {
+export const workflowInputCandidates = (
+  workflow: ComfyWorkflow,
+  existingInputs: FunctionInputDef[] = [],
+  nodeTypes?: ComfyNodeTypes,
+): WorkflowInputCandidate[] => {
   const usedKeys = new Set(existingInputs.map((input) => input.key))
   const usedBindings = new Set(
     existingInputs.map((input) => input.bind.nodeId && input.bind.path ? inputBindKey(input.bind.nodeId, input.bind.path) : ''),
@@ -303,7 +334,7 @@ export const workflowInputCandidates = (workflow: ComfyWorkflow, existingInputs:
   const inputs: WorkflowInputCandidate[] = []
 
   for (const [id, node] of Object.entries(workflow)) {
-    if (isLikelyOutputNode(node)) continue
+    if (isOutputNode(node, nodeTypes)) continue
     const nodeInputs = node.inputs ?? {}
     const title = nodeTitle(id, node)
     for (const [key, value] of Object.entries(nodeInputs)) {
@@ -341,52 +372,77 @@ export const workflowInputCandidates = (workflow: ComfyWorkflow, existingInputs:
   return inputs
 }
 
-const mediaInputsForWorkflow = (workflow: ComfyWorkflow): FunctionInputDef[] =>
-  workflowInputCandidates(workflow).filter((input) => isMediaResourceType(input.type))
-
-// Save nodes are the workflow's deliverables; previews only count when the workflow saves nothing.
-const imageOutputNodeMatches = (workflow: ComfyWorkflow) => {
-  const hasSaveNode = Object.values(workflow).some((node) => imageOutputKind(node) === 'save')
-  return (node: WorkflowNode) => imageOutputKind(node) === (hasSaveNode ? 'save' : 'preview')
-}
-
-const outputsForType = (workflow: ComfyWorkflow, type: ResourceType, label: string): FunctionOutputDef[] => {
-  const matches = type === 'image' ? imageOutputNodeMatches(workflow) : (node: WorkflowNode) => outputNodeMatches(node, type)
-  return Object.entries(workflow)
-    .filter(([, node]) => matches(node))
-    .map(([id, node], index) => ({
-      key: index === 0 ? type : `${type}_${index + 1}`,
-      label: index === 0 ? label : `${label} ${index + 1}`,
-      type,
-      bind: { nodeId: id, nodeTitle: nodeTitle(id, node) },
-      extract: { source: type === 'text' ? 'node_output' : 'history', multiple: true },
-    }))
-}
+const mediaInputsForWorkflow = (workflow: ComfyWorkflow, nodeTypes?: ComfyNodeTypes): FunctionInputDef[] =>
+  workflowInputCandidates(workflow, [], nodeTypes).filter((input) => isMediaResourceType(input.type))
 
 const FALLBACK_OUTPUT_KEY = 'result'
 const FALLBACK_OUTPUT_TITLE = 'Result'
+const OUTPUT_TYPE_ORDER: Array<[ResourceType, string]> = [
+  ['image', 'Image'],
+  ['video', 'Video'],
+  ['audio', 'Audio'],
+  ['text', 'Text'],
+]
 
-const outputsForWorkflow = (workflow: ComfyWorkflow): FunctionOutputDef[] => {
-  const outputs = [
-    ...outputsForType(workflow, 'image', 'Image'),
-    ...outputsForType(workflow, 'video', 'Video'),
-    ...outputsForType(workflow, 'audio', 'Audio'),
-    ...outputsForType(workflow, 'text', 'Text'),
-  ]
+export type ComfyOutputInference = NonNullable<GenerationFunction['outputInference']>
 
-  if (outputs.length === 0) {
-    return [
-      {
-        key: FALLBACK_OUTPUT_KEY,
-        label: FALLBACK_OUTPUT_TITLE,
-        type: 'text',
-        bind: { nodeTitle: FALLBACK_OUTPUT_TITLE },
-        extract: { source: 'history', multiple: true },
-      },
-    ]
+/**
+ * Output nodes and their types come from the server's node definitions (`output_node` and the types flowing in).
+ * Nodes the definitions do not cover fall back to the name rules, and the result says so.
+ */
+export function inferWorkflowOutputs(
+  workflow: ComfyWorkflow,
+  nodeTypes?: ComfyNodeTypes,
+): { outputs: FunctionOutputDef[]; inference: ComfyOutputInference } {
+  const outputTypeById = new Map<string, ResourceType>()
+  const untyped: Array<[string, WorkflowNode]> = []
+  for (const [id, node] of Object.entries(workflow)) {
+    const info = node.class_type ? nodeTypes?.[node.class_type] : undefined
+    if (!info) {
+      untyped.push([id, node])
+      continue
+    }
+    const type = outputTypeByNodeType(node, info)
+    if (type) outputTypeById.set(id, type)
   }
 
-  return outputs
+  // Among name-matched images, save nodes are the deliverables; previews only count when nothing is saved.
+  const untypedSavesImage = untyped.some(([, node]) => imageOutputKindByName(node) === 'save')
+  for (const [id, node] of untyped) {
+    const imageKind = imageOutputKindByName(node)
+    if (imageKind) {
+      if (imageKind === (untypedSavesImage ? 'save' : 'preview')) outputTypeById.set(id, 'image')
+      continue
+    }
+    const type = outputTypeByName(node)
+    if (type) outputTypeById.set(id, type)
+  }
+
+  const outputs: FunctionOutputDef[] = []
+  for (const [type, label] of OUTPUT_TYPE_ORDER) {
+    const nodes = Object.entries(workflow).filter(([id]) => outputTypeById.get(id) === type)
+    nodes.forEach(([id, node], index) => {
+      outputs.push({
+        key: index === 0 ? type : `${type}_${index + 1}`,
+        label: index === 0 ? label : `${label} ${index + 1}`,
+        type,
+        bind: { nodeId: id, nodeTitle: nodeTitle(id, node) },
+        extract: { source: type === 'text' ? 'node_output' : 'history', multiple: true },
+      })
+    })
+  }
+
+  const inference: ComfyOutputInference = nodeTypes && untyped.length === 0 ? 'node_types' : 'node_names'
+  if (outputs.length === 0) {
+    outputs.push({
+      key: FALLBACK_OUTPUT_KEY,
+      label: FALLBACK_OUTPUT_TITLE,
+      type: 'text',
+      bind: { nodeTitle: FALLBACK_OUTPUT_TITLE },
+      extract: { source: 'history', multiple: true },
+    })
+  }
+  return { outputs, inference }
 }
 
 const isFallbackOutput = (output: FunctionOutputDef) =>
@@ -395,19 +451,63 @@ const isFallbackOutput = (output: FunctionOutputDef) =>
   !output.bind.nodeId &&
   output.bind.nodeTitle === FALLBACK_OUTPUT_TITLE
 
+export const hasFallbackComfyOutputs = (functionDef: GenerationFunction) =>
+  functionDef.workflow.format === 'comfyui_api_json' &&
+  functionDef.outputs.length === 1 &&
+  isFallbackOutput(functionDef.outputs[0]!)
+
 /**
- * Workflows whose only image output was not a SaveImage node used to get a text "Result" output that can never be
- * found in history, so every run failed as a text node. Re-infer those outputs from the stored workflow so rerunning
- * such a node produces the image; definitions that really target a node titled "Result" are left alone.
+ * Workflows whose image output was not recognized used to get a text "Result" output that can never be found in
+ * history, so every run failed as a text node. Re-infer those outputs from the stored workflow so rerunning such a node
+ * produces the image; definitions that really target a node titled "Result" are left alone.
  */
-export function repairFallbackComfyOutputs(functionDef: GenerationFunction): GenerationFunction {
+export function repairFallbackComfyOutputs(functionDef: GenerationFunction, nodeTypes?: ComfyNodeTypes): GenerationFunction {
   const workflow = functionDef.workflow.rawJson
-  if (functionDef.workflow.format !== 'comfyui_api_json' || !workflow || typeof workflow !== 'object') return functionDef
-  if (functionDef.outputs.length !== 1 || !isFallbackOutput(functionDef.outputs[0]!)) return functionDef
+  if (!hasFallbackComfyOutputs(functionDef) || !workflow || typeof workflow !== 'object') return functionDef
   if (Object.values(workflow).some((node) => node?._meta?.title?.trim() === FALLBACK_OUTPUT_TITLE)) return functionDef
-  const outputs = outputsForWorkflow(workflow)
+  const { outputs, inference } = inferWorkflowOutputs(workflow, nodeTypes)
   if (outputs.length === 1 && isFallbackOutput(outputs[0]!)) return functionDef
-  return { ...functionDef, outputs }
+  return { ...functionDef, outputs, outputInference: inference }
+}
+
+/**
+ * Editing a saved function's workflow keeps the outputs the user already has (keys, labels, wiring) for nodes that are
+ * still outputs, retyped from the new inference; outputs of removed nodes go, and new output nodes are appended.
+ */
+export function mergeWorkflowOutputs(current: FunctionOutputDef[], inferred: FunctionOutputDef[]): FunctionOutputDef[] {
+  const inferredByNodeId = new Map(
+    inferred.filter((output) => output.bind.nodeId).map((output) => [output.bind.nodeId!, output]),
+  )
+  const kept: FunctionOutputDef[] = []
+  for (const output of current) {
+    if (isFallbackOutput(output)) continue
+    if (!output.bind.nodeId) {
+      kept.push(output)
+      continue
+    }
+    const match = inferredByNodeId.get(output.bind.nodeId)
+    if (!match) continue
+    kept.push({ ...output, type: match.type, extract: { ...output.extract, source: match.extract.source } })
+  }
+
+  const usedKeys = new Set(kept.map((output) => output.key))
+  const coveredNodeIds = new Set(kept.map((output) => output.bind.nodeId).filter(Boolean))
+  const appended: FunctionOutputDef[] = []
+  for (const output of inferred) {
+    if (!output.bind.nodeId || coveredNodeIds.has(output.bind.nodeId)) continue
+    let key = output.key
+    let label = output.label
+    if (usedKeys.has(key)) {
+      const baseLabel = OUTPUT_TYPE_ORDER.find(([type]) => type === output.type)?.[1] ?? output.label
+      let index = 2
+      while (usedKeys.has(`${output.type}_${index}`)) index += 1
+      key = `${output.type}_${index}`
+      label = `${baseLabel} ${index}`
+    }
+    usedKeys.add(key)
+    appended.push({ ...output, key, label })
+  }
+  return [...kept, ...appended]
 }
 
 export function createGenerationFunctionFromWorkflow(
@@ -418,10 +518,12 @@ export function createGenerationFunctionFromWorkflow(
   options: {
     uiJson?: ComfyUiWorkflow
     editor?: ComfyWorkflowEditorMetadata
+    nodeTypes?: ComfyNodeTypes
   } = {},
 ): GenerationFunction {
-  const inputs = mediaInputsForWorkflow(workflow)
+  const inputs = mediaInputsForWorkflow(workflow, options.nodeTypes)
   const hasImageInput = inputs.some((input) => input.type === 'image')
+  const { outputs, inference } = inferWorkflowOutputs(workflow, options.nodeTypes)
 
   return {
     id,
@@ -435,7 +537,8 @@ export function createGenerationFunctionFromWorkflow(
       ...(options.editor !== undefined ? { editor: options.editor } : {}),
     },
     inputs,
-    outputs: outputsForWorkflow(workflow),
+    outputs,
+    outputInference: inference,
     runtimeDefaults: {
       runCount: 1,
       seedPolicy: { mode: 'randomize_all_before_submit' },

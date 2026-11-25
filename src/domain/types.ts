@@ -312,6 +312,8 @@ export type GenerationFunction = {
   localTransform?: LocalTransformConfig
   inputs: FunctionInputDef[]
   outputs: FunctionOutputDef[]
+  /** How ComfyUI outputs were inferred: from the server's node types, or guessed from node names (no node list). */
+  outputInference?: 'node_types' | 'node_names'
   runtimeDefaults?: {
     runCount: number
     seedPolicy: {

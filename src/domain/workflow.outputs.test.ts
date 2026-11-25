@@ -174,7 +174,7 @@ describe('repairFallbackComfyOutputs', () => {
     const fn = legacyFunction()
     const repaired = repairFallbackComfyOutputs(fn)
     expect(repaired).not.toBe(fn)
-    expect({ ...repaired, outputs: fn.outputs }).toEqual(fn)
+    expect({ ...repaired, outputs: fn.outputs, outputInference: undefined }).toEqual(fn)
   })
 
   it('does not mutate its argument', () => {

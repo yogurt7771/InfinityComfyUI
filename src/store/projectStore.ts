@@ -59,7 +59,16 @@ import { createConfigPackage, createProjectPackage, type ConfigPackage, type Ful
 import { blobToDataUrl, cacheProjectAssetBlob, readCachedProjectAssetBlob } from '../domain/projectAssets'
 import { randomizeWorkflowSeeds } from '../domain/seed'
 import { selectEndpoint } from '../domain/scheduler'
-import { createGenerationFunctionFromWorkflow, injectWorkflowInputs, repairFallbackComfyOutputs, workflowPrimitiveInputValue } from '../domain/workflow'
+import {
+  createGenerationFunctionFromWorkflow,
+  hasFallbackComfyOutputs,
+  inferWorkflowOutputs,
+  injectWorkflowInputs,
+  mergeWorkflowOutputs,
+  repairFallbackComfyOutputs,
+  workflowPrimitiveInputValue,
+} from '../domain/workflow'
+import { comfyNodeTypesFromObjectInfo, type ComfyNodeTypes } from '../domain/comfyNodeTypes'
 import { isBuiltInFunction, withoutBuiltInProjectFunctions } from '../domain/builtInFunctions'
 import { normalizeTextDisplayMode } from '../domain/textDisplay'
 import { readFileAsDataUrl, type MediaResourcePayload, type MediaResourceKind } from '../domain/resourceFiles'
@@ -121,6 +130,7 @@ type FunctionEditScope = 'node' | 'all'
 
 type RuntimeComfyClient = ComfyPromptClient & {
   testConnection?: () => Promise<unknown>
+  getObjectInfo?: () => Promise<unknown>
   interrupt?: () => Promise<unknown>
   uploadImage?: (file: File, options?: ComfyUploadImageOptions) => Promise<ComfyUploadImageResult>
   viewFile?: (params: ComfyFileRef) => Promise<Blob>
@@ -315,8 +325,15 @@ export type ProjectStoreState = {
   addFunctionFromWorkflow: (
     name: string,
     workflow: ComfyWorkflow,
-    options?: { uiJson?: ComfyUiWorkflow; editor?: ComfyWorkflowEditorMetadata },
+    options?: { uiJson?: ComfyUiWorkflow; editor?: ComfyWorkflowEditorMetadata; nodeTypes?: ComfyNodeTypes },
   ) => string
+  /** The server's node types (from `/object_info`, cached per server); undefined when the server can't be reached. */
+  loadComfyNodeTypes: (endpointId?: string, workflow?: ComfyWorkflow) => Promise<ComfyNodeTypes | undefined>
+  /** Saves an edited workflow into a saved function, re-inferring its outputs from the server's node types. */
+  saveFunctionWorkflow: (
+    functionId: string,
+    workflow: { rawJson: ComfyWorkflow; uiJson?: ComfyUiWorkflow; editor?: ComfyWorkflowEditorMetadata },
+  ) => Promise<void>
   addRequestFunction: (name: string, config?: Partial<RequestFunctionConfig>) => string
   addOpenAILlmFunction: (name: string, config?: Partial<OpenAILlmConfig>) => string
   addGeminiLlmFunction: (name: string, config?: Partial<GeminiLlmConfig>) => string
@@ -1698,12 +1715,62 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
   const temporaryFunctionDrafts = new Map<string, GenerationFunction>()
 
   return createStore<ProjectStoreState>((set, get) => {
-    const functionDefinitionById = (functionId: string) => {
-      const functionDef = get().project.functions[functionId] ?? temporaryFunctionDrafts.get(functionId)
-      return functionDef && repairFallbackComfyOutputs(functionDef)
-    }
+    const functionDefinitionById = (functionId: string) =>
+      get().project.functions[functionId] ?? temporaryFunctionDrafts.get(functionId)
     const functionDefinitionForTask = (task: ExecutionTask) =>
-      task.functionSnapshot ? repairFallbackComfyOutputs(task.functionSnapshot) : functionDefinitionById(task.functionId)
+      task.functionSnapshot ?? functionDefinitionById(task.functionId)
+
+    // object_info can be tens of MB; keep only the parsed node types, once per server.
+    const comfyNodeTypesCache = new Map<string, Promise<ComfyNodeTypes | undefined>>()
+    const comfyNodeTypesMissingChecked = new Map<string, Set<string>>()
+    const COMFY_NODE_TYPES_TIMEOUT_MS = 20000
+    const fetchComfyNodeTypes = (endpoint: ComfyEndpointConfig) => {
+      const client = runtime.createComfyClient(endpoint)
+      if (!client.getObjectInfo) return Promise.resolve(undefined)
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const timeout = new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), COMFY_NODE_TYPES_TIMEOUT_MS)
+      })
+      const request = Promise.resolve()
+        .then(() => client.getObjectInfo!())
+        .then((objectInfo) => comfyNodeTypesFromObjectInfo(objectInfo))
+        .catch(() => undefined)
+      return Promise.race([request, timeout]).finally(() => clearTimeout(timer))
+    }
+    const loadComfyNodeTypes = async (endpointId?: string, workflow?: ComfyWorkflow) => {
+      const endpoints = get().project.comfy.endpoints
+      const endpoint =
+        endpoints.find((candidate) => candidate.id === endpointId) ??
+        endpoints.find((candidate) => candidate.enabled !== false)
+      if (!endpoint) return undefined
+      const cacheKey = `${endpoint.id}\u0000${endpoint.baseUrl}`
+      const load = (previous?: ComfyNodeTypes) => {
+        const pending: Promise<ComfyNodeTypes | undefined> = fetchComfyNodeTypes(endpoint).then((nodeTypes) => {
+          if (nodeTypes || comfyNodeTypesCache.get(cacheKey) !== pending) return nodeTypes ?? previous
+          // Failures are not remembered (the next call asks again), but a refetch failure keeps the list we had.
+          if (previous) comfyNodeTypesCache.set(cacheKey, Promise.resolve(previous))
+          else comfyNodeTypesCache.delete(cacheKey)
+          return previous
+        })
+        comfyNodeTypesCache.set(cacheKey, pending)
+        return pending
+      }
+      const cached = comfyNodeTypesCache.get(cacheKey)
+      const nodeTypes = await (cached ?? load())
+      // A list fetched just now is already current; only a cached one can be stale.
+      if (!nodeTypes || !workflow || !cached) return nodeTypes
+      // A class the cached list doesn't know may be a custom node installed since: ask the server once more, but only
+      // once per unknown class, so a node the server really lacks doesn't refetch the whole list every time.
+      const checked = comfyNodeTypesMissingChecked.get(cacheKey) ?? new Set<string>()
+      const missing = Object.values(workflow)
+        .map((node) => node?.class_type)
+        .filter((classType): classType is string => Boolean(classType) && !nodeTypes[classType!] && !checked.has(classType!))
+      if (!missing.length) return nodeTypes
+      const refreshed = (await load(nodeTypes)) ?? nodeTypes
+      for (const classType of missing) if (!refreshed[classType]) checked.add(classType)
+      comfyNodeTypesMissingChecked.set(cacheKey, checked)
+      return refreshed
+    }
 
     const isTemporaryFunctionDefinition = (functionDef: GenerationFunction) =>
       !get().project.functions[functionDef.id] && temporaryFunctionDrafts.has(functionDef.id)
@@ -2128,6 +2195,10 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
           for (const file of output.files) {
             let ref = refs[valueIndex]
+            if (ref && ref.type !== output.type) {
+              ref = { ...ref, type: output.type }
+              refs[valueIndex] = ref
+            }
             if (!ref) {
               const resourceId = runtime.idFactory()
               ref = { resourceId, type: output.type }
@@ -5810,6 +5881,27 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       })
     },
 
+    loadComfyNodeTypes,
+
+    saveFunctionWorkflow: async (functionId, workflow) => {
+      const current = get().project.functions[functionId]
+      if (!current || isBuiltInFunction(current)) return
+      // The workflow itself lands at once; outputs follow when the server's node types arrive.
+      const nextWorkflow: GenerationFunction['workflow'] = { ...current.workflow, rawJson: workflow.rawJson }
+      if (workflow.uiJson === undefined) delete nextWorkflow.uiJson
+      else nextWorkflow.uiJson = workflow.uiJson
+      if (workflow.editor !== undefined) nextWorkflow.editor = workflow.editor
+      get().updateFunction(functionId, { workflow: nextWorkflow })
+      const nodeTypes = await loadComfyNodeTypes(workflow.editor?.endpointId, workflow.rawJson)
+      const latest = get().project.functions[functionId]
+      if (!latest || latest.workflow.rawJson !== workflow.rawJson) return
+      const inferred = inferWorkflowOutputs(workflow.rawJson, nodeTypes)
+      get().updateFunction(functionId, {
+        outputs: mergeWorkflowOutputs(latest.outputs, inferred.outputs),
+        outputInference: inferred.inference,
+      })
+    },
+
     addFunctionFromWorkflow: (name, workflow, options) => {
       const id = runtime.idFactory()
       const now = runtime.now()
@@ -6125,9 +6217,16 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
     },
 
     runFunctionAtPosition: async (functionId, inputValues, position, runCount, options) => {
+      const storedFunctionDef = functionDefinitionById(functionId)
+      if (!storedFunctionDef) return undefined
+      // Old definitions whose image output was not recognized carry a text "Result" output; re-infer before running.
+      const functionDef = hasFallbackComfyOutputs(storedFunctionDef)
+        ? repairFallbackComfyOutputs(
+            storedFunctionDef,
+            await loadComfyNodeTypes(storedFunctionDef.workflow.editor?.endpointId, storedFunctionDef.workflow.rawJson),
+          )
+        : storedFunctionDef
       const state = get()
-      const functionDef = functionDefinitionById(functionId)
-      if (!functionDef) return undefined
 
       const now = runtime.now()
       const normalizedRuns = normalizedRunCount(runCount ?? functionDef.runtimeDefaults?.runCount ?? 1)

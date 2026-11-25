@@ -55,6 +55,23 @@ const fileExtension = (filename: string) => filename.split('.').pop()?.toLowerCa
 const imageFieldVideoFiles = (nodeOutput: HistoryNodeOutput) =>
   (nodeOutput.images ?? []).filter((file) => videoFileExtensions.has(fileExtension(file.filename)))
 
+const imageFieldImageFiles = (nodeOutput: HistoryNodeOutput) =>
+  (nodeOutput.images ?? []).filter((file) => !videoFileExtensions.has(fileExtension(file.filename)))
+
+const nonEmpty = (files: ComfyFileRef[] | undefined) => (files?.length ? files : undefined)
+
+// What the node actually returned, used when it disagrees with the declared output type (e.g. VHS Video Combine takes
+// IMAGE frames but returns a video under `gifs`).
+const actualMediaOutput = (nodeOutput: HistoryNodeOutput): { type: ResourceType; files: ComfyFileRef[] } | undefined => {
+  const images = nonEmpty(imageFieldImageFiles(nodeOutput))
+  if (images) return { type: 'image', files: images }
+  const videos = nonEmpty(nodeOutput.videos) ?? nonEmpty(nodeOutput.gifs) ?? nonEmpty(imageFieldVideoFiles(nodeOutput))
+  if (videos) return { type: 'video', files: videos }
+  const audio = nonEmpty(nodeOutput.audios) ?? nonEmpty(nodeOutput.audio)
+  if (audio) return { type: 'audio', files: audio }
+  return undefined
+}
+
 const filesForType = (nodeOutput: HistoryNodeOutput | undefined, type: ResourceType): ComfyFileRef[] => {
   if (!nodeOutput) return []
   if (type === 'image') return nodeOutput.images ?? []
@@ -100,17 +117,22 @@ export function extractComfyOutputs(
     const nodeId = findNodeId(workflow, output)
     if (!nodeId) throw new Error(`Output node not found: ${output.key}`)
 
+    const nodeOutput = historyOutputs[nodeId]
     const extracted = {
       key: output.key,
       type: output.type,
-      files: filesForType(historyOutputs[nodeId], output.type),
+      files: filesForType(nodeOutput, output.type),
     }
 
     if (output.type === 'text') {
-      return {
-        ...extracted,
-        texts: textsForOutput(historyOutputs[nodeId]),
-      }
+      const texts = textsForOutput(nodeOutput)
+      const actual = texts.length || !nodeOutput ? undefined : actualMediaOutput(nodeOutput)
+      return actual ? { key: output.key, ...actual } : { ...extracted, texts }
+    }
+
+    if (extracted.files.length === 0 && nodeOutput) {
+      const actual = actualMediaOutput(nodeOutput)
+      if (actual) return { key: output.key, ...actual }
     }
 
     return extracted

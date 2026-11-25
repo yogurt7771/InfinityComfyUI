@@ -1371,6 +1371,7 @@ export function FunctionRunDialog({
   const subtitle = [
     functionKindLabel(functionDef),
     `${functionDef.inputs.length} input${functionDef.inputs.length === 1 ? '' : 's'}`,
+    functionDef.outputs.length ? `outputs ${functionDef.outputs.map((output) => output.label || output.key).join(', ')}` : undefined,
     missingRequiredInputs.length ? `${missingRequiredInputs.length} required missing` : undefined,
   ]
     .filter(Boolean)
@@ -1406,6 +1407,13 @@ export function FunctionRunDialog({
           </div>
         </header>
         <div className="local-action-body">
+          {functionDef.workflow.format === 'comfyui_api_json' && functionDef.outputInference === 'node_names' ? (
+            <p className="dialog-note is-warning" role="note">
+              Output types were guessed from node names because this ComfyUI server's node list wasn't available.
+              Results are still matched to what ComfyUI actually returns; reconnect the server and use the workflow
+              again to read the real types.
+            </p>
+          ) : null}
           {onFunctionDefChange && requestConfig ? (
             <section className="function-run-provider" aria-label="Request settings">
               <div className="function-run-provider-fields">
@@ -2139,6 +2147,8 @@ function CanvasSurface() {
   const updateFunctionNodeRequestOutputs = useProjectStore((state) => state.updateFunctionNodeRequestOutputs)
   const ensureEditableFunctionForNode = useProjectStore((state) => state.ensureEditableFunctionForNode)
   const addFunctionFromWorkflow = useProjectStore((state) => state.addFunctionFromWorkflow)
+  const loadComfyNodeTypes = useProjectStore((state) => state.loadComfyNodeTypes)
+  const saveFunctionWorkflow = useProjectStore((state) => state.saveFunctionWorkflow)
   const addRequestFunction = useProjectStore((state) => state.addRequestFunction)
   const addOpenAILlmFunction = useProjectStore((state) => state.addOpenAILlmFunction)
   const addGeminiLlmFunction = useProjectStore((state) => state.addGeminiLlmFunction)
@@ -3784,8 +3794,9 @@ function CanvasSurface() {
     savedWorkflowEndpointChoices.find((endpoint) => endpoint.id === savedWorkflowEditor?.endpointId) ??
     savedWorkflowEndpointChoices[0]
 
-  const saveTemporaryComfyWorkflow = ({ rawJson, uiJson, editor }: EmbeddedComfySave) => {
+  const saveTemporaryComfyWorkflow = async ({ rawJson, uiJson, editor }: EmbeddedComfySave) => {
     if (!temporaryComfyWorkflow) return
+    const nodeTypes = await loadComfyNodeTypes(temporaryComfyWorkflow.endpointId, rawJson)
     const createdAt = new Date().toISOString()
     const endpoint = project.comfy.endpoints.find((candidate) => candidate.id === temporaryComfyWorkflow.endpointId)
     const currentTemporaryFunction =
@@ -3799,6 +3810,7 @@ function CanvasSurface() {
       createdAt,
       {
         uiJson,
+        nodeTypes,
         editor: {
           ...editor,
           endpointId: endpoint?.id,
@@ -5021,11 +5033,7 @@ function CanvasSurface() {
           initialUiJson={savedWorkflowFunction.workflow.uiJson}
           initialApiJson={savedWorkflowFunction.workflow.rawJson}
           onClose={() => setSavedWorkflowEditor(undefined)}
-          onSave={({ rawJson, uiJson, editor }) =>
-            updateFunction(savedWorkflowFunction.id, {
-              workflow: { ...savedWorkflowFunction.workflow, rawJson, uiJson, editor },
-            })
-          }
+          onSave={({ rawJson, uiJson, editor }) => saveFunctionWorkflow(savedWorkflowFunction.id, { rawJson, uiJson, editor })}
         />
       ) : null}
       {functionEditor && activeFunctionEditorFunction ? (

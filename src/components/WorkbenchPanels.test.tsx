@@ -1201,7 +1201,7 @@ describe('LeftPanel', () => {
     expect(within(dialog).getByLabelText('Output workflow node video')).not.toHaveAttribute('aria-invalid')
   })
 
-  it('creates a ComfyUI function from pasted API workflow JSON', () => {
+  it('creates a ComfyUI function from pasted API workflow JSON', async () => {
     render(<SettingsPage onClose={() => undefined} />)
 
     fireEvent.click(screen.getByRole('button', { name: 'Function Management' }))
@@ -1223,7 +1223,7 @@ describe('LeftPanel', () => {
     expect(within(createDialog).getByRole('button', { name: 'Save function' })).toBeEnabled()
     fireEvent.click(within(createDialog).getByRole('button', { name: 'Save function' }))
 
-    expect(screen.queryByRole('dialog', { name: 'New Function' })).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'New Function' })).not.toBeInTheDocument())
     const createdFunction = Object.values(projectStore.getState().project.functions).find(
       (functionDef) => functionDef.name === 'Pasted API Workflow',
     )

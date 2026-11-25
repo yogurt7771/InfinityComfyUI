@@ -553,37 +553,54 @@ describe('CanvasWorkspace', () => {
     expect(Object.keys(projectStore.getState().project.functions).sort()).toEqual(initialFunctionIds)
   })
 
-  it('renders the result of a new workflow that ends in Preview Image as an image node', async () => {
-    configureTemporaryComfyProject()
-    const previewOnlyWorkflow = {
-      '4': { class_type: 'CheckpointLoaderSimple', _meta: { title: 'Load Checkpoint' }, inputs: { ckpt_name: 'model.safetensors' } },
-      '5': { class_type: 'EmptyLatentImage', _meta: { title: 'Empty Latent Image' }, inputs: { width: 512, height: 512, batch_size: 1 } },
-      '8': { class_type: 'VAEDecode', _meta: { title: 'VAE Decode' }, inputs: { samples: ['5', 0], vae: ['4', 2] } },
-      '9': { class_type: 'PreviewImage', _meta: { title: 'Preview Image' }, inputs: { images: ['8', 0] } },
-    }
+  const customSaverWorkflow = {
+    '4': { class_type: 'CheckpointLoaderSimple', _meta: { title: 'Load Checkpoint' }, inputs: { ckpt_name: 'model.safetensors' } },
+    '5': { class_type: 'EmptyLatentImage', _meta: { title: 'Empty Latent Image' }, inputs: { width: 512, height: 512, batch_size: 1 } },
+    '8': { class_type: 'VAEDecode', _meta: { title: 'VAE Decode' }, inputs: { samples: ['5', 0], vae: ['4', 2] } },
+    // A custom output node whose name says nothing about images: only its node type can tell.
+    '9': { class_type: 'MyFancySaver', _meta: { title: 'Fancy Saver' }, inputs: { pixels: ['8', 0], label: 'fox' } },
+  }
+  const objectInfoFor = {
+    CheckpointLoaderSimple: { input: { required: { ckpt_name: [['model.safetensors']] } }, output: ['MODEL', 'CLIP', 'VAE'], output_node: false },
+    EmptyLatentImage: { input: { required: { width: ['INT'], height: ['INT'], batch_size: ['INT'] } }, output: ['LATENT'], output_node: false },
+    VAEDecode: { input: { required: { samples: ['LATENT'], vae: ['VAE'] } }, output: ['IMAGE'], output_node: false },
+    MyFancySaver: { input: { required: { pixels: ['IMAGE'], label: ['STRING'] } }, output: [], output_node: true },
+  }
+  const mockComfyServer = (objectInfo: 'available' | 'unavailable') =>
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input instanceof Request ? input.url : input)
-      const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } })
+      const json = (body: unknown, status = 200) =>
+        new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+      if (url.endsWith('/object_info')) return objectInfo === 'available' ? json(objectInfoFor) : json({ error: 'down' }, 503)
       if (url.includes('/history/')) {
-        return json({ prompt_preview: { outputs: { '9': { images: [{ filename: 'preview_00001_.png', subfolder: '', type: 'temp' }] } } } })
+        return json({ prompt_custom: { outputs: { '9': { images: [{ filename: 'fox_00001_.png', subfolder: '', type: 'output' }] } } } })
       }
-      if (url.endsWith('/prompt')) return json({ prompt_id: 'prompt_preview', number: 1 })
+      if (url.endsWith('/prompt')) return json({ prompt_id: 'prompt_custom', number: 1 })
       if (url.includes('/view')) return new Response(new Blob(['png-bytes'], { type: 'image/png' }), { headers: { 'content-type': 'image/png' } })
       return json({})
     })
-
+  const useWorkflowFromEditor = async (apiWorkflow: Record<string, unknown>) => {
     const menu = openAddMenu()
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'ComfyUI Workflow' }))
     const editorDialog = screen.getByRole('dialog', { name: 'ComfyUI Workflow Editor' })
-    connectEditorApp(editorDialog, previewOnlyWorkflow)
+    connectEditorApp(editorDialog, apiWorkflow)
     const useWorkflow = within(editorDialog).getByRole('button', { name: 'Use workflow' })
     await waitFor(() => expect(useWorkflow).toBeEnabled(), { timeout: 5000 })
     fireEvent.click(useWorkflow)
-    const runDialog = await screen.findByRole('dialog', { name: 'Run ComfyUI Workflow' })
+    return screen.findByRole('dialog', { name: 'Run ComfyUI Workflow' })
+  }
+
+  it('types a new workflow output from the server node types and renders its result as an image node', async () => {
+    configureTemporaryComfyProject()
+    mockComfyServer('available')
+
+    const runDialog = await useWorkflowFromEditor(customSaverWorkflow)
+    expect(runDialog).toHaveTextContent('outputs Image')
+    expect(within(runDialog).queryByRole('note')).not.toBeInTheDocument()
     fireEvent.click(within(runDialog).getByRole('button', { name: 'Run function from popup' }))
 
     const resultTask = await waitFor(() => {
-      const task = Object.values(projectStore.getState().project.tasks).find((item) => item.comfyPromptId === 'prompt_preview');
+      const task = Object.values(projectStore.getState().project.tasks).find((item) => item.comfyPromptId === 'prompt_custom')
       expect(task?.status).toBe('succeeded')
       return task!
     })
@@ -599,6 +616,18 @@ describe('CanvasWorkspace', () => {
         document.querySelector(`.react-flow__node[data-id="${resultNode.id}"] .resource-preview-image`),
       ).not.toBeNull(),
     )
+  })
+
+  it('says when output types are only guessed from node names because the server node list is unavailable', async () => {
+    configureTemporaryComfyProject()
+    mockComfyServer('unavailable')
+
+    const runDialog = await useWorkflowFromEditor({
+      '8': { class_type: 'VAEDecode', _meta: { title: 'VAE Decode' }, inputs: { samples: ['5', 0], vae: ['4', 2] } },
+      '9': { class_type: 'PreviewImage', _meta: { title: 'Preview Image' }, inputs: { images: ['8', 0] } },
+    })
+    expect(runDialog).toHaveTextContent('outputs Image')
+    expect(within(runDialog).getByRole('note')).toHaveTextContent(/guessed from node names/i)
   })
 
   it('edits a saved function workflow in place from its run dialog and keeps the run dialog open', async () => {
@@ -628,7 +657,7 @@ describe('CanvasWorkspace', () => {
     expect(screen.getByRole('dialog', { name: 'Run Saved Blend' })).toBeInTheDocument()
   })
 
-  it('accepts pasted ComfyUI API workflow JSON and enters the existing run configuration with endpoint and candidates intact', () => {
+  it('accepts pasted ComfyUI API workflow JSON and enters the existing run configuration with endpoint and candidates intact', async () => {
     const endpoint = configureTemporaryComfyProject()
     const runTemporaryFunctionAtPosition = vi.fn().mockResolvedValue('task_temporary_comfy')
     projectStore.setState({
@@ -657,7 +686,7 @@ describe('CanvasWorkspace', () => {
     })
     fireEvent.click(within(workflowDialog).getByRole('button', { name: 'Use workflow JSON' }))
 
-    const runDialog = screen.getByRole('dialog', { name: 'Run ComfyUI Workflow' })
+    const runDialog = await screen.findByRole('dialog', { name: 'Run ComfyUI Workflow' })
     const inputPreview = within(runDialog).getByRole('button', { name: 'Preview Image input' })
     expect(inputPreview).toBeEnabled()
     expect(within(inputPreview).getByRole('img', { name: 'reference.png' })).toBeInTheDocument()

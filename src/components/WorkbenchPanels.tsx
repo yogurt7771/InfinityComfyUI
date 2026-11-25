@@ -53,6 +53,7 @@ import {
   comfyProxyUrl,
   postComfyProxyPassword,
 } from '../domain/comfyProxy'
+import type { ComfyNodeTypes } from '../domain/comfyNodeTypes'
 import {
   exportApiWorkflowFromComfyEditor,
   exportUiWorkflowFromComfyEditor,
@@ -1489,7 +1490,7 @@ export function ComfyWorkflowEditorDialog({
   saveLabel?: string
   initialUiJson?: ComfyUiWorkflow
   initialApiJson?: ComfyWorkflow
-  onSave: (value: EmbeddedComfySave) => void
+  onSave: (value: EmbeddedComfySave) => void | Promise<void>
   onClose: () => void
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null)
@@ -1736,7 +1737,7 @@ export function ComfyWorkflowEditorDialog({
       generation: generationRef.current,
       inputSignature: comfyWorkflowInputSignature(uiJson, rawJson),
     }
-    onSave({
+    await onSave({
       rawJson,
       uiJson,
       editor: {
@@ -1897,7 +1898,7 @@ function NewFunctionDialog({
   onSaveComfy: (
     name: string,
     workflow: ComfyWorkflow,
-    options?: { uiJson?: ComfyUiWorkflow; editor?: ComfyWorkflowEditorMetadata },
+    options?: { uiJson?: ComfyUiWorkflow; editor?: ComfyWorkflowEditorMetadata; nodeTypes?: ComfyNodeTypes },
   ) => string | undefined
   onSaveRequest: (name: string, config: Partial<RequestFunctionConfig>) => string | undefined
   onSaveOpenAI: (name: string, config: Partial<OpenAILlmConfig>) => string | undefined
@@ -1906,6 +1907,8 @@ function NewFunctionDialog({
   comfyEndpoints: ComfyEndpointConfig[]
   onClose: () => void
 }) {
+  const loadComfyNodeTypes = useProjectStore((state) => state.loadComfyNodeTypes)
+  const [savingFunction, setSavingFunction] = useState(false)
   const [functionType, setFunctionType] = useState<NewFunctionType>('comfyui')
   const [functionName, setFunctionName] = useState('')
   const [workflowRawJson, setWorkflowRawJson] = useState<ComfyWorkflow>()
@@ -1992,7 +1995,7 @@ function NewFunctionDialog({
     }
   }
 
-  const saveFunction = () => {
+  const saveFunction = async () => {
     try {
       const name =
         functionName.trim() ||
@@ -2029,7 +2032,10 @@ function NewFunctionDialog({
         })
       } else {
         const workflow = workflowRawJson ?? importComfyWorkflowJson()
+        setSavingFunction(true)
+        const nodeTypes = await loadComfyNodeTypes(selectedComfyEndpoint?.id, workflow).finally(() => setSavingFunction(false))
         functionId = onSaveComfy(name, workflow, {
+          nodeTypes,
           uiJson: workflowUiJson,
           editor:
             workflowEditor ??
@@ -2335,7 +2341,12 @@ function NewFunctionDialog({
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button type="button" className="primary-action" onClick={saveFunction} disabled={!canSaveFunction}>
+          <button
+            type="button"
+            className="primary-action"
+            onClick={() => void saveFunction()}
+            disabled={!canSaveFunction || savingFunction}
+          >
             Save function
           </button>
         </div>
@@ -2377,6 +2388,7 @@ export function FunctionManager({
   onUpdateEndpoint,
   onClose,
 }: FunctionManagerProps) {
+  const saveFunctionWorkflow = useProjectStore((state) => state.saveFunctionWorkflow)
   const selectedFunction = functions.find((fn) => fn.id === selectedFunctionId) ?? functions[0]
   const [createFunctionOpen, setCreateFunctionOpen] = useState(false)
   const [comfyEditorOpen, setComfyEditorOpen] = useState(false)
@@ -2517,21 +2529,17 @@ export function FunctionManager({
     try {
       const rawJson = parseComfyApiWorkflowJson(source)
       const formatted = JSON.stringify(rawJson, null, 2)
-      const workflow: GenerationFunction['workflow'] = {
-        ...selectedFunction.workflow,
+      void saveFunctionWorkflow(selectedFunction.id, {
         rawJson,
-      }
-      if (imported) {
-        workflow.editor = {
-          kind: 'comfyui_browser',
-          endpointId: selectedEditorComfyEndpoint?.id,
-          baseUrl: selectedEditorComfyEndpoint?.baseUrl,
-          savedAt: new Date().toISOString(),
-        }
-        delete workflow.uiJson
-      }
-      onUpdateFunction(selectedFunction.id, {
-        workflow,
+        uiJson: imported ? undefined : selectedFunction.workflow.uiJson,
+        editor: imported
+          ? {
+              kind: 'comfyui_browser',
+              endpointId: selectedEditorComfyEndpoint?.id,
+              baseUrl: selectedEditorComfyEndpoint?.baseUrl,
+              savedAt: new Date().toISOString(),
+            }
+          : selectedFunction.workflow.editor,
       })
       setSelectedWorkflowDraft(imported ? { value: '' } : { functionId: selectedFunction.id, value: formatted })
       if (imported) setWorkflowImportOpen(false)
@@ -3338,16 +3346,9 @@ export function FunctionManager({
           initialUiJson={selectedFunction.workflow.uiJson}
           initialApiJson={selectedFunction.workflow.rawJson}
           onClose={() => setComfyEditorOpen(false)}
-          onSave={({ rawJson, uiJson, editor }) => {
-            onUpdateFunction(selectedFunction.id, {
-              workflow: {
-                ...selectedFunction.workflow,
-                rawJson,
-                uiJson,
-                editor,
-              },
-            })
+          onSave={async ({ rawJson, uiJson, editor }) => {
             setSelectedWorkflowDraft({ value: '' })
+            await saveFunctionWorkflow(selectedFunction.id, { rawJson, uiJson, editor })
           }}
         />
       ) : null}

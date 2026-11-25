@@ -8544,6 +8544,12 @@ body[data-theme='light'] .function-run-dialog .local-action-footer button:not(.p
   line-height: 1.5;
 }
 
+:is(body[data-theme], body) .dialog-note.is-warning {
+  border-color: color-mix(in srgb, var(--amber) 55%, var(--line));
+  border-left: 3px solid var(--amber);
+  color: var(--ink);
+}
+
 /* Collapsible advanced settings */
 :is(body[data-theme], body) .dialog-advanced {
   border: 1px solid var(--line);
