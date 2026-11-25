@@ -55,6 +55,8 @@ import {
 } from '../domain/comfyProxy'
 import type { ComfyNodeTypes } from '../domain/comfyNodeTypes'
 import { useComfyNodeTypes } from './useComfyNodeTypes'
+import { installComfySlotEditor, type ComfySlotEditorApp, type ComfySlotEditorController } from './comfySlotEditorExtension'
+import { editorSlotState, type EditorSlotState } from '../domain/comfySlotEditor'
 import {
   exportApiWorkflowFromComfyEditor,
   exportUiWorkflowFromComfyEditor,
@@ -1387,7 +1389,18 @@ export type EmbeddedComfySave = {
   rawJson: ComfyWorkflow
   uiJson?: ComfyUiWorkflow
   editor: ComfyWorkflowEditorMetadata
+  /** Input / output slots set inside the editor (right-click menu); present when slot editing was enabled. */
+  slots?: EditorSlotState
 }
+
+/** What slot editing in the embedded editor starts from: the function being edited (empty slots for a new one). */
+export type ComfySlotSource = {
+  inputs: FunctionInputDef[]
+  outputs: FunctionOutputDef[]
+  workflow?: { rawJson?: ComfyWorkflow }
+}
+
+const NEW_FUNCTION_SLOT_SOURCE: ComfySlotSource = { inputs: [], outputs: [] }
 
 type ComfyEditorPhase = 'login' | 'connecting' | 'ready' | 'error'
 
@@ -1478,6 +1491,8 @@ export function ComfyWorkflowEditorDialog({
   saveLabel = 'Save from ComfyUI',
   initialUiJson,
   initialApiJson,
+  slotSource,
+  initialSlotState,
   onSave,
   onClose,
 }: {
@@ -1491,10 +1506,26 @@ export function ComfyWorkflowEditorDialog({
   saveLabel?: string
   initialUiJson?: ComfyUiWorkflow
   initialApiJson?: ComfyWorkflow
+  /** Enables setting input / output slots from ComfyUI's node right-click menu, starting from this function. */
+  slotSource?: ComfySlotSource
+  /** Resumes an earlier editing session's slots (e.g. a new function not saved yet) instead of `slotSource`. */
+  initialSlotState?: EditorSlotState
   onSave: (value: EmbeddedComfySave) => void | Promise<void>
   onClose: () => void
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null)
+  const slotEditing = Boolean(slotSource || initialSlotState)
+  const slotStartRef = useRef({ slotSource, initialSlotState })
+  const slotStateRef = useRef<EditorSlotState>(initialSlotState ?? editorSlotState(slotSource))
+  const slotController = useMemo<ComfySlotEditorController>(
+    () => ({
+      getState: () => slotStateRef.current,
+      setState: (next) => {
+        slotStateRef.current = next
+      },
+    }),
+    [],
+  )
   const generationRef = useRef(0)
   const initializingRef = useRef<{ generation: number; inputSignature: string; promise: Promise<void> } | undefined>(
     undefined,
@@ -1617,6 +1648,7 @@ export function ComfyWorkflowEditorDialog({
         setStatus('ComfyUI is connected. Build a workflow, then save it to the function.')
       }
       loadedWorkflowRef.current = { generation, inputSignature }
+      if (slotEditing && frameWindow) installComfySlotEditor(frameWindow, app as ComfySlotEditorApp, slotController)
       setFrameReady(true)
       setPhase('ready')
     })()
@@ -1657,7 +1689,7 @@ export function ComfyWorkflowEditorDialog({
     }
     // 依赖 endpointId 等原始值而非 endpoint 对象：健康轮询可能重建 endpoint 引用，
     // 若依赖对象会导致 initializeFrame 每次轮询后重新触发、反复重灌工作流（编辑器闪烁）。
-  }, [endpointId, initialApiJson, initialUiJson, inputSignature, open])
+  }, [endpointId, initialApiJson, initialUiJson, inputSignature, open, slotController, slotEditing])
 
   useEffect(() => {
     if (open) void initializeFrame()
@@ -1673,6 +1705,30 @@ export function ComfyWorkflowEditorDialog({
       passwordAttemptedRef.current = false
     }
   }, [open])
+
+  useEffect(() => {
+    slotStartRef.current = { slotSource, initialSlotState }
+  }, [initialSlotState, slotSource])
+
+  useEffect(() => {
+    if (!open) return
+    const start = slotStartRef.current
+    slotStateRef.current = start.initialSlotState ?? editorSlotState(start.slotSource)
+  }, [open])
+
+  // A separately opened editor window shares this session's slots: same menu, same tags, same data.
+  useEffect(() => {
+    if (!comfyPopup || !slotEditing) return
+    let cancelled = false
+    void waitForComfyPopupApp(comfyPopup)
+      .then((app) => {
+        if (!cancelled && !comfyPopup.closed) installComfySlotEditor(comfyPopup, app as ComfySlotEditorApp, slotController)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [comfyPopup, slotController, slotEditing])
 
   const reloadFrame = () => {
     generationRef.current += 1
@@ -1747,6 +1803,7 @@ export function ComfyWorkflowEditorDialog({
         baseUrl: endpoint.baseUrl,
         savedAt: new Date().toISOString(),
       },
+      ...(slotEditing ? { slots: slotStateRef.current } : {}),
     })
     setError(undefined)
     onClose()
@@ -1899,7 +1956,7 @@ function NewFunctionDialog({
   onSaveComfy: (
     name: string,
     workflow: ComfyWorkflow,
-    options?: { uiJson?: ComfyUiWorkflow; editor?: ComfyWorkflowEditorMetadata; nodeTypes?: ComfyNodeTypes },
+    options?: { uiJson?: ComfyUiWorkflow; editor?: ComfyWorkflowEditorMetadata; nodeTypes?: ComfyNodeTypes; slots?: EditorSlotState },
   ) => string | undefined
   onSaveRequest: (name: string, config: Partial<RequestFunctionConfig>) => string | undefined
   onSaveOpenAI: (name: string, config: Partial<OpenAILlmConfig>) => string | undefined
@@ -1915,6 +1972,7 @@ function NewFunctionDialog({
   const [workflowRawJson, setWorkflowRawJson] = useState<ComfyWorkflow>()
   const [workflowUiJson, setWorkflowUiJson] = useState<ComfyUiWorkflow>()
   const [workflowEditor, setWorkflowEditor] = useState<ComfyWorkflowEditorMetadata>()
+  const [workflowSlots, setWorkflowSlots] = useState<EditorSlotState>()
   const [workflowJson, setWorkflowJson] = useState('')
   const [comfyEditorOpen, setComfyEditorOpen] = useState(false)
   const [comfyEditorMounted, setComfyEditorMounted] = useState(false)
@@ -2037,6 +2095,8 @@ function NewFunctionDialog({
         const nodeTypes = await loadComfyNodeTypes(selectedComfyEndpoint?.id, workflow).finally(() => setSavingFunction(false))
         functionId = onSaveComfy(name, workflow, {
           nodeTypes,
+          // Slots apply to the workflow they were set on; pasted JSON replaces that workflow.
+          slots: workflowRawJson ? workflowSlots : undefined,
           uiJson: workflowUiJson,
           editor:
             workflowEditor ??
@@ -2360,10 +2420,13 @@ function NewFunctionDialog({
         initialUiJson={workflowUiJson}
         initialApiJson={workflowRawJson}
         onClose={() => setComfyEditorOpen(false)}
-        onSave={({ rawJson, uiJson, editor }) => {
+        slotSource={NEW_FUNCTION_SLOT_SOURCE}
+        initialSlotState={workflowSlots}
+        onSave={({ rawJson, uiJson, editor, slots }) => {
           setWorkflowRawJson(rawJson)
           setWorkflowUiJson(uiJson)
           setWorkflowEditor(editor)
+          setWorkflowSlots(slots)
           setWorkflowJson(JSON.stringify(rawJson, null, 2))
           setError(undefined)
         }}
@@ -3384,10 +3447,11 @@ export function FunctionManager({
           endpoint={selectedEditorComfyEndpoint}
           initialUiJson={selectedFunction.workflow.uiJson}
           initialApiJson={selectedFunction.workflow.rawJson}
+          slotSource={selectedFunction}
           onClose={() => setComfyEditorOpen(false)}
-          onSave={async ({ rawJson, uiJson, editor }) => {
+          onSave={async ({ rawJson, uiJson, editor, slots }) => {
             setSelectedWorkflowDraft({ value: '' })
-            await saveFunctionWorkflow(selectedFunction.id, { rawJson, uiJson, editor })
+            await saveFunctionWorkflow(selectedFunction.id, { rawJson, uiJson, editor, slots })
           }}
         />
       ) : null}

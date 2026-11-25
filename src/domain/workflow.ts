@@ -596,3 +596,24 @@ export function injectWorkflowInputs(
 
   return compiled
 }
+
+// Shared with the embedded editor's slot settings (domain/comfySlotEditor.ts), so a slot set in ComfyUI gets exactly
+// the key, label, type and binding the same field or node would get here.
+export const workflowFieldInputType = (classType: string, title: string, field: string, value: unknown) =>
+  inferredInputType({ class_type: classType, _meta: { title }, inputs: {} } as WorkflowNode, title, field, value)
+
+export const outputTypeForComfyTypes = (comfyTypes: string[]): ResourceType | undefined => {
+  const types = new Set(comfyTypes.map((type) => resourceTypeForComfyType[type.trim().toUpperCase()]).filter(Boolean))
+  return OUTPUT_TYPE_PRIORITY.find((type) => types.has(type))
+}
+
+export const outputTypeForClassName = (classType: string) => outputTypeByName({ class_type: classType } as WorkflowNode)
+
+export {
+  freeOutputKey as nextFreeOutputKey,
+  inputKeyFromPath as inputSlotKeyForField,
+  isFallbackOutput as isLegacyFallbackOutput,
+  isGraphLinkValue as isWorkflowLinkValue,
+  labelFromInputKey as inputSlotLabelForField,
+  uniqueInputKey,
+}

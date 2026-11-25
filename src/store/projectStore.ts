@@ -69,6 +69,7 @@ import {
   workflowPrimitiveInputValue,
 } from '../domain/workflow'
 import { comfyNodeTypesFromObjectInfo, type ComfyNodeTypes } from '../domain/comfyNodeTypes'
+import { applyEditorSlots, type EditorSlotState } from '../domain/comfySlotEditor'
 import { isBuiltInFunction, withoutBuiltInProjectFunctions } from '../domain/builtInFunctions'
 import { normalizeTextDisplayMode } from '../domain/textDisplay'
 import { readFileAsDataUrl, type MediaResourcePayload, type MediaResourceKind } from '../domain/resourceFiles'
@@ -325,14 +326,14 @@ export type ProjectStoreState = {
   addFunctionFromWorkflow: (
     name: string,
     workflow: ComfyWorkflow,
-    options?: { uiJson?: ComfyUiWorkflow; editor?: ComfyWorkflowEditorMetadata; nodeTypes?: ComfyNodeTypes },
+    options?: { uiJson?: ComfyUiWorkflow; editor?: ComfyWorkflowEditorMetadata; nodeTypes?: ComfyNodeTypes; slots?: EditorSlotState },
   ) => string
   /** The server's node types (from `/object_info`, cached per server); undefined when the server can't be reached. */
   loadComfyNodeTypes: (endpointId?: string, workflow?: ComfyWorkflow) => Promise<ComfyNodeTypes | undefined>
   /** Saves an edited workflow into a saved function, re-inferring its outputs from the server's node types. */
   saveFunctionWorkflow: (
     functionId: string,
-    workflow: { rawJson: ComfyWorkflow; uiJson?: ComfyUiWorkflow; editor?: ComfyWorkflowEditorMetadata },
+    workflow: { rawJson: ComfyWorkflow; uiJson?: ComfyUiWorkflow; editor?: ComfyWorkflowEditorMetadata; slots?: EditorSlotState },
   ) => Promise<void>
   addRequestFunction: (name: string, config?: Partial<RequestFunctionConfig>) => string
   addOpenAILlmFunction: (name: string, config?: Partial<OpenAILlmConfig>) => string
@@ -5942,6 +5943,14 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       const latest = get().project.functions[functionId]
       if (!latest || latest.workflow.rawJson !== workflow.rawJson) return
       const inferred = inferWorkflowOutputs(workflow.rawJson, nodeTypes)
+      if (workflow.slots) {
+        // Slots set in the editor's right-click menu are the function's slots from now on (same data as the
+        // function settings and the run dialog edit).
+        const generated = createGenerationFunctionFromWorkflow(functionId, latest.name, workflow.rawJson, runtime.now(), { nodeTypes })
+        const slots = applyEditorSlots(workflow.slots, workflow.rawJson, generated)
+        get().updateFunction(functionId, { inputs: slots.inputs, outputs: slots.outputs, outputInference: inferred.inference })
+        return
+      }
       get().updateFunction(functionId, {
         outputs: mergeWorkflowOutputs(latest.outputs, inferred.outputs, workflow.rawJson, previousRawJson),
         outputInference: inferred.inference,
@@ -5951,7 +5960,10 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
     addFunctionFromWorkflow: (name, workflow, options) => {
       const id = runtime.idFactory()
       const now = runtime.now()
-      const generationFunction = createGenerationFunctionFromWorkflow(id, name, workflow, now, options)
+      const generated = createGenerationFunctionFromWorkflow(id, name, workflow, now, options)
+      const generationFunction = options?.slots
+        ? { ...generated, ...applyEditorSlots(options.slots, workflow, generated) }
+        : generated
 
       set((state) => ({
         project: {

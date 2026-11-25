@@ -74,6 +74,7 @@ import {
   endpointSupportsWorkflowFunction,
   RunInspector,
   highlightedJson,
+  type ComfySlotSource,
   type EmbeddedComfySave,
 } from './WorkbenchPanels'
 import { ResourcePreview } from './ResourcePreview'
@@ -116,6 +117,7 @@ import {
 import { useProjectStore } from '../store/projectStore'
 import { useComfyNodeTypes } from './useComfyNodeTypes'
 import { compareImagePair } from '../domain/resultSlots'
+import { applyEditorSlots } from '../domain/comfySlotEditor'
 import { shouldIgnoreCanvasShortcut } from './canvasKeyboard'
 import { buildFlowNodeRenderIndex, flowNodeRenderDependencies, stabilizeFlowNodes } from './canvasFlowNodes'
 import { partitionRunInputs } from './functionRunInputs'
@@ -1192,6 +1194,8 @@ const providerImageContentParts = (functionDef: GenerationFunction) =>
     .map((input) => ({ type: 'image_url' as const, content: input.key, detail: 'auto' as const }))
 
 const OUTPUT_SLOT_TYPES: ResourceType[] = ['image', 'video', 'audio', 'text']
+/** Slot editing for a workflow that has no function yet. */
+const NEW_FUNCTION_SLOTS: ComfySlotSource = { inputs: [], outputs: [] }
 
 /** What a run will produce; for a one-off ComfyUI workflow the output slots can be changed right here. */
 function FunctionRunOutputs({
@@ -1951,6 +1955,7 @@ function TemporaryComfyWorkflowDialog({
   initialWorkflowJson,
   initialUiJson,
   initialEditor,
+  slotSource,
   onEndpointChange,
   onViewChange,
   onUseWorkflow,
@@ -1962,6 +1967,8 @@ function TemporaryComfyWorkflowDialog({
   initialWorkflowJson?: string
   initialUiJson?: ComfyUiWorkflow
   initialEditor?: ComfyWorkflowEditorMetadata
+  /** The one-off function being edited (empty slots for a new one): slots can be set from ComfyUI's node menu. */
+  slotSource: ComfySlotSource
   onEndpointChange: (endpointId: string) => void
   onViewChange: (view: TemporaryComfyWorkflowView) => void
   onUseWorkflow: (workflow: EmbeddedComfySave) => void
@@ -2013,6 +2020,7 @@ function TemporaryComfyWorkflowDialog({
         saveLabel="Use workflow"
         initialUiJson={workflowUiJson}
         initialApiJson={workflowForEditor}
+        slotSource={slotSource}
         onClose={onClose}
         onSave={(saved) => {
           setWorkflowJson(JSON.stringify(saved.rawJson, null, 2))
@@ -3920,7 +3928,7 @@ function CanvasSurface() {
     savedWorkflowEndpointChoices.find((endpoint) => endpoint.id === savedWorkflowEditor?.endpointId) ??
     savedWorkflowEndpointChoices[0]
 
-  const saveTemporaryComfyWorkflow = async ({ rawJson, uiJson, editor }: EmbeddedComfySave) => {
+  const saveTemporaryComfyWorkflow = async ({ rawJson, uiJson, editor, slots }: EmbeddedComfySave) => {
     if (!temporaryComfyWorkflow) return
     const nodeTypes = await loadComfyNodeTypes(temporaryComfyWorkflow.endpointId, rawJson)
     const createdAt = new Date().toISOString()
@@ -3962,6 +3970,9 @@ function CanvasSurface() {
           createdAt: currentTemporaryFunction.createdAt,
         }
       : generatedFunction
+    // Slots set from ComfyUI's node menu during this edit are the function's slots now (deleted nodes dropped,
+    // new nodes' defaults added unless turned off there).
+    if (slots) Object.assign(temporaryFunction, applyEditorSlots(slots, rawJson, generatedFunction))
     const nextInputValues = buildFunctionRunInputDraft(
       temporaryFunction,
       project.resources,
@@ -5081,6 +5092,11 @@ function CanvasSurface() {
           initialWorkflowJson={temporaryComfyWorkflow.workflowJson}
           initialUiJson={temporaryComfyWorkflow.workflowUiJson}
           initialEditor={temporaryComfyWorkflow.workflowEditor}
+          slotSource={
+            functionRunDialog?.temporaryFunction?.workflow.format === 'comfyui_api_json'
+              ? functionRunDialog.temporaryFunction
+              : NEW_FUNCTION_SLOTS
+          }
           view={temporaryComfyWorkflow.view}
           onEndpointChange={(endpointId) =>
             setTemporaryComfyWorkflow((current) => (current ? { ...current, endpointId } : current))
@@ -5170,7 +5186,10 @@ function CanvasSurface() {
           initialUiJson={savedWorkflowFunction.workflow.uiJson}
           initialApiJson={savedWorkflowFunction.workflow.rawJson}
           onClose={() => setSavedWorkflowEditor(undefined)}
-          onSave={({ rawJson, uiJson, editor }) => saveFunctionWorkflow(savedWorkflowFunction.id, { rawJson, uiJson, editor })}
+          slotSource={savedWorkflowFunction}
+          onSave={({ rawJson, uiJson, editor, slots }) =>
+            saveFunctionWorkflow(savedWorkflowFunction.id, { rawJson, uiJson, editor, slots })
+          }
         />
       ) : null}
       {functionEditor && activeFunctionEditorFunction ? (
