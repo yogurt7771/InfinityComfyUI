@@ -27,3 +27,11 @@ playwright-report
 *.njsproj
 *.sln
 *.sw?
+
+# Tests stay local: this repository is public and commits carry no test code (see AGENTS.md)
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+src/test/
+tests/
