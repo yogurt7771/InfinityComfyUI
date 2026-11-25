@@ -1372,343 +1372,345 @@ export function FunctionRunDialog({
             </button>
           </div>
         </header>
-        <div className="function-run-gallery" aria-label="Selected function inputs">
-          {selectedResources.length ? (
-            selectedResources.map((resource, index) => (
-              <div key={`${resource.id}-${index}`} className="function-run-gallery-item">
-                <ResourcePreview resource={resource} />
-                <span>{resource.name ?? resource.id}</span>
-              </div>
-            ))
-          ) : (
-            <p>No assets selected yet.</p>
-          )}
-        </div>
-        {onFunctionDefChange && requestConfig ? (
-          <div className="function-run-provider-fields" aria-label="Request settings">
-            <label>
-              <span>URL</span>
-              <input
-                aria-label="Request URL"
-                value={requestConfig.url}
-                onChange={(event) => updateRequestConfig({ url: event.target.value })}
-              />
-            </label>
-            <label>
-              <span>Method</span>
-              <select
-                aria-label="Request method"
-                value={requestConfig.method}
-                onChange={(event) => updateRequestConfig({ method: event.target.value })}
-              >
-                {requestMethods.map((method) => (
-                  <option key={method} value={method}>
-                    {method}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span>Response</span>
-              <select
-                aria-label="Request response parse"
-                value={requestConfig.responseParse}
-                onChange={(event) =>
-                  updateRequestConfig({ responseParse: event.target.value as typeof requestConfig.responseParse })
-                }
-              >
-                {requestParseModes.map((mode) => (
-                  <option key={mode} value={mode}>
-                    {mode}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span>Authorization</span>
-              <input
-                aria-label="Request Authorization header"
-                autoComplete="off"
-                value={requestConfig.headers.Authorization ?? ''}
-                onChange={(event) => updateRequestHeader('Authorization', event.target.value)}
-                placeholder="Bearer ..."
-              />
-            </label>
-            <label className="function-run-provider-wide">
-              <span>Body</span>
-              <textarea
-                aria-label="Request body"
-                rows={3}
-                value={requestConfig.body}
-                onChange={(event) => updateRequestConfig({ body: event.target.value })}
-              />
-            </label>
+        <div className="local-action-body">
+          <div className="function-run-gallery" aria-label="Selected function inputs">
+            {selectedResources.length ? (
+              selectedResources.map((resource, index) => (
+                <div key={`${resource.id}-${index}`} className="function-run-gallery-item">
+                  <ResourcePreview resource={resource} />
+                  <span>{resource.name ?? resource.id}</span>
+                </div>
+              ))
+            ) : (
+              <p>No assets selected yet.</p>
+            )}
           </div>
-        ) : null}
-        {onFunctionDefChange && openAiConfig ? (
-          <div className="function-run-provider-fields" aria-label="OpenAI settings">
-            <label>
-              <span>API key</span>
-              <input
-                aria-label="OpenAI API key"
-                type="password"
-                value={openAiConfig.apiKey}
-                onChange={(event) => updateOpenAiConfig({ apiKey: event.target.value })}
-              />
-            </label>
-            <label>
-              <span>Base URL</span>
-              <input
-                aria-label="OpenAI base URL"
-                value={openAiConfig.baseUrl}
-                onChange={(event) => updateOpenAiConfig({ baseUrl: event.target.value })}
-              />
-            </label>
-            <label>
-              <span>Model</span>
-              <input
-                aria-label="OpenAI model"
-                value={openAiConfig.model}
-                onChange={(event) => updateOpenAiConfig({ model: event.target.value })}
-              />
-            </label>
-            <label className="function-run-provider-wide">
-              <span>Prompt</span>
-              <textarea
-                aria-label="OpenAI prompt"
-                rows={3}
-                value={textPromptFromProviderMessages(openAiConfig.messages)}
-                onChange={(event) => updateOpenAiPrompt(event.target.value)}
-              />
-            </label>
-          </div>
-        ) : null}
-        {onFunctionDefChange && geminiConfig ? (
-          <div className="function-run-provider-fields" aria-label="Gemini settings">
-            <label>
-              <span>API key</span>
-              <input
-                aria-label="Gemini API key"
-                type="password"
-                value={geminiConfig.apiKey}
-                onChange={(event) => updateGeminiConfig({ apiKey: event.target.value })}
-              />
-            </label>
-            <label>
-              <span>Base URL</span>
-              <input
-                aria-label="Gemini base URL"
-                value={geminiConfig.baseUrl}
-                onChange={(event) => updateGeminiConfig({ baseUrl: event.target.value })}
-              />
-            </label>
-            <label>
-              <span>Model</span>
-              <input
-                aria-label="Gemini model"
-                value={geminiConfig.model}
-                onChange={(event) => updateGeminiConfig({ model: event.target.value })}
-              />
-            </label>
-            <label className="function-run-provider-wide">
-              <span>Prompt</span>
-              <textarea
-                aria-label="Gemini prompt"
-                rows={3}
-                value={textPromptFromProviderMessages(geminiConfig.messages)}
-                onChange={(event) => updateGeminiPrompt(event.target.value)}
-              />
-            </label>
-          </div>
-        ) : null}
-        {onFunctionDefChange && openAiImageConfig ? (
-          <div className="function-run-provider-fields" aria-label="OpenAI image settings">
-            <label>
-              <span>API key</span>
-              <input
-                aria-label="OpenAI image API key"
-                type="password"
-                value={openAiImageConfig.apiKey}
-                onChange={(event) => updateOpenAiImageConfig({ apiKey: event.target.value })}
-              />
-            </label>
-            <label>
-              <span>Base URL</span>
-              <input
-                aria-label="OpenAI image base URL"
-                value={openAiImageConfig.baseUrl}
-                onChange={(event) => updateOpenAiImageConfig({ baseUrl: event.target.value })}
-              />
-            </label>
-            <label>
-              <span>Model</span>
-              <input
-                aria-label="OpenAI image model"
-                value={openAiImageConfig.model}
-                onChange={(event) => updateOpenAiImageConfig({ model: event.target.value })}
-              />
-            </label>
-          </div>
-        ) : null}
-        {onFunctionDefChange && geminiImageConfig ? (
-          <div className="function-run-provider-fields" aria-label="Gemini image settings">
-            <label>
-              <span>API key</span>
-              <input
-                aria-label="Gemini image API key"
-                type="password"
-                value={geminiImageConfig.apiKey}
-                onChange={(event) => updateGeminiImageConfig({ apiKey: event.target.value })}
-              />
-            </label>
-            <label>
-              <span>Base URL</span>
-              <input
-                aria-label="Gemini image base URL"
-                value={geminiImageConfig.baseUrl}
-                onChange={(event) => updateGeminiImageConfig({ baseUrl: event.target.value })}
-              />
-            </label>
-            <label>
-              <span>Model</span>
-              <input
-                aria-label="Gemini image model"
-                value={geminiImageConfig.model}
-                onChange={(event) => updateGeminiImageConfig({ model: event.target.value })}
-              />
-            </label>
-          </div>
-        ) : null}
-        {canEditComfySlots ? (
-          <div className="function-run-slot-editor" aria-label="ComfyUI input slots">
-            <div>
-              <strong>Input slots</strong>
-              <span>Expose workflow fields only when they should be changed before reuse.</span>
+          {onFunctionDefChange && requestConfig ? (
+            <div className="function-run-provider-fields" aria-label="Request settings">
+              <label>
+                <span>URL</span>
+                <input
+                  aria-label="Request URL"
+                  value={requestConfig.url}
+                  onChange={(event) => updateRequestConfig({ url: event.target.value })}
+                />
+              </label>
+              <label>
+                <span>Method</span>
+                <select
+                  aria-label="Request method"
+                  value={requestConfig.method}
+                  onChange={(event) => updateRequestConfig({ method: event.target.value })}
+                >
+                  {requestMethods.map((method) => (
+                    <option key={method} value={method}>
+                      {method}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Response</span>
+                <select
+                  aria-label="Request response parse"
+                  value={requestConfig.responseParse}
+                  onChange={(event) =>
+                    updateRequestConfig({ responseParse: event.target.value as typeof requestConfig.responseParse })
+                  }
+                >
+                  {requestParseModes.map((mode) => (
+                    <option key={mode} value={mode}>
+                      {mode}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Authorization</span>
+                <input
+                  aria-label="Request Authorization header"
+                  autoComplete="off"
+                  value={requestConfig.headers.Authorization ?? ''}
+                  onChange={(event) => updateRequestHeader('Authorization', event.target.value)}
+                  placeholder="Bearer ..."
+                />
+              </label>
+              <label className="function-run-provider-wide">
+                <span>Body</span>
+                <textarea
+                  aria-label="Request body"
+                  rows={3}
+                  value={requestConfig.body}
+                  onChange={(event) => updateRequestConfig({ body: event.target.value })}
+                />
+              </label>
             </div>
-            <select
-              aria-label="Workflow input slot"
-              value={selectedSlotValue}
-              disabled={availableWorkflowSlots.length === 0}
-              onChange={(event) => setSlotDraft(event.target.value)}
-            >
-              {availableWorkflowSlots.length > 0 ? (
-                availableWorkflowSlots.map((input) => (
-                  <option key={workflowSlotValue(input)} value={workflowSlotValue(input)}>
-                    {workflowSlotDisplay(input)}
-                  </option>
-                ))
-              ) : (
-                <option value="">No hidden workflow inputs</option>
-              )}
-            </select>
-            <button type="button" aria-label="Add input slot" disabled={!selectedSlotValue} onClick={addWorkflowInputSlot}>
-              <Plus size={15} />
-              Add slot
-            </button>
-          </div>
-        ) : null}
-        <div className="function-run-fields">
-          {functionDef.inputs.map((input) => {
-            const value = values[input.key]
-            const resourceValue = isResourceRefValue(value) ? value : undefined
-            const selectedResource = resourceValue ? resourcesById[resourceValue.resourceId] : undefined
-            const matchingResources = Object.values(resourcesById).filter((resource) => resource.type === input.type)
-            const primitiveValue = isResourceRefValue(value) ? '' : value
-            const inputLabel = input.label || input.key
-            const workflowSlotExists =
-              !canEditComfySlots || workflowInputBindingExists(functionDef.workflow.rawJson, input)
-            return (
-              <div
-                key={input.key}
-                className={`function-run-field${workflowSlotExists ? '' : ' function-run-field-invalid'}`}
-                aria-invalid={workflowSlotExists ? undefined : true}
+          ) : null}
+          {onFunctionDefChange && openAiConfig ? (
+            <div className="function-run-provider-fields" aria-label="OpenAI settings">
+              <label>
+                <span>API key</span>
+                <input
+                  aria-label="OpenAI API key"
+                  type="password"
+                  value={openAiConfig.apiKey}
+                  onChange={(event) => updateOpenAiConfig({ apiKey: event.target.value })}
+                />
+              </label>
+              <label>
+                <span>Base URL</span>
+                <input
+                  aria-label="OpenAI base URL"
+                  value={openAiConfig.baseUrl}
+                  onChange={(event) => updateOpenAiConfig({ baseUrl: event.target.value })}
+                />
+              </label>
+              <label>
+                <span>Model</span>
+                <input
+                  aria-label="OpenAI model"
+                  value={openAiConfig.model}
+                  onChange={(event) => updateOpenAiConfig({ model: event.target.value })}
+                />
+              </label>
+              <label className="function-run-provider-wide">
+                <span>Prompt</span>
+                <textarea
+                  aria-label="OpenAI prompt"
+                  rows={3}
+                  value={textPromptFromProviderMessages(openAiConfig.messages)}
+                  onChange={(event) => updateOpenAiPrompt(event.target.value)}
+                />
+              </label>
+            </div>
+          ) : null}
+          {onFunctionDefChange && geminiConfig ? (
+            <div className="function-run-provider-fields" aria-label="Gemini settings">
+              <label>
+                <span>API key</span>
+                <input
+                  aria-label="Gemini API key"
+                  type="password"
+                  value={geminiConfig.apiKey}
+                  onChange={(event) => updateGeminiConfig({ apiKey: event.target.value })}
+                />
+              </label>
+              <label>
+                <span>Base URL</span>
+                <input
+                  aria-label="Gemini base URL"
+                  value={geminiConfig.baseUrl}
+                  onChange={(event) => updateGeminiConfig({ baseUrl: event.target.value })}
+                />
+              </label>
+              <label>
+                <span>Model</span>
+                <input
+                  aria-label="Gemini model"
+                  value={geminiConfig.model}
+                  onChange={(event) => updateGeminiConfig({ model: event.target.value })}
+                />
+              </label>
+              <label className="function-run-provider-wide">
+                <span>Prompt</span>
+                <textarea
+                  aria-label="Gemini prompt"
+                  rows={3}
+                  value={textPromptFromProviderMessages(geminiConfig.messages)}
+                  onChange={(event) => updateGeminiPrompt(event.target.value)}
+                />
+              </label>
+            </div>
+          ) : null}
+          {onFunctionDefChange && openAiImageConfig ? (
+            <div className="function-run-provider-fields" aria-label="OpenAI image settings">
+              <label>
+                <span>API key</span>
+                <input
+                  aria-label="OpenAI image API key"
+                  type="password"
+                  value={openAiImageConfig.apiKey}
+                  onChange={(event) => updateOpenAiImageConfig({ apiKey: event.target.value })}
+                />
+              </label>
+              <label>
+                <span>Base URL</span>
+                <input
+                  aria-label="OpenAI image base URL"
+                  value={openAiImageConfig.baseUrl}
+                  onChange={(event) => updateOpenAiImageConfig({ baseUrl: event.target.value })}
+                />
+              </label>
+              <label>
+                <span>Model</span>
+                <input
+                  aria-label="OpenAI image model"
+                  value={openAiImageConfig.model}
+                  onChange={(event) => updateOpenAiImageConfig({ model: event.target.value })}
+                />
+              </label>
+            </div>
+          ) : null}
+          {onFunctionDefChange && geminiImageConfig ? (
+            <div className="function-run-provider-fields" aria-label="Gemini image settings">
+              <label>
+                <span>API key</span>
+                <input
+                  aria-label="Gemini image API key"
+                  type="password"
+                  value={geminiImageConfig.apiKey}
+                  onChange={(event) => updateGeminiImageConfig({ apiKey: event.target.value })}
+                />
+              </label>
+              <label>
+                <span>Base URL</span>
+                <input
+                  aria-label="Gemini image base URL"
+                  value={geminiImageConfig.baseUrl}
+                  onChange={(event) => updateGeminiImageConfig({ baseUrl: event.target.value })}
+                />
+              </label>
+              <label>
+                <span>Model</span>
+                <input
+                  aria-label="Gemini image model"
+                  value={geminiImageConfig.model}
+                  onChange={(event) => updateGeminiImageConfig({ model: event.target.value })}
+                />
+              </label>
+            </div>
+          ) : null}
+          {canEditComfySlots ? (
+            <div className="function-run-slot-editor" aria-label="ComfyUI input slots">
+              <div>
+                <strong>Input slots</strong>
+                <span>Expose workflow fields only when they should be changed before reuse.</span>
+              </div>
+              <select
+                aria-label="Workflow input slot"
+                value={selectedSlotValue}
+                disabled={availableWorkflowSlots.length === 0}
+                onChange={(event) => setSlotDraft(event.target.value)}
               >
-                <div className="function-run-field-heading">
-                  <span>
-                    {inputLabel}
-                    {input.required ? <strong>Required</strong> : null}
-                  </span>
-                  {canEditComfySlots ? (
+                {availableWorkflowSlots.length > 0 ? (
+                  availableWorkflowSlots.map((input) => (
+                    <option key={workflowSlotValue(input)} value={workflowSlotValue(input)}>
+                      {workflowSlotDisplay(input)}
+                    </option>
+                  ))
+                ) : (
+                  <option value="">No hidden workflow inputs</option>
+                )}
+              </select>
+              <button type="button" aria-label="Add input slot" disabled={!selectedSlotValue} onClick={addWorkflowInputSlot}>
+                <Plus size={15} />
+                Add slot
+              </button>
+            </div>
+          ) : null}
+          <div className="function-run-fields">
+            {functionDef.inputs.map((input) => {
+              const value = values[input.key]
+              const resourceValue = isResourceRefValue(value) ? value : undefined
+              const selectedResource = resourceValue ? resourcesById[resourceValue.resourceId] : undefined
+              const matchingResources = Object.values(resourcesById).filter((resource) => resource.type === input.type)
+              const primitiveValue = isResourceRefValue(value) ? '' : value
+              const inputLabel = input.label || input.key
+              const workflowSlotExists =
+                !canEditComfySlots || workflowInputBindingExists(functionDef.workflow.rawJson, input)
+              return (
+                <div
+                  key={input.key}
+                  className={`function-run-field${workflowSlotExists ? '' : ' function-run-field-invalid'}`}
+                  aria-invalid={workflowSlotExists ? undefined : true}
+                >
+                  <div className="function-run-field-heading">
+                    <span>
+                      {inputLabel}
+                      {input.required ? <strong>Required</strong> : null}
+                    </span>
+                    {canEditComfySlots ? (
+                      <button
+                        type="button"
+                        className="function-run-delete-slot"
+                        aria-label={`Delete input slot ${input.key}`}
+                        title="Delete input slot"
+                        onClick={() => deleteWorkflowInputSlot(input.key)}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    ) : null}
+                  </div>
+                  {!workflowSlotExists ? <span className="field-error">Workflow slot no longer exists</span> : null}
+                  <div className="function-run-slot-row">
+                    <select
+                      aria-label={`Asset input ${inputLabel}`}
+                      value={resourceValue?.resourceId ?? ''}
+                      onChange={(event) => setResourceValue(input.key, event.target.value, input.type)}
+                    >
+                      <option value="">Manual / empty</option>
+                      {matchingResources.map((resource) => (
+                        <option key={resource.id} value={resource.id}>
+                          {resource.name ?? resource.id}
+                        </option>
+                      ))}
+                    </select>
                     <button
                       type="button"
-                      className="function-run-delete-slot"
-                      aria-label={`Delete input slot ${input.key}`}
-                      title="Delete input slot"
-                      onClick={() => deleteWorkflowInputSlot(input.key)}
+                      aria-label={`Pick asset for ${inputLabel}`}
+                      className="function-run-pick-button"
+                      title={`Pick ${inputLabel} from canvas`}
+                      onClick={() => onPickInput({ key: input.key, label: inputLabel, type: input.type })}
                     >
-                      <Trash2 size={14} />
+                      <MousePointer2 aria-hidden="true" size={15} />
+                    </button>
+                  </div>
+                  {selectedResource && isMediaResourceType(selectedResource.type) ? (
+                    <button
+                      type="button"
+                      className="function-run-input-preview"
+                      aria-label={`Preview ${inputLabel} input`}
+                      onClick={() => setPreviewResource(selectedResource)}
+                    >
+                      <ResourcePreview resource={selectedResource} />
                     </button>
                   ) : null}
-                </div>
-                {!workflowSlotExists ? <span className="field-error">Workflow slot no longer exists</span> : null}
-                <div className="function-run-slot-row">
-                  <select
-                    aria-label={`Asset input ${inputLabel}`}
-                    value={resourceValue?.resourceId ?? ''}
-                    onChange={(event) => setResourceValue(input.key, event.target.value, input.type)}
-                  >
-                    <option value="">Manual / empty</option>
-                    {matchingResources.map((resource) => (
-                      <option key={resource.id} value={resource.id}>
-                        {resource.name ?? resource.id}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    aria-label={`Pick asset for ${inputLabel}`}
-                    className="function-run-pick-button"
-                    title={`Pick ${inputLabel} from canvas`}
-                    onClick={() => onPickInput({ key: input.key, label: inputLabel, type: input.type })}
-                  >
-                    <MousePointer2 aria-hidden="true" size={15} />
-                  </button>
-                </div>
-                {selectedResource && isMediaResourceType(selectedResource.type) ? (
-                  <button
-                    type="button"
-                    className="function-run-input-preview"
-                    aria-label={`Preview ${inputLabel} input`}
-                    onClick={() => setPreviewResource(selectedResource)}
-                  >
-                    <ResourcePreview resource={selectedResource} />
-                  </button>
-                ) : null}
-                {(input.type === 'number' || input.type === 'text' || input.type === 'boolean') && !resourceValue ? (
-                  <span className="function-run-manual-label">Manual value</span>
-                ) : null}
-                {input.type === 'number' ? (
-                  <input
-                    aria-label={`Manual input ${inputLabel}`}
-                    disabled={Boolean(resourceValue)}
-                    inputMode="decimal"
-                    type="number"
-                    value={Number(primitiveValue ?? 0)}
-                    onChange={(event) => setPrimitiveValue(input.key, Number(event.target.value))}
-                  />
-                ) : input.type === 'text' ? (
-                  <textarea
-                    aria-label={`Manual input ${inputLabel}`}
-                    disabled={Boolean(resourceValue)}
-                    rows={3}
-                    value={String(primitiveValue ?? '')}
-                    onChange={(event) => setPrimitiveValue(input.key, event.target.value)}
-                  />
-                ) : input.type === 'boolean' ? (
-                  <label className="function-run-boolean-input">
+                  {(input.type === 'number' || input.type === 'text' || input.type === 'boolean') && !resourceValue ? (
+                    <span className="function-run-manual-label">Manual value</span>
+                  ) : null}
+                  {input.type === 'number' ? (
                     <input
                       aria-label={`Manual input ${inputLabel}`}
-                      checked={primitiveValue === true}
                       disabled={Boolean(resourceValue)}
-                      type="checkbox"
-                      onChange={(event) => setPrimitiveValue(input.key, event.target.checked)}
+                      inputMode="decimal"
+                      type="number"
+                      value={Number(primitiveValue ?? 0)}
+                      onChange={(event) => setPrimitiveValue(input.key, Number(event.target.value))}
                     />
-                    <span>{primitiveValue === true ? 'true' : 'false'}</span>
-                  </label>
-                ) : null}
-              </div>
-            )
-          })}
+                  ) : input.type === 'text' ? (
+                    <textarea
+                      aria-label={`Manual input ${inputLabel}`}
+                      disabled={Boolean(resourceValue)}
+                      rows={3}
+                      value={String(primitiveValue ?? '')}
+                      onChange={(event) => setPrimitiveValue(input.key, event.target.value)}
+                    />
+                  ) : input.type === 'boolean' ? (
+                    <label className="function-run-boolean-input">
+                      <input
+                        aria-label={`Manual input ${inputLabel}`}
+                        checked={primitiveValue === true}
+                        disabled={Boolean(resourceValue)}
+                        type="checkbox"
+                        onChange={(event) => setPrimitiveValue(input.key, event.target.checked)}
+                      />
+                      <span>{primitiveValue === true ? 'true' : 'false'}</span>
+                    </label>
+                  ) : null}
+                </div>
+              )
+            })}
+          </div>
         </div>
         <div className="local-action-footer">
           <label className="function-run-count">
@@ -1842,44 +1844,46 @@ function TemporaryComfyWorkflowDialog({
             <X size={16} />
           </button>
         </header>
-        <label className="temporary-comfy-endpoint">
-          <span>ComfyUI server</span>
-          <select
-            aria-label="ComfyUI server for temporary workflow"
-            value={selectedEndpoint?.id ?? ''}
-            onChange={(event) => onEndpointChange(event.target.value)}
-          >
-            {enabledEndpoints.length ? (
-              enabledEndpoints.map((endpoint) => (
-                <option key={endpoint.id} value={endpoint.id}>
-                  {endpoint.name} - {endpoint.baseUrl}
-                </option>
-              ))
-            ) : (
-              <option value="">No ComfyUI server configured</option>
-            )}
-          </select>
-        </label>
-        <div className="temporary-comfy-panel">
-          <strong>{workflowJson.trim() ? 'API workflow ready to update' : 'No workflow imported yet'}</strong>
-          <span>Build in the embedded ComfyUI editor and capture the runnable API workflow automatically.</span>
+        <div className="local-action-body">
+          <label className="temporary-comfy-endpoint">
+            <span>ComfyUI server</span>
+            <select
+              aria-label="ComfyUI server for temporary workflow"
+              value={selectedEndpoint?.id ?? ''}
+              onChange={(event) => onEndpointChange(event.target.value)}
+            >
+              {enabledEndpoints.length ? (
+                enabledEndpoints.map((endpoint) => (
+                  <option key={endpoint.id} value={endpoint.id}>
+                    {endpoint.name} - {endpoint.baseUrl}
+                  </option>
+                ))
+              ) : (
+                <option value="">No ComfyUI server configured</option>
+              )}
+            </select>
+          </label>
+          <div className="temporary-comfy-panel">
+            <strong>{workflowJson.trim() ? 'API workflow ready to update' : 'No workflow imported yet'}</strong>
+            <span>Build in the embedded ComfyUI editor and capture the runnable API workflow automatically.</span>
+          </div>
+          <label className="field">
+            <span>ComfyUI API workflow JSON</span>
+            <textarea
+              aria-invalid={error ? true : undefined}
+              aria-label="ComfyUI API workflow JSON"
+              rows={10}
+              value={workflowJson}
+              onChange={(event) => {
+                setWorkflowJson(event.target.value)
+                setWorkflowUiJson(undefined)
+                setWorkflowEditor(undefined)
+                setError(undefined)
+              }}
+            />
+          </label>
+          {error ? <span className="field-error" role="alert">{error}</span> : null}
         </div>
-        <label className="field">
-          <span>ComfyUI API workflow JSON</span>
-          <textarea
-            aria-invalid={error ? true : undefined}
-            aria-label="ComfyUI API workflow JSON"
-            rows={10}
-            value={workflowJson}
-            onChange={(event) => {
-              setWorkflowJson(event.target.value)
-              setWorkflowUiJson(undefined)
-              setWorkflowEditor(undefined)
-              setError(undefined)
-            }}
-          />
-        </label>
-        {error ? <span className="field-error" role="alert">{error}</span> : null}
         <div className="local-action-footer">
           <button type="button" onClick={onClose}>
             Cancel

@@ -3055,6 +3055,29 @@ textarea[aria-invalid="true"] {
   border-radius: 12px;
   background: #ffffff;
   box-shadow: 0 24px 72px rgba(15, 23, 42, 0.22);
+  /* Never taller than the viewport (backdrop has 24px padding); small dialogs scroll as a whole. */
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Dialogs with a body region keep header and footer in view; only the body scrolls. */
+.local-action-dialog:has(> .local-action-body) {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+
+.local-action-body {
+  display: grid;
+  /* max-content rows: sections such as the gallery (a scroll container) must not be squeezed to their minimum. */
+  grid-auto-rows: max-content;
+  align-content: start;
+  gap: 14px;
+  min-height: 0;
+  margin-right: -8px;
+  padding-right: 8px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .local-action-dialog header {
@@ -3485,9 +3508,6 @@ textarea[aria-invalid="true"] {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 10px;
-  max-height: min(46vh, 420px);
-  overflow: auto;
-  padding-right: 2px;
 }
 
 .function-run-field {
