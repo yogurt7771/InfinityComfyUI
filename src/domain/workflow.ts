@@ -261,9 +261,21 @@ const inferredInputType = (node: WorkflowNode, title: string, key: string, value
   return undefined
 }
 
+const comparableClassType = (node: WorkflowNode) => normalized(node.class_type ?? '').replace(/[^a-z0-9]+/g, '')
+
+// SaveImage is not the only way a workflow ends in an image: PreviewImage and custom save nodes (WAS "Image Save",
+// "easy imageSave", SaveAnimatedWEBP...) put their files in history too. SaveImageWebsocket never does.
+const imageOutputKind = (node: WorkflowNode): 'save' | 'preview' | undefined => {
+  const classType = comparableClassType(node)
+  if (classType.includes('websocket')) return undefined
+  if ((classType.includes('image') && classType.includes('save')) || classType.includes('saveanimated')) return 'save'
+  if (classType.includes('image') && classType.includes('preview')) return 'preview'
+  return undefined
+}
+
 const outputNodeMatches = (node: WorkflowNode, type: ResourceType) => {
   const classType = normalized(node.class_type ?? '')
-  if (type === 'image') return classType === 'saveimage'
+  if (type === 'image') return imageOutputKind(node) !== undefined
   if (type === 'video') return classType.includes('video') && (classType.includes('save') || classType.includes('combine'))
   if (type === 'audio') return classType.includes('audio') && (classType.includes('save') || classType.includes('preview'))
   if (type === 'text') {
@@ -332,9 +344,16 @@ export const workflowInputCandidates = (workflow: ComfyWorkflow, existingInputs:
 const mediaInputsForWorkflow = (workflow: ComfyWorkflow): FunctionInputDef[] =>
   workflowInputCandidates(workflow).filter((input) => isMediaResourceType(input.type))
 
-const outputsForType = (workflow: ComfyWorkflow, type: ResourceType, label: string): FunctionOutputDef[] =>
-  Object.entries(workflow)
-    .filter(([, node]) => outputNodeMatches(node, type))
+// Save nodes are the workflow's deliverables; previews only count when the workflow saves nothing.
+const imageOutputNodeMatches = (workflow: ComfyWorkflow) => {
+  const hasSaveNode = Object.values(workflow).some((node) => imageOutputKind(node) === 'save')
+  return (node: WorkflowNode) => imageOutputKind(node) === (hasSaveNode ? 'save' : 'preview')
+}
+
+const outputsForType = (workflow: ComfyWorkflow, type: ResourceType, label: string): FunctionOutputDef[] => {
+  const matches = type === 'image' ? imageOutputNodeMatches(workflow) : (node: WorkflowNode) => outputNodeMatches(node, type)
+  return Object.entries(workflow)
+    .filter(([, node]) => matches(node))
     .map(([id, node], index) => ({
       key: index === 0 ? type : `${type}_${index + 1}`,
       label: index === 0 ? label : `${label} ${index + 1}`,
@@ -342,6 +361,10 @@ const outputsForType = (workflow: ComfyWorkflow, type: ResourceType, label: stri
       bind: { nodeId: id, nodeTitle: nodeTitle(id, node) },
       extract: { source: type === 'text' ? 'node_output' : 'history', multiple: true },
     }))
+}
+
+const FALLBACK_OUTPUT_KEY = 'result'
+const FALLBACK_OUTPUT_TITLE = 'Result'
 
 const outputsForWorkflow = (workflow: ComfyWorkflow): FunctionOutputDef[] => {
   const outputs = [
@@ -354,16 +377,37 @@ const outputsForWorkflow = (workflow: ComfyWorkflow): FunctionOutputDef[] => {
   if (outputs.length === 0) {
     return [
       {
-        key: 'result',
-        label: 'Result',
+        key: FALLBACK_OUTPUT_KEY,
+        label: FALLBACK_OUTPUT_TITLE,
         type: 'text',
-        bind: { nodeTitle: 'Result' },
+        bind: { nodeTitle: FALLBACK_OUTPUT_TITLE },
         extract: { source: 'history', multiple: true },
       },
     ]
   }
 
   return outputs
+}
+
+const isFallbackOutput = (output: FunctionOutputDef) =>
+  output.key === FALLBACK_OUTPUT_KEY &&
+  output.type === 'text' &&
+  !output.bind.nodeId &&
+  output.bind.nodeTitle === FALLBACK_OUTPUT_TITLE
+
+/**
+ * Workflows whose only image output was not a SaveImage node used to get a text "Result" output that can never be
+ * found in history, so every run failed as a text node. Re-infer those outputs from the stored workflow so rerunning
+ * such a node produces the image; definitions that really target a node titled "Result" are left alone.
+ */
+export function repairFallbackComfyOutputs(functionDef: GenerationFunction): GenerationFunction {
+  const workflow = functionDef.workflow.rawJson
+  if (functionDef.workflow.format !== 'comfyui_api_json' || !workflow || typeof workflow !== 'object') return functionDef
+  if (functionDef.outputs.length !== 1 || !isFallbackOutput(functionDef.outputs[0]!)) return functionDef
+  if (Object.values(workflow).some((node) => node?._meta?.title?.trim() === FALLBACK_OUTPUT_TITLE)) return functionDef
+  const outputs = outputsForWorkflow(workflow)
+  if (outputs.length === 1 && isFallbackOutput(outputs[0]!)) return functionDef
+  return { ...functionDef, outputs }
 }
 
 export function createGenerationFunctionFromWorkflow(

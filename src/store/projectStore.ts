@@ -59,7 +59,7 @@ import { createConfigPackage, createProjectPackage, type ConfigPackage, type Ful
 import { blobToDataUrl, cacheProjectAssetBlob, readCachedProjectAssetBlob } from '../domain/projectAssets'
 import { randomizeWorkflowSeeds } from '../domain/seed'
 import { selectEndpoint } from '../domain/scheduler'
-import { createGenerationFunctionFromWorkflow, injectWorkflowInputs, workflowPrimitiveInputValue } from '../domain/workflow'
+import { createGenerationFunctionFromWorkflow, injectWorkflowInputs, repairFallbackComfyOutputs, workflowPrimitiveInputValue } from '../domain/workflow'
 import { isBuiltInFunction, withoutBuiltInProjectFunctions } from '../domain/builtInFunctions'
 import { normalizeTextDisplayMode } from '../domain/textDisplay'
 import { readFileAsDataUrl, type MediaResourcePayload, type MediaResourceKind } from '../domain/resourceFiles'
@@ -1698,10 +1698,12 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
   const temporaryFunctionDrafts = new Map<string, GenerationFunction>()
 
   return createStore<ProjectStoreState>((set, get) => {
-    const functionDefinitionById = (functionId: string) =>
-      get().project.functions[functionId] ?? temporaryFunctionDrafts.get(functionId)
+    const functionDefinitionById = (functionId: string) => {
+      const functionDef = get().project.functions[functionId] ?? temporaryFunctionDrafts.get(functionId)
+      return functionDef && repairFallbackComfyOutputs(functionDef)
+    }
     const functionDefinitionForTask = (task: ExecutionTask) =>
-      task.functionSnapshot ?? functionDefinitionById(task.functionId)
+      task.functionSnapshot ? repairFallbackComfyOutputs(task.functionSnapshot) : functionDefinitionById(task.functionId)
 
     const isTemporaryFunctionDefinition = (functionDef: GenerationFunction) =>
       !get().project.functions[functionDef.id] && temporaryFunctionDrafts.has(functionDef.id)

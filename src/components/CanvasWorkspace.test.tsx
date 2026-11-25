@@ -553,6 +553,54 @@ describe('CanvasWorkspace', () => {
     expect(Object.keys(projectStore.getState().project.functions).sort()).toEqual(initialFunctionIds)
   })
 
+  it('renders the result of a new workflow that ends in Preview Image as an image node', async () => {
+    configureTemporaryComfyProject()
+    const previewOnlyWorkflow = {
+      '4': { class_type: 'CheckpointLoaderSimple', _meta: { title: 'Load Checkpoint' }, inputs: { ckpt_name: 'model.safetensors' } },
+      '5': { class_type: 'EmptyLatentImage', _meta: { title: 'Empty Latent Image' }, inputs: { width: 512, height: 512, batch_size: 1 } },
+      '8': { class_type: 'VAEDecode', _meta: { title: 'VAE Decode' }, inputs: { samples: ['5', 0], vae: ['4', 2] } },
+      '9': { class_type: 'PreviewImage', _meta: { title: 'Preview Image' }, inputs: { images: ['8', 0] } },
+    }
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input instanceof Request ? input.url : input)
+      const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } })
+      if (url.includes('/history/')) {
+        return json({ prompt_preview: { outputs: { '9': { images: [{ filename: 'preview_00001_.png', subfolder: '', type: 'temp' }] } } } })
+      }
+      if (url.endsWith('/prompt')) return json({ prompt_id: 'prompt_preview', number: 1 })
+      if (url.includes('/view')) return new Response(new Blob(['png-bytes'], { type: 'image/png' }), { headers: { 'content-type': 'image/png' } })
+      return json({})
+    })
+
+    const menu = openAddMenu()
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'ComfyUI Workflow' }))
+    const editorDialog = screen.getByRole('dialog', { name: 'ComfyUI Workflow Editor' })
+    connectEditorApp(editorDialog, previewOnlyWorkflow)
+    const useWorkflow = within(editorDialog).getByRole('button', { name: 'Use workflow' })
+    await waitFor(() => expect(useWorkflow).toBeEnabled(), { timeout: 5000 })
+    fireEvent.click(useWorkflow)
+    const runDialog = await screen.findByRole('dialog', { name: 'Run ComfyUI Workflow' })
+    fireEvent.click(within(runDialog).getByRole('button', { name: 'Run function from popup' }))
+
+    const resultTask = await waitFor(() => {
+      const task = Object.values(projectStore.getState().project.tasks).find((item) => item.comfyPromptId === 'prompt_preview');
+      expect(task?.status).toBe('succeeded')
+      return task!
+    })
+    const resultRef = Object.values(resultTask.outputRefs).flat()[0]!
+    expect(resultRef.type).toBe('image')
+    expect(projectStore.getState().project.resources[resultRef.resourceId]?.type).toBe('image')
+    const resultNode = projectStore
+      .getState()
+      .project.canvas.nodes.find((node) => node.type === 'resource' && node.data.resourceId === resultRef.resourceId)!
+    expect(resultNode.data.resourceType).toBe('image')
+    await waitFor(() =>
+      expect(
+        document.querySelector(`.react-flow__node[data-id="${resultNode.id}"] .resource-preview-image`),
+      ).not.toBeNull(),
+    )
+  })
+
   it('edits a saved function workflow in place from its run dialog and keeps the run dialog open', async () => {
     configureTemporaryComfyProject()
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
