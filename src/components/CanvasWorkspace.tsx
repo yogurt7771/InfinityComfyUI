@@ -41,6 +41,8 @@ import {
 import {
   BookmarkPlus,
   ChevronDown,
+  ChevronsDownUp,
+  ChevronsUpDown,
   CaseSensitive,
   Copy,
   GitCompareArrows,
@@ -92,6 +94,8 @@ import {
   requestParseModes,
 } from '../domain/requestFunction'
 import {
+  RESOURCE_NODE_COLLAPSED_HEIGHT,
+  isCollapsedCanvasNode,
   resourceNodeMinSize,
   resourceNodeMinSizeForCanvasNode,
   type ResourceNodeLayoutContext,
@@ -852,7 +856,9 @@ export const flowNodeStyle = (node: CanvasNode, context: ResourceNodeLayoutConte
     const minSize = resourceNodeMinSizeForCanvasNode(node, context)
     return {
       width: Math.max(size?.width ?? minSize.width, minSize.width),
-      height: Math.max(size?.height ?? minSize.height, minSize.height),
+      height: isCollapsedCanvasNode(node)
+        ? RESOURCE_NODE_COLLAPSED_HEIGHT
+        : Math.max(size?.height ?? minSize.height, minSize.height),
     }
   }
   return {
@@ -2130,6 +2136,7 @@ function CanvasSurface() {
   const updateNodePosition = useProjectStore((state) => state.updateNodePosition)
   const updateNodePositions = useProjectStore((state) => state.updateNodePositions)
   const updateNodeSize = useProjectStore((state) => state.updateNodeSize)
+  const setNodesCollapsed = useProjectStore((state) => state.setNodesCollapsed)
   const renameNode = useProjectStore((state) => state.renameNode)
   const deleteNode = useProjectStore((state) => state.deleteNode)
   const deleteNodes = useProjectStore((state) => state.deleteNodes)
@@ -2470,6 +2477,7 @@ function CanvasSurface() {
           onRerunResource: rerunResource,
           onOpenFunctionRunForResource: openFunctionRunForResource,
           onResizeNode: updateNodeSize,
+          onSetNodesCollapsed: setNodesCollapsed,
         },
       }))
   }, [
@@ -2502,6 +2510,7 @@ function CanvasSurface() {
       updateFunctionNodeRequestConfig,
       updateFunctionNodeRequestOutputs,
       updateNodeSize,
+      setNodesCollapsed,
       updateBooleanResourceValue,
       updateNumberResourceValue,
       updateTextResourceDisplayMode,
@@ -4249,6 +4258,13 @@ function CanvasSurface() {
       case 'edit-rerun':
         if (selectedSingleResource) openFunctionRunForResource(selectedSingleResource.id)
         return
+      case 'collapse':
+      case 'expand':
+        setNodesCollapsed(
+          selectedCanvasNodes.filter((node) => node.type === 'resource').map((node) => node.id),
+          action.id === 'collapse',
+        )
+        return
       case 'edit-workflow': {
         const opened = selectedSingleResource ? openFunctionRunForResource(selectedSingleResource.id) : undefined
         if (opened) openComfyEditorForRun(opened.dialog, opened.functionDef)
@@ -4348,6 +4364,15 @@ function CanvasSurface() {
       selectionActions.push({ id: 'group', label: 'Group', title: 'Group selection (Ctrl+G)', icon: <Layers size={15} />, iconOnly: true })
     }
     if (singleGroup) selectionActions.push({ id: 'ungroup', label: 'Ungroup', icon: <Scissors size={15} />, iconOnly: true })
+    const selectedResourceNodes = selectedCanvasNodes.filter((node) => node.type === 'resource')
+    if (selectedResourceNodes.length > 0) {
+      const anyExpanded = selectedResourceNodes.some((node) => !isCollapsedCanvasNode(node))
+      selectionActions.push(
+        anyExpanded
+          ? { id: 'collapse', label: 'Collapse', title: 'Collapse selected nodes to their titles', icon: <ChevronsDownUp size={15} />, iconOnly: true }
+          : { id: 'expand', label: 'Expand', title: 'Expand selected nodes', icon: <ChevronsUpDown size={15} />, iconOnly: true },
+      )
+    }
     if (groupableCount >= 2 || singleGroup) {
       selectionActions.push({ id: 'template', label: 'Save as Template', icon: <BookmarkPlus size={15} />, iconOnly: true })
     }

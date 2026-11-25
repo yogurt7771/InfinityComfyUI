@@ -8889,3 +8889,33 @@ body[data-theme='light'] .function-run-dialog .local-action-footer button:not(.p
   opacity: 0.5;
   box-shadow: none;
 }
+
+/* Collapsible resource nodes: the title bar stays, handles stay centred on it so edges keep attaching. */
+:is(body[data-theme], body) .workspace-canvas .resource-node.is-collapsed {
+  min-height: 0;
+  grid-template-rows: auto;
+  align-content: center;
+  padding-block: 10px;
+}
+
+:is(body[data-theme], body) .workspace-canvas .node-collapse-toggle {
+  flex: 0 0 auto;
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
+  min-height: 22px;
+  margin-left: -4px;
+  padding: 0;
+  border-color: transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+}
+
+:is(body[data-theme], body) .workspace-canvas .node-collapse-toggle:hover,
+:is(body[data-theme], body) .workspace-canvas .node-collapse-toggle:focus-visible {
+  border-color: var(--line);
+  color: var(--ink);
+  background: var(--teal-soft);
+}

@@ -374,6 +374,8 @@ export type ProjectStoreState = {
   updateNodePosition: (nodeId: string, position: { x: number; y: number }) => void
   updateNodePositions: (positionsByNodeId: Record<string, { x: number; y: number }>) => void
   updateNodeSize: (nodeId: string, size: { width: number; height: number }) => void
+  /** Collapses resource nodes to their title bar (or expands them); recorded in undo history. */
+  setNodesCollapsed: (nodeIds: string[], collapsed: boolean) => void
   renameNode: (nodeId: string, title: string) => void
   deleteSelectedNode: () => void
   deleteNode: (nodeId: string) => void
@@ -8836,6 +8838,41 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
               ),
             },
           },
+        }
+      })
+    },
+
+    setNodesCollapsed: (nodeIds, collapsed) => {
+      const now = runtime.now()
+      set((state) => {
+        const requested = new Set(nodeIds)
+        const changedIds = state.project.canvas.nodes
+          .filter((node) => requested.has(node.id) && node.type === 'resource' && (node.data.collapsed === true) !== collapsed)
+          .map((node) => node.id)
+        if (changedIds.length === 0) return state
+        const changed = new Set(changedIds)
+        const nextProject = {
+          ...ensureProjectHistory(state.project),
+          project: { ...state.project.project, updatedAt: now },
+          canvas: {
+            ...state.project.canvas,
+            nodes: state.project.canvas.nodes.map((node) => {
+              if (!changed.has(node.id)) return node
+              const data = { ...node.data }
+              if (collapsed) data.collapsed = true
+              else delete data.collapsed
+              return { ...node, data }
+            }),
+          },
+        }
+        const label = `${collapsed ? 'Collapse' : 'Expand'} ${changedIds.length > 1 ? 'nodes' : 'node'}`
+        return {
+          project: projectWithRecordedHistory(state.project, nextProject, now, {
+            label,
+            transactionType: 'canvas',
+            nodeIds: changedIds,
+            preview: { title: label, subtitle: `${changedIds.length} nodes`, nodeIds: changedIds },
+          }),
         }
       })
     },

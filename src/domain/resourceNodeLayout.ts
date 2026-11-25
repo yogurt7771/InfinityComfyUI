@@ -179,3 +179,9 @@ export function resourceNodeMinSizeForCanvasNode(node: CanvasNode, context: Reso
     sourceFunctionName: sourceFunction?.name,
   })
 }
+
+/** A collapsed resource node shows only its title bar; its handles stay centred on it. */
+export const RESOURCE_NODE_COLLAPSED_HEIGHT = 58
+
+export const isCollapsedCanvasNode = (node: Pick<CanvasNode, 'type' | 'data'>) =>
+  node.type === 'resource' && node.data.collapsed === true

@@ -330,6 +330,33 @@ describe('CanvasWorkspace', () => {
     expect(within(dialog).getByRole('textbox', { name: 'Gemini prompt' })).toBeInTheDocument()
   })
 
+  it('collapses a resource node to its title from the top-left toggle, keeping its handles', async () => {
+    configureTemporaryComfyProject()
+    const { container } = render(<CanvasWorkspace />)
+    const node = await waitFor(() => {
+      const element = container.querySelector<HTMLElement>('.react-flow__node[data-id="node_reference_image"]')
+      expect(element).not.toBeNull()
+      return element!
+    })
+    expect(node.querySelector('.resource-preview-image')).not.toBeNull()
+
+    fireEvent.click(node.querySelector('button[aria-label="Collapse Reference image"]')!)
+
+    expect(projectStore.getState().project.canvas.nodes[0]?.data.collapsed).toBe(true)
+    await waitFor(() =>
+      expect(node.querySelector('.resource-preview-image')).toBeNull(),
+    )
+    expect(node.querySelectorAll('.react-flow__handle')).toHaveLength(2)
+    const expandButton = node.querySelector('button[aria-label="Expand Reference image"]')
+    expect(expandButton).toHaveAttribute('aria-expanded', 'false')
+
+    fireEvent.click(expandButton!)
+    expect(projectStore.getState().project.canvas.nodes[0]?.data).not.toHaveProperty('collapsed')
+    await waitFor(() =>
+      expect(node.querySelector('.resource-preview-image')).not.toBeNull(),
+    )
+  })
+
   it('opens the selected one-off ComfyUI endpoint in a same-origin proxied iframe', () => {
     configureTemporaryComfyProject()
     const openSpy = vi.spyOn(window, 'open').mockReturnValue({} as WindowProxy)

@@ -1,8 +1,10 @@
 import { memo, useEffect, useId, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react'
 import { flushSync } from 'react-dom'
-import { Handle, NodeResizeControl, Position, type NodeProps } from '@xyflow/react'
+import { Handle, NodeResizeControl, Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react'
 import {
   Box,
+  ChevronDown,
+  ChevronRight,
   Copy,
   Cpu,
   Download,
@@ -112,6 +114,8 @@ type WorkbenchNodeData = {
   onCancelResultRun: (nodeId: string) => void
   onUpdateFunctionRunCount: (nodeId: string, runCount: number) => void
   onResizeNode?: (nodeId: string, size: { width: number; height: number }) => void
+  collapsed?: boolean
+  onSetNodesCollapsed?: (nodeIds: string[], collapsed: boolean) => void
   onUpdateOpenAiConfig: (nodeId: string, patch: Partial<OpenAILlmConfig>) => void
   onUpdateGeminiConfig: (nodeId: string, patch: Partial<GeminiLlmConfig>) => void
   onUpdateOpenAiImageConfig: (nodeId: string, patch: Partial<OpenAIImageConfig>) => void
@@ -2116,13 +2120,49 @@ function SelectedResizeControl({
   )
 }
 
+function NodeCollapseToggle({
+  collapsed,
+  title,
+  onToggle,
+}: {
+  collapsed: boolean
+  title: string
+  onToggle?: () => void
+}) {
+  if (!onToggle) return null
+  return (
+    <button
+      type="button"
+      className="node-collapse-toggle nodrag nopan"
+      aria-expanded={!collapsed}
+      aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${title}`}
+      title={collapsed ? 'Expand node' : 'Collapse to title'}
+      onClick={(event) => {
+        event.stopPropagation()
+        onToggle()
+      }}
+    >
+      {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+    </button>
+  )
+}
+
 export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
   const nodeData = data as WorkbenchNodeData
   const resource = nodeData.resourceId ? nodeData.resourcesById[nodeData.resourceId] : undefined
   const title = String(nodeData.title ?? resource?.name ?? 'Resource')
+  const collapsed = nodeData.collapsed === true
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [previewResource, setPreviewResource] = useState<Resource | undefined>()
   const [rerunConfirmationOpen, setRerunConfirmationOpen] = useState(false)
+  const updateNodeInternals = useUpdateNodeInternals()
+  const renderedCollapsedRef = useRef(collapsed)
+  useEffect(() => {
+    if (renderedCollapsedRef.current === collapsed) return
+    renderedCollapsedRef.current = collapsed
+    // Handles moved with the node's new height; re-measure so edges attach to where they are now.
+    updateNodeInternals(id)
+  }, [collapsed, id, updateNodeInternals])
   const taskId = resource?.source.taskId ?? nodeData.taskId
   const task = taskId ? nodeData.tasksById?.[taskId] : undefined
   const taskStatus = task?.status
@@ -2203,6 +2243,7 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
         newNodeHighlightClass(nodeData),
         isAssetActive ? 'resource-node-active' : undefined,
         showAssetStatus ? `resource-node-${assetStatus}` : undefined,
+        collapsed ? 'is-collapsed' : undefined,
       ]
         .filter(Boolean)
         .join(' ')}
@@ -2224,7 +2265,7 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
         minHeight={minSize.height}
         minWidth={minSize.width}
         nodeData={nodeData}
-        selected={Boolean(selected)}
+        selected={Boolean(selected) && !collapsed}
       />
       {resource ? (
         <>
@@ -2254,13 +2295,24 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
             {rerunControl}
           </>
         }
-        icon={resource?.type === 'number' ? <Hash size={16} /> : <FileText size={16} />}
+        icon={
+          <>
+            <NodeCollapseToggle
+              collapsed={collapsed}
+              title={title}
+              onToggle={nodeData.onSetNodesCollapsed ? () => nodeData.onSetNodesCollapsed?.([id], !collapsed) : undefined}
+            />
+            {resource?.type === 'number' ? <Hash size={16} /> : <FileText size={16} />}
+          </>
+        }
         isSelected={Boolean(selected)}
         nodeId={id}
         title={title}
         onDeleteNode={nodeData.onDeleteNode}
         onRenameNode={nodeData.onRenameNode}
       />
+      {collapsed ? null : (
+      <>
       <div className="node-meta resource-node-meta">
         <span>{resource?.type ?? nodeData.resourceType}</span>
         {showAssetStatus ? (
@@ -2355,6 +2407,8 @@ export const ResourceNodeView = memo(({ id, data, selected }: NodeProps) => {
         <ResourcePreview resource={resource} />
       ) : (
         <p className="resource-preview-text">Missing resource</p>
+      )}
+      </>
       )}
       <FullResourcePreviewModal
         resource={previewResource}
