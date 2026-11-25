@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type React
 import {
   Braces,
   Check,
+  ClipboardPaste,
   Copy,
   Download,
   ExternalLink,
@@ -1291,7 +1292,7 @@ const parseHeaderJson = (value: string) => {
 
 const isComfyWorkflowFunction = (fn: GenerationFunction) => fn.workflow.format === 'comfyui_api_json'
 
-const endpointSupportsWorkflowFunction = (endpoint: ComfyEndpointConfig, functionId: string) => {
+export const endpointSupportsWorkflowFunction = (endpoint: ComfyEndpointConfig, functionId: string) => {
   const supportedFunctions = endpoint.capabilities?.supportedFunctions
   return supportedFunctions === undefined || supportedFunctions.includes(functionId)
 }
@@ -1469,6 +1470,10 @@ function waitForComfyPopupApp(popup: Window) {
 export function ComfyWorkflowEditorDialog({
   open = true,
   endpoint,
+  endpointChoices,
+  onEndpointChange,
+  onPasteJson,
+  saveLabel = 'Save from ComfyUI',
   initialUiJson,
   initialApiJson,
   onSave,
@@ -1476,6 +1481,12 @@ export function ComfyWorkflowEditorDialog({
 }: {
   open?: boolean
   endpoint?: ComfyEndpointConfig
+  /** When more than one server can host this workflow, the toolbar offers a switch. */
+  endpointChoices?: ComfyEndpointConfig[]
+  onEndpointChange?: (endpointId: string) => void
+  /** Offers the paste-API-JSON path for users who already have a workflow file. */
+  onPasteJson?: () => void
+  saveLabel?: string
   initialUiJson?: ComfyUiWorkflow
   initialApiJson?: ComfyWorkflow
   onSave: (value: EmbeddedComfySave) => void
@@ -1781,21 +1792,34 @@ export function ComfyWorkflowEditorDialog({
       <div className="comfy-editor-shell">
         <div className="comfy-editor-toolbar">
           <div className="comfy-editor-identity">
-            <span className="comfy-editor-kicker">Desktop workspace</span>
-            <strong>{endpoint?.name ?? 'ComfyUI server unavailable'}</strong>
-            <span>{endpoint?.baseUrl ?? 'Choose an enabled ComfyUI server to continue.'}</span>
-          </div>
-          <div className="comfy-editor-actions">
-            <div className={`comfy-editor-connection is-${phase}`} role="status">
+            {endpointChoices && endpointChoices.length > 1 && onEndpointChange ? (
+              <select
+                aria-label="ComfyUI server for this editor"
+                value={endpoint?.id ?? ''}
+                onChange={(event) => onEndpointChange(event.target.value)}
+              >
+                {endpointChoices.map((choice) => (
+                  <option key={choice.id} value={choice.id}>
+                    {choice.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <strong>{endpoint?.name ?? 'ComfyUI server unavailable'}</strong>
+            )}
+            <div className={`comfy-editor-connection is-${phase}`} role="status" title={error ?? status}>
               <span className="comfy-editor-connection-dot" aria-hidden="true" />
               <span>{error ?? status}</span>
             </div>
-            <button type="button" onClick={reloadFrame} disabled={!endpoint}>
+          </div>
+          <div className="comfy-editor-actions">
+            <button type="button" className="comfy-editor-quiet" onClick={reloadFrame} disabled={!endpoint}>
               <RefreshCw size={14} />
               Retry
             </button>
             <button
               type="button"
+              className="comfy-editor-quiet"
               onClick={() => {
                 if (!endpoint) return
                 const result = openComfyEditorInBrowser(endpoint, initialUiJson)
@@ -1807,16 +1831,26 @@ export function ComfyWorkflowEditorDialog({
               <ExternalLink size={14} />
               Open separately
             </button>
+            {comfyPopup && !comfyPopup.closed ? (
+              <button type="button" className="comfy-editor-quiet" onClick={saveFromComfyPopup} disabled={saving}>
+                <Download size={14} />
+                Save from window
+              </button>
+            ) : null}
+            {onPasteJson ? (
+              <button type="button" className="comfy-editor-quiet" onClick={onPasteJson}>
+                <ClipboardPaste size={14} />
+                Paste JSON
+              </button>
+            ) : null}
             <button
               type="button"
-              onClick={saveFromComfyPopup}
-              disabled={saving || !comfyPopup || comfyPopup.closed}
+              className="primary-action"
+              onClick={saveFromComfy}
+              disabled={!frameReady || saving}
             >
-              <Download size={14} />
-              Save from window
-            </button>
-            <button type="button" className="primary-action" onClick={saveFromComfy} disabled={!frameReady || saving}>
-              {saving ? 'Saving…' : 'Save from ComfyUI'}
+              <Check size={14} />
+              {saving ? 'Saving…' : saveLabel}
             </button>
           </div>
         </div>

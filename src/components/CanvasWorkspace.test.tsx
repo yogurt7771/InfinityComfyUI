@@ -337,10 +337,6 @@ describe('CanvasWorkspace', () => {
     const menu = openAddMenu()
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'ComfyUI Workflow' }))
 
-    const dialog = screen.getByRole('dialog', { name: 'ComfyUI workflow runner' })
-    expect(within(dialog).getByRole('combobox', { name: 'ComfyUI server for temporary workflow' })).toBeInTheDocument()
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Edit temporary workflow in ComfyUI' }))
-
     const editorDialog = screen.getByRole('dialog', { name: 'ComfyUI Workflow Editor' })
     const iframe = within(editorDialog).getByTitle(/^ComfyUI editor\b/)
     const frameUrl = new URL(String(iframe.getAttribute('src')), window.location.href)
@@ -352,7 +348,7 @@ describe('CanvasWorkspace', () => {
     expect(frameUrl.hash).toBe('')
     expect(openSpy).not.toHaveBeenCalled()
     expect(fetchSpy).not.toHaveBeenCalled()
-    expect(screen.getByRole('dialog', { name: 'ComfyUI workflow runner' })).toBeVisible()
+    expect(screen.queryByRole('dialog', { name: 'ComfyUI workflow runner' })).not.toBeInTheDocument()
     expect(screen.queryByRole('menu', { name: 'Add node' })).not.toBeInTheDocument()
   })
 
@@ -365,8 +361,6 @@ describe('CanvasWorkspace', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
     const menu = openAddMenu()
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'ComfyUI Workflow' }))
-    const dialog = screen.getByRole('dialog', { name: 'ComfyUI workflow runner' })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Edit temporary workflow in ComfyUI' }))
 
     const editorDialog = screen.getByRole('dialog', { name: 'ComfyUI Workflow Editor' })
     const iframe = within(editorDialog).getByTitle(/^ComfyUI editor\b/) as HTMLIFrameElement
@@ -390,7 +384,7 @@ describe('CanvasWorkspace', () => {
       window.location.origin,
     )
     expect(fetchSpy).not.toHaveBeenCalled()
-    expect(screen.getByRole('dialog', { name: 'ComfyUI workflow runner' })).toBeVisible()
+    expect(screen.queryByRole('dialog', { name: 'ComfyUI workflow runner' })).not.toBeInTheDocument()
     expect(within(editorDialog).getByRole('status')).toHaveTextContent(/password|proxy/i)
   })
 
@@ -400,12 +394,80 @@ describe('CanvasWorkspace', () => {
 
     const menu = openAddMenu()
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'ComfyUI Workflow' }))
-    const dialog = screen.getByRole('dialog', { name: 'ComfyUI workflow runner' })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Edit temporary workflow in ComfyUI' }))
 
-    expect(screen.getByRole('dialog', { name: 'ComfyUI workflow runner' })).toBeVisible()
+    expect(screen.queryByRole('dialog', { name: 'ComfyUI workflow runner' })).not.toBeInTheDocument()
     expect(screen.getByRole('dialog', { name: 'ComfyUI Workflow Editor' })).toBeInTheDocument()
     expect(openSpy).not.toHaveBeenCalled()
+  })
+
+  const connectEditorApp = (editorDialog: HTMLElement, apiWorkflow: Record<string, unknown>) => {
+    const iframe = within(editorDialog).getByTitle(/^ComfyUI editor\b/) as HTMLIFrameElement
+    const frameWindow = iframe.contentWindow as unknown as { app?: unknown }
+    frameWindow.app = {
+      graphToPrompt: vi.fn().mockResolvedValue({ workflow: { nodes: [], links: [] }, output: apiWorkflow }),
+      handleFile: vi.fn().mockResolvedValue(undefined),
+      graph: { serialize: () => ({ nodes: [] }) },
+    }
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        source: iframe.contentWindow,
+        origin: window.location.origin,
+        data: { type: 'infinity-comfy-app-ready' },
+      }),
+    )
+  }
+
+  const editedApiWorkflow = {
+    '10': { class_type: 'LoadImage', _meta: { title: 'Reference Image' }, inputs: { image: 'reference.png' } },
+    '20': { class_type: 'SaveImage', _meta: { title: 'Result' }, inputs: { images: ['10', 0] } },
+  }
+
+  it('goes from the Add menu through the embedded editor straight to the run dialog', async () => {
+    configureTemporaryComfyProject()
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
+    const initialFunctionIds = Object.keys(projectStore.getState().project.functions).sort()
+
+    const menu = openAddMenu()
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'ComfyUI Workflow' }))
+    const editorDialog = screen.getByRole('dialog', { name: 'ComfyUI Workflow Editor' })
+    connectEditorApp(editorDialog, editedApiWorkflow)
+    const useWorkflow = within(editorDialog).getByRole('button', { name: 'Use workflow' })
+    await waitFor(() => expect(useWorkflow).toBeEnabled(), { timeout: 5000 })
+    fireEvent.click(useWorkflow)
+
+    const runDialog = await screen.findByRole('dialog', { name: 'Run ComfyUI Workflow' })
+    // The selected canvas image is already wired into the workflow's image input.
+    expect(within(runDialog).getByRole('button', { name: 'Preview Image input' })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'ComfyUI Workflow Editor' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'ComfyUI workflow runner' })).not.toBeInTheDocument()
+    expect(Object.keys(projectStore.getState().project.functions).sort()).toEqual(initialFunctionIds)
+  })
+
+  it('edits a saved function workflow in place from its run dialog and keeps the run dialog open', async () => {
+    configureTemporaryComfyProject()
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
+    const functionId = projectStore.getState().addFunctionFromWorkflow('Saved Blend', {
+      '10': { class_type: 'LoadImage', _meta: { title: 'Reference Image' }, inputs: { image: 'old.png' } },
+      '30': { class_type: 'SaveImage', _meta: { title: 'Old Result' }, inputs: { images: ['10', 0] } },
+    })
+
+    const menu = openAddMenu()
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Saved Blend' }))
+    const runDialog = screen.getByRole('dialog', { name: 'Run Saved Blend' })
+    fireEvent.click(within(runDialog).getByRole('button', { name: 'Edit workflow in ComfyUI' }))
+
+    expect(screen.queryByRole('dialog', { name: 'Function Management' })).not.toBeInTheDocument()
+    const editorDialog = screen.getByRole('dialog', { name: 'ComfyUI Workflow Editor' })
+    connectEditorApp(editorDialog, editedApiWorkflow)
+    const saveWorkflow = within(editorDialog).getByRole('button', { name: 'Save workflow' })
+    await waitFor(() => expect(saveWorkflow).toBeEnabled(), { timeout: 5000 })
+    fireEvent.click(saveWorkflow)
+
+    await waitFor(() =>
+      expect(projectStore.getState().project.functions[functionId]?.workflow.rawJson).toEqual(editedApiWorkflow),
+    )
+    expect(screen.queryByRole('dialog', { name: 'ComfyUI Workflow Editor' })).not.toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Run Saved Blend' })).toBeInTheDocument()
   })
 
   it('accepts pasted ComfyUI API workflow JSON and enters the existing run configuration with endpoint and candidates intact', () => {
@@ -430,6 +492,7 @@ describe('CanvasWorkspace', () => {
 
     const menu = openAddMenu()
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'ComfyUI Workflow' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Paste JSON' }))
     const workflowDialog = screen.getByRole('dialog', { name: 'ComfyUI workflow runner' })
     fireEvent.change(within(workflowDialog).getByRole('textbox', { name: 'ComfyUI API workflow JSON' }), {
       target: { value: JSON.stringify(apiWorkflow) },
@@ -479,6 +542,7 @@ describe('CanvasWorkspace', () => {
 
     const menu = openAddMenu()
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'ComfyUI Workflow' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Paste JSON' }))
     const workflowDialog = screen.getByRole('dialog', { name: 'ComfyUI workflow runner' })
     fireEvent.change(within(workflowDialog).getByRole('textbox', { name: 'ComfyUI API workflow JSON' }), {
       target: { value },
@@ -759,6 +823,7 @@ describe('CanvasWorkspace', () => {
   it('blocks canvas context menus while a local action dialog is open', () => {
     const menu = openAddMenu()
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'ComfyUI Workflow' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Paste JSON' }))
 
     const backdrop = document.querySelector('.local-action-backdrop') as HTMLElement
     fireEvent.contextMenu(backdrop, { clientX: 220, clientY: 180 })
@@ -1049,6 +1114,23 @@ describe('CanvasWorkspace', () => {
     expect(within(dialog).getByRole('button', { name: 'Edit workflow in ComfyUI' })).toBeEnabled()
     expect(within(dialog).getByRole('button', { name: 'Run and replace current output' })).toBeInTheDocument()
     expect(dialog).not.toHaveTextContent('Decoy Workflow')
+  })
+
+  it('opens the workflow behind a selected result in ComfyUI from the ribbon, with its rerun dialog underneath', async () => {
+    projectStore.setState({
+      project: provenanceProject(),
+      selectedNodeId: 'node_provenance_image',
+      selectedNodeIds: ['node_provenance_image'],
+    } as Partial<ReturnType<typeof projectStore.getState>>)
+
+    render(<CanvasWorkspace />)
+    const ribbon = await screen.findByRole('toolbar', { name: 'Selection quick actions' })
+    fireEvent.click(within(ribbon).getByRole('button', { name: 'Edit in ComfyUI' }))
+
+    const editorDialog = screen.getByRole('dialog', { name: 'ComfyUI Workflow Editor' })
+    expect(within(editorDialog).getByTitle(/^ComfyUI editor Provenance ComfyUI/)).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Run Task Workflow A' })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Function Management' })).not.toBeInTheDocument()
   })
 
   it('uses task provenance consistently for the source button and function details when metadata disagrees', async () => {

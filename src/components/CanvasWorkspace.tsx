@@ -9,6 +9,7 @@ import {
   type DragEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
   type RefObject,
 } from 'react'
 import {
@@ -39,6 +40,7 @@ import {
 } from '@xyflow/react'
 import {
   BookmarkPlus,
+  ChevronDown,
   CaseSensitive,
   Copy,
   GitCompareArrows,
@@ -49,6 +51,7 @@ import {
   Image,
   Info,
   Layers,
+  Network,
   MousePointer2,
   Pencil,
   Plus,
@@ -63,6 +66,7 @@ import { EmptyNodeView, FunctionNodeView, GroupNodeView, ResourceNodeView, Resul
 import {
   ComfyWorkflowEditorDialog,
   FunctionManager,
+  endpointSupportsWorkflowFunction,
   RunInspector,
   highlightedJson,
   type EmbeddedComfySave,
@@ -102,6 +106,7 @@ import {
 import { useProjectStore } from '../store/projectStore'
 import { shouldIgnoreCanvasShortcut } from './canvasKeyboard'
 import { buildFlowNodeRenderIndex, flowNodeRenderDependencies, stabilizeFlowNodes } from './canvasFlowNodes'
+import { partitionRunInputs } from './functionRunInputs'
 import { buildFunctionRunInputDraft, matchFunctionsForSelection, readingOrderNodeIds, type SelectionFunctionMatch } from './selectionFunctionMatches'
 import { SelectionRibbon, type SelectionRibbonAction } from './SelectionRibbon'
 import type {
@@ -189,10 +194,13 @@ type FunctionRunDialogState = {
   }
 }
 
+type TemporaryComfyWorkflowView = 'editor' | 'json'
+
 type TemporaryComfyWorkflowState = {
   position: { x: number; y: number }
   endpointId?: string
   dialogOpen: boolean
+  view: TemporaryComfyWorkflowView
   workflowJson?: string
   workflowUiJson?: ComfyUiWorkflow
   workflowEditor?: ComfyWorkflowEditorMetadata
@@ -1201,11 +1209,7 @@ export function FunctionRunDialog({
 }) {
   const [slotDraft, setSlotDraft] = useState('')
   const [previewResource, setPreviewResource] = useState<Resource | undefined>()
-  const selectedResources = functionDef.inputs
-    .map((input) => values[input.key])
-    .filter(isResourceRefValue)
-    .map((ref) => resourcesById[ref.resourceId])
-    .filter((resource): resource is Resource => Boolean(resource))
+  const [showAllInputs, setShowAllInputs] = useState(false)
   const missingRequiredInputs = functionDef.inputs.filter(
     (input) => input.required && !functionInputSatisfied(values[input.key], resourcesById),
   )
@@ -1343,6 +1347,17 @@ export function FunctionRunDialog({
     ? mergedGeminiImageConfig(functionDef.geminiImage)
     : undefined
 
+  const inputPartition = partitionRunInputs(functionDef.inputs, values, resourcesById)
+  const shownInputs = showAllInputs ? functionDef.inputs : inputPartition.visible
+  const hiddenInputCount = functionDef.inputs.length - shownInputs.length
+  const subtitle = [
+    functionKindLabel(functionDef),
+    `${functionDef.inputs.length} input${functionDef.inputs.length === 1 ? '' : 's'}`,
+    missingRequiredInputs.length ? `${missingRequiredInputs.length} required missing` : undefined,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
   return (
     <ModalFrame
       label={`Run ${functionDef.name}`}
@@ -1353,7 +1368,7 @@ export function FunctionRunDialog({
         <header>
           <div>
             <h2>{functionDef.name}</h2>
-            <span>{functionDef.category ?? 'Function'}</span>
+            <span>{subtitle}</span>
           </div>
           <div className="function-run-header-actions">
             {onEditComfyWorkflow ? (
@@ -1363,8 +1378,8 @@ export function FunctionRunDialog({
                 aria-label="Edit workflow in ComfyUI"
                 onClick={onEditComfyWorkflow}
               >
-                <Pencil size={15} />
-                <span>Edit workflow</span>
+                <Network size={15} />
+                <span>Edit in ComfyUI</span>
               </button>
             ) : null}
             <button type="button" aria-label="Close function runner" onClick={onClose}>
@@ -1373,107 +1388,76 @@ export function FunctionRunDialog({
           </div>
         </header>
         <div className="local-action-body">
-          <div className="function-run-gallery" aria-label="Selected function inputs">
-            {selectedResources.length ? (
-              selectedResources.map((resource, index) => (
-                <div key={`${resource.id}-${index}`} className="function-run-gallery-item">
-                  <ResourcePreview resource={resource} />
-                  <span>{resource.name ?? resource.id}</span>
-                </div>
-              ))
-            ) : (
-              <p>No assets selected yet.</p>
-            )}
-          </div>
           {onFunctionDefChange && requestConfig ? (
-            <div className="function-run-provider-fields" aria-label="Request settings">
-              <label>
-                <span>URL</span>
-                <input
-                  aria-label="Request URL"
-                  value={requestConfig.url}
-                  onChange={(event) => updateRequestConfig({ url: event.target.value })}
-                />
-              </label>
-              <label>
-                <span>Method</span>
-                <select
-                  aria-label="Request method"
-                  value={requestConfig.method}
-                  onChange={(event) => updateRequestConfig({ method: event.target.value })}
-                >
-                  {requestMethods.map((method) => (
-                    <option key={method} value={method}>
-                      {method}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span>Response</span>
-                <select
-                  aria-label="Request response parse"
-                  value={requestConfig.responseParse}
-                  onChange={(event) =>
-                    updateRequestConfig({ responseParse: event.target.value as typeof requestConfig.responseParse })
-                  }
-                >
-                  {requestParseModes.map((mode) => (
-                    <option key={mode} value={mode}>
-                      {mode}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span>Authorization</span>
-                <input
-                  aria-label="Request Authorization header"
-                  autoComplete="off"
-                  value={requestConfig.headers.Authorization ?? ''}
-                  onChange={(event) => updateRequestHeader('Authorization', event.target.value)}
-                  placeholder="Bearer ..."
-                />
-              </label>
-              <label className="function-run-provider-wide">
-                <span>Body</span>
-                <textarea
-                  aria-label="Request body"
-                  rows={3}
-                  value={requestConfig.body}
-                  onChange={(event) => updateRequestConfig({ body: event.target.value })}
-                />
-              </label>
-            </div>
+            <section className="function-run-provider" aria-label="Request settings">
+              <div className="function-run-provider-fields">
+                <label>
+                  <span>URL</span>
+                  <input
+                    aria-label="Request URL"
+                    value={requestConfig.url}
+                    onChange={(event) => updateRequestConfig({ url: event.target.value })}
+                  />
+                </label>
+                <label>
+                  <span>Method</span>
+                  <select
+                    aria-label="Request method"
+                    value={requestConfig.method}
+                    onChange={(event) => updateRequestConfig({ method: event.target.value })}
+                  >
+                    {requestMethods.map((method) => (
+                      <option key={method} value={method}>
+                        {method}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="function-run-provider-wide">
+                  <span>Body</span>
+                  <textarea
+                    aria-label="Request body"
+                    rows={3}
+                    value={requestConfig.body}
+                    onChange={(event) => updateRequestConfig({ body: event.target.value })}
+                  />
+                </label>
+              </div>
+              <AdvancedSettings
+                summary={`Response ${requestConfig.responseParse}${requestConfig.headers.Authorization ? ' · Authorization set' : ''}`}
+              >
+                <label>
+                  <span>Response</span>
+                  <select
+                    aria-label="Request response parse"
+                    value={requestConfig.responseParse}
+                    onChange={(event) =>
+                      updateRequestConfig({ responseParse: event.target.value as typeof requestConfig.responseParse })
+                    }
+                  >
+                    {requestParseModes.map((mode) => (
+                      <option key={mode} value={mode}>
+                        {mode}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Authorization</span>
+                  <input
+                    aria-label="Request Authorization header"
+                    autoComplete="off"
+                    value={requestConfig.headers.Authorization ?? ''}
+                    onChange={(event) => updateRequestHeader('Authorization', event.target.value)}
+                    placeholder="Bearer ..."
+                  />
+                </label>
+              </AdvancedSettings>
+            </section>
           ) : null}
           {onFunctionDefChange && openAiConfig ? (
-            <div className="function-run-provider-fields" aria-label="OpenAI settings">
-              <label>
-                <span>API key</span>
-                <input
-                  aria-label="OpenAI API key"
-                  type="password"
-                  value={openAiConfig.apiKey}
-                  onChange={(event) => updateOpenAiConfig({ apiKey: event.target.value })}
-                />
-              </label>
-              <label>
-                <span>Base URL</span>
-                <input
-                  aria-label="OpenAI base URL"
-                  value={openAiConfig.baseUrl}
-                  onChange={(event) => updateOpenAiConfig({ baseUrl: event.target.value })}
-                />
-              </label>
-              <label>
-                <span>Model</span>
-                <input
-                  aria-label="OpenAI model"
-                  value={openAiConfig.model}
-                  onChange={(event) => updateOpenAiConfig({ model: event.target.value })}
-                />
-              </label>
-              <label className="function-run-provider-wide">
+            <section className="function-run-provider" aria-label="OpenAI settings">
+              <label className="dialog-field">
                 <span>Prompt</span>
                 <textarea
                   aria-label="OpenAI prompt"
@@ -1482,36 +1466,16 @@ export function FunctionRunDialog({
                   onChange={(event) => updateOpenAiPrompt(event.target.value)}
                 />
               </label>
-            </div>
+              <ProviderConnectionSettings
+                provider="OpenAI"
+                config={openAiConfig}
+                onChange={(patch) => updateOpenAiConfig(patch)}
+              />
+            </section>
           ) : null}
           {onFunctionDefChange && geminiConfig ? (
-            <div className="function-run-provider-fields" aria-label="Gemini settings">
-              <label>
-                <span>API key</span>
-                <input
-                  aria-label="Gemini API key"
-                  type="password"
-                  value={geminiConfig.apiKey}
-                  onChange={(event) => updateGeminiConfig({ apiKey: event.target.value })}
-                />
-              </label>
-              <label>
-                <span>Base URL</span>
-                <input
-                  aria-label="Gemini base URL"
-                  value={geminiConfig.baseUrl}
-                  onChange={(event) => updateGeminiConfig({ baseUrl: event.target.value })}
-                />
-              </label>
-              <label>
-                <span>Model</span>
-                <input
-                  aria-label="Gemini model"
-                  value={geminiConfig.model}
-                  onChange={(event) => updateGeminiConfig({ model: event.target.value })}
-                />
-              </label>
-              <label className="function-run-provider-wide">
+            <section className="function-run-provider" aria-label="Gemini settings">
+              <label className="dialog-field">
                 <span>Prompt</span>
                 <textarea
                   aria-label="Gemini prompt"
@@ -1520,102 +1484,40 @@ export function FunctionRunDialog({
                   onChange={(event) => updateGeminiPrompt(event.target.value)}
                 />
               </label>
-            </div>
+              <ProviderConnectionSettings
+                provider="Gemini"
+                config={geminiConfig}
+                onChange={(patch) => updateGeminiConfig(patch)}
+              />
+            </section>
           ) : null}
           {onFunctionDefChange && openAiImageConfig ? (
-            <div className="function-run-provider-fields" aria-label="OpenAI image settings">
-              <label>
-                <span>API key</span>
-                <input
-                  aria-label="OpenAI image API key"
-                  type="password"
-                  value={openAiImageConfig.apiKey}
-                  onChange={(event) => updateOpenAiImageConfig({ apiKey: event.target.value })}
-                />
-              </label>
-              <label>
-                <span>Base URL</span>
-                <input
-                  aria-label="OpenAI image base URL"
-                  value={openAiImageConfig.baseUrl}
-                  onChange={(event) => updateOpenAiImageConfig({ baseUrl: event.target.value })}
-                />
-              </label>
-              <label>
-                <span>Model</span>
-                <input
-                  aria-label="OpenAI image model"
-                  value={openAiImageConfig.model}
-                  onChange={(event) => updateOpenAiImageConfig({ model: event.target.value })}
-                />
-              </label>
-            </div>
+            <section className="function-run-provider" aria-label="OpenAI image settings">
+              <ProviderConnectionSettings
+                provider="OpenAI image"
+                config={openAiImageConfig}
+                onChange={(patch) => updateOpenAiImageConfig(patch)}
+              />
+            </section>
           ) : null}
           {onFunctionDefChange && geminiImageConfig ? (
-            <div className="function-run-provider-fields" aria-label="Gemini image settings">
-              <label>
-                <span>API key</span>
-                <input
-                  aria-label="Gemini image API key"
-                  type="password"
-                  value={geminiImageConfig.apiKey}
-                  onChange={(event) => updateGeminiImageConfig({ apiKey: event.target.value })}
-                />
-              </label>
-              <label>
-                <span>Base URL</span>
-                <input
-                  aria-label="Gemini image base URL"
-                  value={geminiImageConfig.baseUrl}
-                  onChange={(event) => updateGeminiImageConfig({ baseUrl: event.target.value })}
-                />
-              </label>
-              <label>
-                <span>Model</span>
-                <input
-                  aria-label="Gemini image model"
-                  value={geminiImageConfig.model}
-                  onChange={(event) => updateGeminiImageConfig({ model: event.target.value })}
-                />
-              </label>
-            </div>
-          ) : null}
-          {canEditComfySlots ? (
-            <div className="function-run-slot-editor" aria-label="ComfyUI input slots">
-              <div>
-                <strong>Input slots</strong>
-                <span>Expose workflow fields only when they should be changed before reuse.</span>
-              </div>
-              <select
-                aria-label="Workflow input slot"
-                value={selectedSlotValue}
-                disabled={availableWorkflowSlots.length === 0}
-                onChange={(event) => setSlotDraft(event.target.value)}
-              >
-                {availableWorkflowSlots.length > 0 ? (
-                  availableWorkflowSlots.map((input) => (
-                    <option key={workflowSlotValue(input)} value={workflowSlotValue(input)}>
-                      {workflowSlotDisplay(input)}
-                    </option>
-                  ))
-                ) : (
-                  <option value="">No hidden workflow inputs</option>
-                )}
-              </select>
-              <button type="button" aria-label="Add input slot" disabled={!selectedSlotValue} onClick={addWorkflowInputSlot}>
-                <Plus size={15} />
-                Add slot
-              </button>
-            </div>
+            <section className="function-run-provider" aria-label="Gemini image settings">
+              <ProviderConnectionSettings
+                provider="Gemini image"
+                config={geminiImageConfig}
+                onChange={(patch) => updateGeminiImageConfig(patch)}
+              />
+            </section>
           ) : null}
           <div className="function-run-fields">
-            {functionDef.inputs.map((input) => {
+            {shownInputs.map((input) => {
               const value = values[input.key]
               const resourceValue = isResourceRefValue(value) ? value : undefined
               const selectedResource = resourceValue ? resourcesById[resourceValue.resourceId] : undefined
               const matchingResources = Object.values(resourcesById).filter((resource) => resource.type === input.type)
               const primitiveValue = isResourceRefValue(value) ? '' : value
               const inputLabel = input.label || input.key
+              const mediaInput = isMediaResourceType(input.type)
               const workflowSlotExists =
                 !canEditComfySlots || workflowInputBindingExists(functionDef.workflow.rawJson, input)
               return (
@@ -1643,12 +1545,28 @@ export function FunctionRunDialog({
                   </div>
                   {!workflowSlotExists ? <span className="field-error">Workflow slot no longer exists</span> : null}
                   <div className="function-run-slot-row">
+                    {mediaInput ? (
+                      selectedResource ? (
+                        <button
+                          type="button"
+                          className="function-run-input-preview"
+                          aria-label={`Preview ${inputLabel} input`}
+                          onClick={() => setPreviewResource(selectedResource)}
+                        >
+                          <ResourcePreview resource={selectedResource} />
+                        </button>
+                      ) : (
+                        <span className="function-run-input-preview is-empty" aria-hidden="true">
+                          <Image size={16} />
+                        </span>
+                      )
+                    ) : null}
                     <select
                       aria-label={`Asset input ${inputLabel}`}
                       value={resourceValue?.resourceId ?? ''}
                       onChange={(event) => setResourceValue(input.key, event.target.value, input.type)}
                     >
-                      <option value="">Manual / empty</option>
+                      <option value="">{mediaInput ? 'None' : 'Manual value'}</option>
                       {matchingResources.map((resource) => (
                         <option key={resource.id} value={resource.id}>
                           {resource.name ?? resource.id}
@@ -1665,42 +1583,26 @@ export function FunctionRunDialog({
                       <MousePointer2 aria-hidden="true" size={15} />
                     </button>
                   </div>
-                  {selectedResource && isMediaResourceType(selectedResource.type) ? (
-                    <button
-                      type="button"
-                      className="function-run-input-preview"
-                      aria-label={`Preview ${inputLabel} input`}
-                      onClick={() => setPreviewResource(selectedResource)}
-                    >
-                      <ResourcePreview resource={selectedResource} />
-                    </button>
-                  ) : null}
-                  {(input.type === 'number' || input.type === 'text' || input.type === 'boolean') && !resourceValue ? (
-                    <span className="function-run-manual-label">Manual value</span>
-                  ) : null}
-                  {input.type === 'number' ? (
+                  {input.type === 'number' && !resourceValue ? (
                     <input
                       aria-label={`Manual input ${inputLabel}`}
-                      disabled={Boolean(resourceValue)}
                       inputMode="decimal"
                       type="number"
                       value={Number(primitiveValue ?? 0)}
                       onChange={(event) => setPrimitiveValue(input.key, Number(event.target.value))}
                     />
-                  ) : input.type === 'text' ? (
+                  ) : input.type === 'text' && !resourceValue ? (
                     <textarea
                       aria-label={`Manual input ${inputLabel}`}
-                      disabled={Boolean(resourceValue)}
                       rows={3}
                       value={String(primitiveValue ?? '')}
                       onChange={(event) => setPrimitiveValue(input.key, event.target.value)}
                     />
-                  ) : input.type === 'boolean' ? (
+                  ) : input.type === 'boolean' && !resourceValue ? (
                     <label className="function-run-boolean-input">
                       <input
                         aria-label={`Manual input ${inputLabel}`}
                         checked={primitiveValue === true}
-                        disabled={Boolean(resourceValue)}
                         type="checkbox"
                         onChange={(event) => setPrimitiveValue(input.key, event.target.checked)}
                       />
@@ -1711,9 +1613,49 @@ export function FunctionRunDialog({
               )
             })}
           </div>
+          {hiddenInputCount > 0 ? (
+            <button type="button" className="function-run-more-inputs" onClick={() => setShowAllInputs(true)}>
+              <ChevronDown size={15} />
+              Show {hiddenInputCount} more optional input{hiddenInputCount === 1 ? '' : 's'}
+            </button>
+          ) : null}
+          {canEditComfySlots ? (
+            <details className="dialog-advanced" aria-label="ComfyUI input slots">
+              <summary>
+                <span>Expose another workflow field</span>
+                <small>
+                  {availableWorkflowSlots.length
+                    ? `${availableWorkflowSlots.length} field${availableWorkflowSlots.length === 1 ? '' : 's'} available`
+                    : 'All fields exposed'}
+                </small>
+              </summary>
+              <div className="dialog-advanced-body function-run-slot-editor">
+                <select
+                  aria-label="Workflow input slot"
+                  value={selectedSlotValue}
+                  disabled={availableWorkflowSlots.length === 0}
+                  onChange={(event) => setSlotDraft(event.target.value)}
+                >
+                  {availableWorkflowSlots.length > 0 ? (
+                    availableWorkflowSlots.map((input) => (
+                      <option key={workflowSlotValue(input)} value={workflowSlotValue(input)}>
+                        {workflowSlotDisplay(input)}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">No hidden workflow inputs</option>
+                  )}
+                </select>
+                <button type="button" aria-label="Add input slot" disabled={!selectedSlotValue} onClick={addWorkflowInputSlot}>
+                  <Plus size={15} />
+                  Add slot
+                </button>
+              </div>
+            </details>
+          ) : null}
         </div>
         <div className="local-action-footer">
-          <label className="function-run-count">
+          <label className="function-run-count dialog-footer-start">
             <span>Runs</span>
             <input
               aria-label="Function run count"
@@ -1771,22 +1713,104 @@ export function FunctionRunDialog({
   )
 }
 
+const functionKindLabel = (functionDef: GenerationFunction) => {
+  if (functionDef.workflow.format === 'comfyui_api_json') return 'ComfyUI workflow'
+  if (functionDef.workflow.format === 'local_transform') return 'Local tool'
+  if (isRequestFunction(functionDef)) return 'HTTP request'
+  if (isOpenAILlmFunction(functionDef)) return 'OpenAI text'
+  if (isGeminiLlmFunction(functionDef)) return 'Gemini text'
+  if (isOpenAIImageFunction(functionDef)) return 'OpenAI image'
+  if (isGeminiImageFunction(functionDef)) return 'Gemini image'
+  return functionDef.category ?? 'Function'
+}
+
+function AdvancedSettings({ summary, warning, children }: { summary: string; warning?: string; children: ReactNode }) {
+  // Opens by itself when something here blocks the run, so the problem is visible before pressing Run.
+  const [open, setOpen] = useState(Boolean(warning))
+  return (
+    <details className="dialog-advanced" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary>
+        <span>Advanced settings</span>
+        <small>{summary}</small>
+        {warning ? <em>{warning}</em> : null}
+      </summary>
+      <div className="dialog-advanced-body function-run-provider-fields">{children}</div>
+    </details>
+  )
+}
+
+type ProviderConnectionConfig = { apiKey: string; baseUrl: string; model: string }
+
+function ProviderConnectionSettings({
+  provider,
+  config,
+  onChange,
+}: {
+  provider: string
+  config: ProviderConnectionConfig
+  onChange: (patch: Partial<ProviderConnectionConfig>) => void
+}) {
+  let host = config.baseUrl
+  try {
+    host = new URL(config.baseUrl).host
+  } catch {
+    // Show the raw value while the user is still typing a URL.
+  }
+  return (
+    <AdvancedSettings
+      summary={[config.model || 'No model', host].filter(Boolean).join(' · ')}
+      warning={config.apiKey.trim() ? undefined : 'API key needed'}
+    >
+      <label>
+        <span>API key</span>
+        <input
+          aria-label={`${provider} API key`}
+          autoComplete="off"
+          type="password"
+          value={config.apiKey}
+          onChange={(event) => onChange({ apiKey: event.target.value })}
+        />
+      </label>
+      <label>
+        <span>Base URL</span>
+        <input
+          aria-label={`${provider} base URL`}
+          value={config.baseUrl}
+          onChange={(event) => onChange({ baseUrl: event.target.value })}
+        />
+      </label>
+      <label>
+        <span>Model</span>
+        <input
+          aria-label={`${provider} model`}
+          value={config.model}
+          onChange={(event) => onChange({ model: event.target.value })}
+        />
+      </label>
+    </AdvancedSettings>
+  )
+}
+
 function TemporaryComfyWorkflowDialog({
   endpoints,
   endpointId,
+  view,
   initialWorkflowJson,
   initialUiJson,
   initialEditor,
   onEndpointChange,
+  onViewChange,
   onUseWorkflow,
   onClose,
 }: {
   endpoints: ComfyEndpointConfig[]
   endpointId?: string
+  view: TemporaryComfyWorkflowView
   initialWorkflowJson?: string
   initialUiJson?: ComfyUiWorkflow
   initialEditor?: ComfyWorkflowEditorMetadata
   onEndpointChange: (endpointId: string) => void
+  onViewChange: (view: TemporaryComfyWorkflowView) => void
   onUseWorkflow: (workflow: EmbeddedComfySave) => void
   onClose: () => void
 }) {
@@ -1796,8 +1820,6 @@ function TemporaryComfyWorkflowDialog({
   const [workflowUiJson, setWorkflowUiJson] = useState(initialUiJson)
   const [workflowEditor, setWorkflowEditor] = useState(initialEditor)
   const [error, setError] = useState<string>()
-  const [comfyEditorOpen, setComfyEditorOpen] = useState(false)
-  const [comfyEditorMounted, setComfyEditorMounted] = useState(false)
 
   const workflowForEditor = useMemo(() => {
     if (!workflowJson.trim()) return undefined
@@ -1827,99 +1849,104 @@ function TemporaryComfyWorkflowDialog({
     }
   }
 
+  // The visual editor is the default path; pasting API JSON is the fallback, and the only path without a server.
+  if (view === 'editor' && selectedEndpoint) {
+    return (
+      <ComfyWorkflowEditorDialog
+        endpoint={selectedEndpoint}
+        endpointChoices={enabledEndpoints}
+        onEndpointChange={onEndpointChange}
+        onPasteJson={() => onViewChange('json')}
+        saveLabel="Use workflow"
+        initialUiJson={workflowUiJson}
+        initialApiJson={workflowForEditor}
+        onClose={onClose}
+        onSave={(saved) => {
+          setWorkflowJson(JSON.stringify(saved.rawJson, null, 2))
+          setWorkflowUiJson(saved.uiJson)
+          setWorkflowEditor(saved.editor)
+          onUseWorkflow(saved)
+        }}
+      />
+    )
+  }
+
   return (
-    <>
     <ModalFrame
       label="ComfyUI workflow runner"
       onClose={onClose}
       backdropClassName="local-action-backdrop nodrag nopan"
       dialogClassName="local-action-dialog temporary-comfy-runner"
     >
-        <header>
-          <div>
-            <h2>ComfyUI Workflow</h2>
-            <span>Build a one-off workflow, then run it from selected inputs</span>
-          </div>
-          <button type="button" aria-label="Close ComfyUI workflow runner" onClick={onClose}>
-            <X size={16} />
-          </button>
-        </header>
-        <div className="local-action-body">
-          <label className="temporary-comfy-endpoint">
-            <span>ComfyUI server</span>
+      <header>
+        <div>
+          <h2>Paste ComfyUI workflow</h2>
+          <span>API-format JSON from ComfyUI (Workflow → Export (API))</span>
+        </div>
+        <button type="button" aria-label="Close ComfyUI workflow runner" onClick={onClose}>
+          <X size={16} />
+        </button>
+      </header>
+      <div className="local-action-body">
+        {enabledEndpoints.length ? (
+          <label className="dialog-field">
+            <span>Run on</span>
             <select
               aria-label="ComfyUI server for temporary workflow"
               value={selectedEndpoint?.id ?? ''}
               onChange={(event) => onEndpointChange(event.target.value)}
             >
-              {enabledEndpoints.length ? (
-                enabledEndpoints.map((endpoint) => (
-                  <option key={endpoint.id} value={endpoint.id}>
-                    {endpoint.name} - {endpoint.baseUrl}
-                  </option>
-                ))
-              ) : (
-                <option value="">No ComfyUI server configured</option>
-              )}
+              {enabledEndpoints.map((endpoint) => (
+                <option key={endpoint.id} value={endpoint.id}>
+                  {endpoint.name} · {endpoint.baseUrl}
+                </option>
+              ))}
             </select>
           </label>
-          <div className="temporary-comfy-panel">
-            <strong>{workflowJson.trim() ? 'API workflow ready to update' : 'No workflow imported yet'}</strong>
-            <span>Build in the embedded ComfyUI editor and capture the runnable API workflow automatically.</span>
-          </div>
-          <label className="field">
-            <span>ComfyUI API workflow JSON</span>
-            <textarea
-              aria-invalid={error ? true : undefined}
-              aria-label="ComfyUI API workflow JSON"
-              rows={10}
-              value={workflowJson}
-              onChange={(event) => {
-                setWorkflowJson(event.target.value)
-                setWorkflowUiJson(undefined)
-                setWorkflowEditor(undefined)
-                setError(undefined)
-              }}
-            />
-          </label>
-          {error ? <span className="field-error" role="alert">{error}</span> : null}
-        </div>
-        <div className="local-action-footer">
-          <button type="button" onClick={onClose}>
-            Cancel
-          </button>
+        ) : (
+          <p className="dialog-note">
+            No ComfyUI server is enabled. Add one under ComfyUI Servers to build workflows visually; pasted JSON also
+            needs a server to run.
+          </p>
+        )}
+        <label className="dialog-field">
+          <span>Workflow JSON</span>
+          <textarea
+            aria-invalid={error ? true : undefined}
+            aria-label="ComfyUI API workflow JSON"
+            placeholder={'{ "3": { "class_type": "KSampler", "inputs": { … } } }'}
+            rows={12}
+            value={workflowJson}
+            onChange={(event) => {
+              setWorkflowJson(event.target.value)
+              setWorkflowUiJson(undefined)
+              setWorkflowEditor(undefined)
+              setError(undefined)
+            }}
+          />
+        </label>
+        {error ? <span className="field-error" role="alert">{error}</span> : null}
+      </div>
+      <div className="local-action-footer">
+        {selectedEndpoint ? (
           <button
             type="button"
+            className="dialog-footer-start"
             aria-label="Edit temporary workflow in ComfyUI"
-            disabled={!selectedEndpoint}
-            onClick={() => {
-              setComfyEditorMounted(true)
-              setComfyEditorOpen(true)
-            }}
+            onClick={() => onViewChange('editor')}
           >
-            Edit in ComfyUI
+            <Network size={15} />
+            Open editor
           </button>
-          <button type="button" className="primary" disabled={!workflowJson.trim()} onClick={useWorkflow}>
-            Use workflow JSON
-          </button>
-        </div>
+        ) : null}
+        <button type="button" onClick={onClose}>
+          Cancel
+        </button>
+        <button type="button" className="primary" disabled={!workflowJson.trim()} onClick={useWorkflow}>
+          Use workflow JSON
+        </button>
+      </div>
     </ModalFrame>
-    {comfyEditorMounted ? (
-      <ComfyWorkflowEditorDialog
-        open={comfyEditorOpen}
-        endpoint={selectedEndpoint}
-        initialUiJson={workflowUiJson}
-        initialApiJson={workflowForEditor}
-        onClose={() => setComfyEditorOpen(false)}
-        onSave={({ rawJson, uiJson, editor }) => {
-          setWorkflowJson(JSON.stringify(rawJson, null, 2))
-          setWorkflowUiJson(uiJson)
-          setWorkflowEditor(editor)
-          setError(undefined)
-        }}
-      />
-    ) : null}
-    </>
   )
 }
 
@@ -2123,6 +2150,7 @@ function CanvasSurface() {
   const [functionNodeMenu, setFunctionNodeMenu] = useState<FunctionNodeMenuState>()
   const [groupNodeMenu, setGroupNodeMenu] = useState<GroupNodeMenuState>()
   const [functionEditor, setFunctionEditor] = useState<FunctionEditorState>()
+  const [savedWorkflowEditor, setSavedWorkflowEditor] = useState<{ functionId: string; endpointId?: string }>()
   const [functionRunDialog, setFunctionRunDialog] = useState<FunctionRunDialogState>()
   const [temporaryComfyWorkflow, setTemporaryComfyWorkflow] = useState<TemporaryComfyWorkflowState>()
   const [templateNameDialogOpen, setTemplateNameDialogOpen] = useState(false)
@@ -2292,7 +2320,7 @@ function CanvasSurface() {
         (node) => node.type === 'resource' && node.data.resourceId === resourceId,
       )
       const sourceWidth = sourceNode ? Number(flowNodeStyle(sourceNode, flowNodeLayoutContext).width) : DEFAULT_ASSET_NODE_WIDTH
-      openFunctionRunDialog({
+      const dialog: FunctionRunDialogState = {
         functionId,
         temporaryFunction: project.functions[functionId] ? undefined : functionDef,
         inputValues: task
@@ -2313,7 +2341,9 @@ function CanvasSurface() {
           resourceId,
           outputKey: resource.source.kind === 'function_output' ? resource.source.outputKey : undefined,
         },
-      })
+      }
+      openFunctionRunDialog(dialog)
+      return { dialog, functionDef }
     },
   )
 
@@ -3536,6 +3566,7 @@ function CanvasSurface() {
         position: placedNodePosition(DEFAULT_ASSET_NODE_WIDTH) ?? addMenu.flow,
         endpointId: enabledEndpoint?.id,
         dialogOpen: true,
+        view: enabledEndpoint ? 'editor' : 'json',
         candidateRefs: resourceRefsForFunctionMenu(),
       })
       setAddMenu(null)
@@ -3565,6 +3596,39 @@ function CanvasSurface() {
     }
     setAddMenu(null)
   }
+
+  const openComfyEditorForRun = (dialog: FunctionRunDialogState, functionDef: GenerationFunction) => {
+    const temporaryFunction = dialog.temporaryFunction
+    if (temporaryFunction) {
+      const endpointId =
+        temporaryFunction.workflow.editor?.endpointId ??
+        temporaryComfyWorkflow?.endpointId ??
+        project.comfy.endpoints.find((endpoint) => endpoint.enabled !== false)?.id
+      setTemporaryComfyWorkflow((current) => ({
+        position: current?.position ?? dialog.position,
+        endpointId,
+        dialogOpen: true,
+        view: 'editor',
+        workflowJson: JSON.stringify(temporaryFunction.workflow.rawJson ?? {}, null, 2),
+        workflowUiJson: temporaryFunction.workflow.uiJson,
+        workflowEditor: temporaryFunction.workflow.editor,
+        candidateRefs: current?.candidateRefs ?? [],
+      }))
+      return
+    }
+    setSavedWorkflowEditor({ functionId: functionDef.id, endpointId: functionDef.workflow.editor?.endpointId })
+  }
+
+  const savedWorkflowFunction = savedWorkflowEditor ? project.functions[savedWorkflowEditor.functionId] : undefined
+  const enabledComfyEndpoints = project.comfy.endpoints.filter((endpoint) => endpoint.enabled !== false)
+  const supportingComfyEndpoints = savedWorkflowFunction
+    ? enabledComfyEndpoints.filter((endpoint) => endpointSupportsWorkflowFunction(endpoint, savedWorkflowFunction.id))
+    : []
+  // Server scope limits which workflows may dispatch jobs; editing dispatches nothing, so never dead-end here.
+  const savedWorkflowEndpointChoices = supportingComfyEndpoints.length ? supportingComfyEndpoints : enabledComfyEndpoints
+  const savedWorkflowEndpoint =
+    savedWorkflowEndpointChoices.find((endpoint) => endpoint.id === savedWorkflowEditor?.endpointId) ??
+    savedWorkflowEndpointChoices[0]
 
   const saveTemporaryComfyWorkflow = ({ rawJson, uiJson, editor }: EmbeddedComfySave) => {
     if (!temporaryComfyWorkflow) return
@@ -4185,6 +4249,11 @@ function CanvasSurface() {
       case 'edit-rerun':
         if (selectedSingleResource) openFunctionRunForResource(selectedSingleResource.id)
         return
+      case 'edit-workflow': {
+        const opened = selectedSingleResource ? openFunctionRunForResource(selectedSingleResource.id) : undefined
+        if (opened) openComfyEditorForRun(opened.dialog, opened.functionDef)
+        return
+      }
       case 'compare':
         if (selectedComparePair) setComparePair(selectedComparePair)
         return
@@ -4249,15 +4318,23 @@ function CanvasSurface() {
     const singleTask = selectedSingleResource?.source.taskId ? project.tasks[selectedSingleResource.source.taskId] : undefined
     if (selectedSingleResource?.source.kind === 'function_output' && singleTask) {
       const functionId = singleTask.functionId || selectedSingleResource.metadata?.workflowFunctionId
-      const hasFunction = Boolean(
-        functionId &&
-          (project.functions[functionId] ?? singleTask.functionSnapshot ?? selectedSingleResource.metadata?.functionSnapshot),
-      )
+      const singleFunctionDef = functionId
+        ? (project.functions[functionId] ?? singleTask.functionSnapshot ?? selectedSingleResource.metadata?.functionSnapshot)
+        : undefined
+      const hasFunction = Boolean(singleFunctionDef)
       if (hasFunction && (singleTask.status === 'failed' || singleTask.status === 'canceled')) {
         assetActions.push({ id: 'rerun', label: 'Rerun', icon: <RefreshCcw size={15} /> })
       }
       if (hasFunction && ['failed', 'canceled', 'succeeded'].includes(singleTask.status)) {
         assetActions.push({ id: 'edit-rerun', label: 'Edit & Rerun', title: 'Edit inputs and rerun', icon: <SlidersHorizontal size={15} /> })
+      }
+      if (singleFunctionDef?.workflow.format === 'comfyui_api_json' && ['failed', 'canceled', 'succeeded'].includes(singleTask.status)) {
+        assetActions.push({
+          id: 'edit-workflow',
+          label: 'Edit in ComfyUI',
+          title: 'Open the workflow that made this result in ComfyUI, then rerun',
+          icon: <Network size={15} />,
+        })
       }
     }
     if (selectedComparePair) {
@@ -4666,14 +4743,18 @@ function CanvasSurface() {
           initialWorkflowJson={temporaryComfyWorkflow.workflowJson}
           initialUiJson={temporaryComfyWorkflow.workflowUiJson}
           initialEditor={temporaryComfyWorkflow.workflowEditor}
+          view={temporaryComfyWorkflow.view}
           onEndpointChange={(endpointId) =>
             setTemporaryComfyWorkflow((current) => (current ? { ...current, endpointId } : current))
           }
+          onViewChange={(view) => setTemporaryComfyWorkflow((current) => (current ? { ...current, view } : current))}
           onUseWorkflow={saveTemporaryComfyWorkflow}
           onClose={() =>
-            setTemporaryComfyWorkflow((current) =>
-              functionRunDialog && current ? { ...current, dialogOpen: false } : undefined,
-            )
+            setTemporaryComfyWorkflow((current) => {
+              // Saving already handed the workflow to the run dialog; the editor closing afterwards must not drop it.
+              if (current && !current.dialogOpen) return current
+              return functionRunDialog && current ? { ...current, dialogOpen: false } : undefined
+            })
           }
         />
       ) : null}
@@ -4724,43 +4805,7 @@ function CanvasSurface() {
           }
           onEditComfyWorkflow={
             activeFunctionRunFunction.workflow.format === 'comfyui_api_json'
-              ? functionRunDialog.temporaryFunction
-                ? () => {
-                    const endpointId =
-                      functionRunDialog.temporaryFunction?.workflow.editor?.endpointId ??
-                      temporaryComfyWorkflow?.endpointId ??
-                      project.comfy.endpoints.find((endpoint) => endpoint.enabled !== false)?.id
-                    setTemporaryComfyWorkflow((current) => ({
-                      position: current?.position ?? functionRunDialog.position,
-                      endpointId,
-                      dialogOpen: true,
-                      workflowJson: JSON.stringify(
-                        functionRunDialog.temporaryFunction?.workflow.rawJson ?? {},
-                        null,
-                        2,
-                      ),
-                      workflowUiJson: functionRunDialog.temporaryFunction?.workflow.uiJson,
-                      workflowEditor: functionRunDialog.temporaryFunction?.workflow.editor,
-                      candidateRefs: current?.candidateRefs ?? [],
-                    }))
-                  }
-                : () => {
-                    const sourceResource = functionRunDialog.replaceTarget?.resourceId
-                      ? project.resources[functionRunDialog.replaceTarget.resourceId]
-                      : undefined
-                    const sourceTask = sourceResource?.source.taskId
-                      ? project.tasks[sourceResource.source.taskId]
-                      : undefined
-                    const sourceFunctionNodeId =
-                      sourceResource?.source.kind === 'function_output'
-                        ? sourceResource.source.functionNodeId
-                        : sourceTask?.functionNodeId
-                    setFunctionRunDialog(undefined)
-                    setFunctionEditor({
-                      nodeId: sourceFunctionNodeId ?? functionRunDialog.functionId,
-                      functionId: functionRunDialog.functionId,
-                    })
-                  }
+              ? () => openComfyEditorForRun(functionRunDialog, activeFunctionRunFunction)
               : undefined
           }
           onRunCountChange={(runCount) =>
@@ -4768,6 +4813,24 @@ function CanvasSurface() {
           }
           onValuesChange={(inputValues) =>
             setFunctionRunDialog((current) => (current ? { ...current, inputValues } : current))
+          }
+        />
+      ) : null}
+      {savedWorkflowEditor && savedWorkflowFunction ? (
+        <ComfyWorkflowEditorDialog
+          endpoint={savedWorkflowEndpoint}
+          endpointChoices={savedWorkflowEndpointChoices}
+          onEndpointChange={(endpointId) =>
+            setSavedWorkflowEditor((current) => (current ? { ...current, endpointId } : current))
+          }
+          saveLabel="Save workflow"
+          initialUiJson={savedWorkflowFunction.workflow.uiJson}
+          initialApiJson={savedWorkflowFunction.workflow.rawJson}
+          onClose={() => setSavedWorkflowEditor(undefined)}
+          onSave={({ rawJson, uiJson, editor }) =>
+            updateFunction(savedWorkflowFunction.id, {
+              workflow: { ...savedWorkflowFunction.workflow, rawJson, uiJson, editor },
+            })
           }
         />
       ) : null}
