@@ -1137,6 +1137,47 @@ describe('LeftPanel', () => {
     expect(within(dialog).getByText('Workflow node not found')).toBeVisible()
   })
 
+  it('lists workflow output nodes that are not output slots and enables one on request', async () => {
+    const state = panelProject()
+    state.functions.fn_render = {
+      ...state.functions.fn_render,
+      workflow: {
+        ...state.functions.fn_render.workflow,
+        rawJson: {
+          '8': { class_type: 'VAEDecode', _meta: { title: 'VAE Decode' }, inputs: { samples: ['5', 0], vae: ['4', 2] } },
+          '9': { class_type: 'SaveImage', _meta: { title: 'Save Image' }, inputs: { images: ['8', 0], filename_prefix: 'x' } },
+          '12': { class_type: 'PreviewImage', _meta: { title: 'Preview' }, inputs: { images: ['8', 0] } },
+        },
+      },
+      outputs: [
+        {
+          key: 'image',
+          label: 'Image',
+          type: 'image',
+          bind: { nodeId: '9', nodeTitle: 'Save Image' },
+          extract: { source: 'history', multiple: true },
+        },
+      ],
+    }
+    projectStore.setState({ project: state, selectedNodeId: undefined })
+
+    render(<SettingsPage onClose={() => undefined} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Function Management' }))
+    const dialog = screen.getByRole('dialog', { name: 'Function Management' })
+    const unused = await within(dialog).findByRole('group', { name: 'Workflow output nodes not used as outputs' })
+    // No server node list in tests: the list says its types are only guessed from names.
+    expect(unused).toHaveTextContent(/guessed from node names/i)
+    expect(unused).toHaveTextContent('#12 · image')
+    expect(unused).not.toHaveTextContent('#9')
+
+    fireEvent.click(within(unused).getByRole('button', { name: 'Use Preview as output' }))
+    expect(projectStore.getState().project.functions.fn_render?.outputs.map((output) => [output.key, output.bind.nodeId])).toEqual([
+      ['image', '9'],
+      ['image_2', '12'],
+    ])
+    expect(within(dialog).getByLabelText('Output workflow node image_2')).toHaveValue('12 · Preview')
+  })
+
   it('validates workflow bindings by node id when duplicate node titles exist', () => {
     const state = panelProject()
     state.functions.fn_render = {

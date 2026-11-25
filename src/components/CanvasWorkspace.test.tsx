@@ -595,7 +595,7 @@ describe('CanvasWorkspace', () => {
     mockComfyServer('available')
 
     const runDialog = await useWorkflowFromEditor(customSaverWorkflow)
-    expect(runDialog).toHaveTextContent('outputs Image')
+    expect(within(runDialog).getByRole('region', { name: 'Outputs' })).toHaveTextContent('Fancy Saver · #9')
     expect(within(runDialog).queryByRole('note')).not.toBeInTheDocument()
     fireEvent.click(within(runDialog).getByRole('button', { name: 'Run function from popup' }))
 
@@ -626,8 +626,75 @@ describe('CanvasWorkspace', () => {
       '8': { class_type: 'VAEDecode', _meta: { title: 'VAE Decode' }, inputs: { samples: ['5', 0], vae: ['4', 2] } },
       '9': { class_type: 'PreviewImage', _meta: { title: 'Preview Image' }, inputs: { images: ['8', 0] } },
     })
-    expect(runDialog).toHaveTextContent('outputs Image')
+    expect(within(runDialog).getByRole('region', { name: 'Outputs' })).toHaveTextContent('Preview Image · #9')
     expect(within(runDialog).getByRole('note')).toHaveTextContent(/guessed from node names/i)
+  })
+
+  it('lets a one-off workflow choose its output slots in the run dialog, and runs only the chosen ones', async () => {
+    configureTemporaryComfyProject()
+    const fetchSpy = mockComfyServer('available')
+    const twoOutputs = {
+      ...customSaverWorkflow,
+      '12': { class_type: 'PreviewImage', _meta: { title: 'Preview' }, inputs: { images: ['8', 0] } },
+    }
+    const objectInfoWithPreview = {
+      ...objectInfoFor,
+      PreviewImage: { input: { required: { images: ['IMAGE'] } }, output: [], output_node: true },
+    }
+    const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } })
+    const serve = fetchSpy.getMockImplementation()!
+    fetchSpy.mockImplementation(async (input, init) => {
+      const url = String(input instanceof Request ? input.url : input)
+      if (url.endsWith('/object_info')) return json(objectInfoWithPreview)
+      if (url.includes('/history/')) {
+        return json({
+          prompt_custom: {
+            outputs: {
+              '9': { images: [{ filename: 'fox_00001_.png', subfolder: '', type: 'output' }] },
+              '12': { images: [{ filename: 'preview_00001_.png', subfolder: '', type: 'temp' }] },
+            },
+          },
+        })
+      }
+      return serve(input, init)
+    })
+
+    const runDialog = await useWorkflowFromEditor(twoOutputs)
+    const outputs = within(runDialog).getByRole('region', { name: 'Outputs' })
+    // Every output node is enabled by default; the user keeps only what they want.
+    expect(outputs).toHaveTextContent('Fancy Saver · #9')
+    expect(outputs).toHaveTextContent('Preview · #12')
+    fireEvent.click(within(outputs).getByRole('button', { name: 'Remove output Image 2' }))
+    expect(within(outputs).queryByRole('button', { name: 'Remove output Image 2' })).not.toBeInTheDocument()
+    await waitFor(() => expect(within(outputs).getByRole('combobox', { name: 'Workflow output node' })).toHaveValue('12'))
+    fireEvent.change(within(outputs).getByRole('combobox', { name: 'Output type Image' }), { target: { value: 'video' } })
+    fireEvent.change(within(outputs).getByRole('combobox', { name: 'Output type Image' }), { target: { value: 'image' } })
+    fireEvent.click(within(runDialog).getByRole('button', { name: 'Run function from popup' }))
+
+    const task = await waitFor(() => {
+      const found = Object.values(projectStore.getState().project.tasks).find((item) => item.comfyPromptId === 'prompt_custom')
+      expect(found?.status).toBe('succeeded')
+      return found!
+    })
+    const refs = Object.values(task.outputRefs).flat()
+    expect(refs).toHaveLength(1)
+    expect(projectStore.getState().project.resources[refs[0]!.resourceId]?.name).toBe('fox_00001_.png')
+  })
+
+  it('opens function settings from a saved function run dialog to change its outputs', async () => {
+    configureTemporaryComfyProject()
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 503 }))
+    projectStore.getState().addFunctionFromWorkflow('Saved Preview', {
+      '9': { class_type: 'SaveImage', _meta: { title: 'Save Image' }, inputs: { images: ['8', 0], filename_prefix: 'x' } },
+      '8': { class_type: 'VAEDecode', _meta: { title: 'VAE Decode' }, inputs: { samples: ['5', 0], vae: ['4', 2] } },
+    })
+
+    const menu = openAddMenu()
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Saved Preview' }))
+    const runDialog = screen.getByRole('dialog', { name: 'Run Saved Preview' })
+    expect(within(runDialog).getByRole('region', { name: 'Outputs' })).toHaveTextContent('Save Image · #9')
+    fireEvent.click(within(runDialog).getByRole('button', { name: 'Change outputs' }))
+    expect(await screen.findByRole('dialog', { name: 'Function Management' })).toBeInTheDocument()
   })
 
   it('edits a saved function workflow in place from its run dialog and keeps the run dialog open', async () => {

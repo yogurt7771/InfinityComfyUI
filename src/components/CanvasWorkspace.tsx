@@ -64,6 +64,7 @@ import {
   Trash2,
   Video,
   Volume2,
+  Settings2,
   X,
 } from 'lucide-react'
 import { EmptyNodeView, FunctionNodeView, GroupNodeView, ResourceNodeView, ResultGroupNodeView } from './NodeViews'
@@ -105,12 +106,15 @@ import {
 } from '../domain/resourceNodeLayout'
 import {
   createGenerationFunctionFromWorkflow,
+  mergeWorkflowOutputs,
+  workflowOutputCandidates,
   isMediaResourceType,
   parseComfyApiWorkflowJson,
   workflowInputBindingExists,
   workflowInputCandidates,
 } from '../domain/workflow'
 import { useProjectStore } from '../store/projectStore'
+import { useComfyNodeTypes } from './useComfyNodeTypes'
 import { shouldIgnoreCanvasShortcut } from './canvasKeyboard'
 import { buildFlowNodeRenderIndex, flowNodeRenderDependencies, stabilizeFlowNodes } from './canvasFlowNodes'
 import { partitionRunInputs } from './functionRunInputs'
@@ -122,6 +126,7 @@ import type {
   ComfyUiWorkflow,
   ComfyWorkflowEditorMetadata,
   FunctionInputDef,
+  FunctionOutputDef,
   GenerationFunction,
   ComfyEndpointConfig,
   PrimitiveInputValue,
@@ -183,7 +188,7 @@ type GroupNodeMenuState = {
 }
 
 type FunctionEditorState = {
-  nodeId: string
+  nodeId?: string
   functionId: string
 }
 
@@ -1198,6 +1203,132 @@ const providerImageContentParts = (functionDef: GenerationFunction) =>
     .filter((input) => input.type === 'image')
     .map((input) => ({ type: 'image_url' as const, content: input.key, detail: 'auto' as const }))
 
+const OUTPUT_SLOT_TYPES: ResourceType[] = ['image', 'video', 'audio', 'text']
+
+/** What a run will produce; for a one-off ComfyUI workflow the output slots can be changed right here. */
+function FunctionRunOutputs({
+  functionDef,
+  onFunctionDefChange,
+  onEditOutputs,
+}: {
+  functionDef: GenerationFunction
+  onFunctionDefChange?: (functionDef: GenerationFunction) => void
+  onEditOutputs?: () => void
+}) {
+  const [candidateDraft, setCandidateDraft] = useState('')
+  const isComfy = functionDef.workflow.format === 'comfyui_api_json'
+  const editable = Boolean(onFunctionDefChange && isComfy)
+  const nodeTypes = useComfyNodeTypes(editable ? functionDef : undefined)
+  const candidates = useMemo(
+    () => (editable ? workflowOutputCandidates(functionDef.workflow.rawJson, functionDef.outputs, nodeTypes) : []),
+    [editable, functionDef.outputs, functionDef.workflow.rawJson, nodeTypes],
+  )
+  const selectedCandidate = candidates.find((candidate) => candidate.bind.nodeId === candidateDraft) ?? candidates[0]
+  const changeOutputs = (outputs: FunctionOutputDef[]) =>
+    onFunctionDefChange?.({ ...functionDef, outputs, updatedAt: new Date().toISOString() })
+
+  return (
+    <section className="function-run-outputs" aria-label="Outputs">
+      <div className="function-run-outputs-header">
+        <span>Outputs</span>
+        {onEditOutputs ? (
+          <button type="button" className="function-run-outputs-edit" aria-label="Change outputs" onClick={onEditOutputs}>
+            <Settings2 size={14} />
+            Change
+          </button>
+        ) : null}
+      </div>
+      {functionDef.outputs.length ? (
+        <ul className="function-run-output-list">
+          {functionDef.outputs.map((output, index) => {
+            const label = output.label || output.key
+            return (
+              <li key={`${output.key}_${index}`} className="function-run-output">
+                <span className="function-run-output-text">
+                  <strong>{label}</strong>
+                  {isComfy && output.bind.nodeTitle ? (
+                    <small>
+                      {output.bind.nodeTitle}
+                      {output.bind.nodeId ? ` · #${output.bind.nodeId}` : ''}
+                    </small>
+                  ) : null}
+                </span>
+                {editable ? (
+                  <>
+                    <select
+                      aria-label={`Output type ${label}`}
+                      value={output.type}
+                      onChange={(event) => {
+                        const type = event.target.value as ResourceType
+                        changeOutputs(
+                          functionDef.outputs.map((item, itemIndex) =>
+                            itemIndex === index
+                              ? { ...item, type, extract: { ...item.extract, source: type === 'text' ? 'node_output' : 'history' } }
+                              : item,
+                          ),
+                        )
+                      }}
+                    >
+                      {OUTPUT_SLOT_TYPES.map((type) => (
+                        <option key={type} value={type}>
+                          {type}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="function-run-output-remove"
+                      aria-label={`Remove output ${label}`}
+                      onClick={() => changeOutputs(functionDef.outputs.filter((_, itemIndex) => itemIndex !== index))}
+                    >
+                      <X size={14} />
+                    </button>
+                  </>
+                ) : (
+                  <span className="function-run-output-type">{output.type}</span>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      ) : (
+        <p className="dialog-note is-warning" role="note">
+          No outputs selected, so a run will produce nothing.
+          {editable && candidates.length ? ' Add an output node below.' : ''}
+        </p>
+      )}
+      {editable && candidates.length ? (
+        <div className="function-run-slot-editor">
+          <select
+            aria-label="Workflow output node"
+            value={selectedCandidate?.bind.nodeId ?? ''}
+            onChange={(event) => setCandidateDraft(event.target.value)}
+          >
+            {candidates.map((candidate) => (
+              <option key={candidate.bind.nodeId} value={candidate.bind.nodeId}>
+                {`${candidate.bind.nodeTitle} · #${candidate.bind.nodeId} · ${candidate.type}`}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            aria-label="Add output slot"
+            disabled={!selectedCandidate}
+            onClick={() => {
+              if (!selectedCandidate) return
+              changeOutputs([...functionDef.outputs, selectedCandidate])
+              setCandidateDraft('')
+            }}
+          >
+            <Plus size={15} />
+            Add output
+          </button>
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
 export function FunctionRunDialog({
   functionDef,
   values,
@@ -1209,6 +1340,7 @@ export function FunctionRunDialog({
   onRun,
   onFunctionDefChange,
   onEditComfyWorkflow,
+  onEditOutputs,
   onRunCountChange,
   onValuesChange,
 }: {
@@ -1222,6 +1354,8 @@ export function FunctionRunDialog({
   onRun: (values: Record<string, PrimitiveInputValue | ResourceRef>, runCount: number, mode: FunctionRunMode) => void
   onFunctionDefChange?: (functionDef: GenerationFunction) => void
   onEditComfyWorkflow?: () => void
+  /** Opens the function's settings to change its output slots (saved functions). */
+  onEditOutputs?: () => void
   onRunCountChange: (runCount: number) => void
   onValuesChange: (values: Record<string, PrimitiveInputValue | ResourceRef>) => void
 }) {
@@ -1235,6 +1369,7 @@ export function FunctionRunDialog({
     missingRequiredInputs.length > 0
       ? `Missing ${missingRequiredInputs.map((input) => input.label || input.key).join(', ')}`
       : undefined
+  const runBlocked = Boolean(disabledRunTitle)
   const handleRun = (mode: FunctionRunMode) => {
     onRun(values, runCount, mode)
     onClose()
@@ -1371,7 +1506,6 @@ export function FunctionRunDialog({
   const subtitle = [
     functionKindLabel(functionDef),
     `${functionDef.inputs.length} input${functionDef.inputs.length === 1 ? '' : 's'}`,
-    functionDef.outputs.length ? `outputs ${functionDef.outputs.map((output) => output.label || output.key).join(', ')}` : undefined,
     missingRequiredInputs.length ? `${missingRequiredInputs.length} required missing` : undefined,
   ]
     .filter(Boolean)
@@ -1645,6 +1779,11 @@ export function FunctionRunDialog({
               Show {hiddenInputCount} more optional input{hiddenInputCount === 1 ? '' : 's'}
             </button>
           ) : null}
+          <FunctionRunOutputs
+            functionDef={functionDef}
+            onFunctionDefChange={onFunctionDefChange}
+            onEditOutputs={onEditOutputs}
+          />
           {canEditComfySlots ? (
             <details className="dialog-advanced" aria-label="ComfyUI input slots">
               <summary>
@@ -1700,7 +1839,7 @@ export function FunctionRunDialog({
               <button
                 type="button"
                 aria-label="Run and replace current output"
-                disabled={missingRequiredInputs.length > 0}
+                disabled={runBlocked}
                 title={disabledRunTitle}
                 onClick={() => handleRun('replace')}
               >
@@ -1710,7 +1849,7 @@ export function FunctionRunDialog({
                 type="button"
                 aria-label="Run and create new output node"
                 className="primary"
-                disabled={missingRequiredInputs.length > 0}
+                disabled={runBlocked}
                 title={disabledRunTitle}
                 onClick={() => handleRun('new')}
               >
@@ -1722,7 +1861,7 @@ export function FunctionRunDialog({
               type="button"
               aria-label="Run function from popup"
               className="primary"
-              disabled={missingRequiredInputs.length > 0}
+              disabled={runBlocked}
               title={disabledRunTitle}
               onClick={() => handleRun('new')}
             >
@@ -3826,6 +3965,12 @@ function CanvasSurface() {
           category: currentTemporaryFunction.category,
           description: currentTemporaryFunction.description,
           inputs: mergeEditedWorkflowInputs(currentTemporaryFunction.inputs, generatedFunction.inputs),
+          outputs: mergeWorkflowOutputs(
+            currentTemporaryFunction.outputs,
+            generatedFunction.outputs,
+            rawJson,
+            currentTemporaryFunction.workflow.rawJson,
+          ),
           runtimeDefaults: currentTemporaryFunction.runtimeDefaults,
           createdAt: currentTemporaryFunction.createdAt,
         }
@@ -5007,6 +5152,11 @@ function CanvasSurface() {
             functionRunDialog.temporaryFunction
               ? (temporaryFunction) =>
                   setFunctionRunDialog((current) => (current ? { ...current, temporaryFunction } : current))
+              : undefined
+          }
+          onEditOutputs={
+            !functionRunDialog.temporaryFunction && project.functions[functionRunDialog.functionId]
+              ? () => setFunctionEditor({ functionId: functionRunDialog.functionId })
               : undefined
           }
           onEditComfyWorkflow={

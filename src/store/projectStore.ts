@@ -5886,6 +5886,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
     saveFunctionWorkflow: async (functionId, workflow) => {
       const current = get().project.functions[functionId]
       if (!current || isBuiltInFunction(current)) return
+      const previousRawJson = current.workflow.rawJson
       // The workflow itself lands at once; outputs follow when the server's node types arrive.
       const nextWorkflow: GenerationFunction['workflow'] = { ...current.workflow, rawJson: workflow.rawJson }
       if (workflow.uiJson === undefined) delete nextWorkflow.uiJson
@@ -5897,7 +5898,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       if (!latest || latest.workflow.rawJson !== workflow.rawJson) return
       const inferred = inferWorkflowOutputs(workflow.rawJson, nodeTypes)
       get().updateFunction(functionId, {
-        outputs: mergeWorkflowOutputs(latest.outputs, inferred.outputs),
+        outputs: mergeWorkflowOutputs(latest.outputs, inferred.outputs, workflow.rawJson, previousRawJson),
         outputInference: inferred.inference,
       })
     },

@@ -386,53 +386,73 @@ const OUTPUT_TYPE_ORDER: Array<[ResourceType, string]> = [
 
 export type ComfyOutputInference = NonNullable<GenerationFunction['outputInference']>
 
+/** A node that can be an output slot: what the server's node types (or, offline, its name) say it produces. */
+export type WorkflowOutputNode = {
+  nodeId: string
+  nodeTitle: string
+  classType: string
+  type?: ResourceType
+  typedBy: ComfyOutputInference
+}
+
+/** Every output node of the workflow, in workflow order; the user picks which ones are output slots. */
+export function workflowOutputNodes(workflow: ComfyWorkflow, nodeTypes?: ComfyNodeTypes): WorkflowOutputNode[] {
+  const nodes: WorkflowOutputNode[] = []
+  for (const [nodeId, node] of Object.entries(workflow)) {
+    const base = { nodeId, nodeTitle: nodeTitle(nodeId, node), classType: node.class_type ?? '' }
+    const info = node.class_type ? nodeTypes?.[node.class_type] : undefined
+    if (info) {
+      if (info.outputNode) nodes.push({ ...base, type: outputTypeByNodeType(node, info), typedBy: 'node_types' })
+      continue
+    }
+    const type = outputTypeByName(node)
+    if (type) nodes.push({ ...base, type, typedBy: 'node_names' })
+  }
+  return nodes
+}
+
+const outputLabelFor = (type: ResourceType) => OUTPUT_TYPE_ORDER.find(([candidate]) => candidate === type)?.[1] ?? type
+
+/** `<type>`, then `<type>_2`, `<type>_3`… whichever is free, with the matching label. */
+const freeOutputKey = (type: ResourceType, usedKeys: Set<string>) => {
+  const label = outputLabelFor(type)
+  if (!usedKeys.has(type)) return { key: type, label }
+  let index = 2
+  while (usedKeys.has(`${type}_${index}`)) index += 1
+  return { key: `${type}_${index}`, label: `${label} ${index}` }
+}
+
+const outputSlotForNode = (node: WorkflowOutputNode, type: ResourceType, usedKeys: Set<string>): FunctionOutputDef => {
+  const { key, label } = freeOutputKey(type, usedKeys)
+  usedKeys.add(key)
+  return {
+    key,
+    label,
+    type,
+    bind: { nodeId: node.nodeId, nodeTitle: node.nodeTitle },
+    extract: { source: type === 'text' ? 'node_output' : 'history', multiple: true },
+  }
+}
+
 /**
- * Output nodes and their types come from the server's node definitions (`output_node` and the types flowing in).
- * Nodes the definitions do not cover fall back to the name rules, and the result says so.
+ * The default output slots of a new function: every output node whose type is known. Which ones to keep is the user's
+ * call (function settings, run dialog), so there is no save-over-preview rule here.
  */
 export function inferWorkflowOutputs(
   workflow: ComfyWorkflow,
   nodeTypes?: ComfyNodeTypes,
 ): { outputs: FunctionOutputDef[]; inference: ComfyOutputInference } {
-  const outputTypeById = new Map<string, ResourceType>()
-  const untyped: Array<[string, WorkflowNode]> = []
-  for (const [id, node] of Object.entries(workflow)) {
-    const info = node.class_type ? nodeTypes?.[node.class_type] : undefined
-    if (!info) {
-      untyped.push([id, node])
-      continue
-    }
-    const type = outputTypeByNodeType(node, info)
-    if (type) outputTypeById.set(id, type)
-  }
-
-  // Among name-matched images, save nodes are the deliverables; previews only count when nothing is saved.
-  const untypedSavesImage = untyped.some(([, node]) => imageOutputKindByName(node) === 'save')
-  for (const [id, node] of untyped) {
-    const imageKind = imageOutputKindByName(node)
-    if (imageKind) {
-      if (imageKind === (untypedSavesImage ? 'save' : 'preview')) outputTypeById.set(id, 'image')
-      continue
-    }
-    const type = outputTypeByName(node)
-    if (type) outputTypeById.set(id, type)
-  }
-
+  const outputNodes = workflowOutputNodes(workflow, nodeTypes)
+  const usedKeys = new Set<string>()
   const outputs: FunctionOutputDef[] = []
-  for (const [type, label] of OUTPUT_TYPE_ORDER) {
-    const nodes = Object.entries(workflow).filter(([id]) => outputTypeById.get(id) === type)
-    nodes.forEach(([id, node], index) => {
-      outputs.push({
-        key: index === 0 ? type : `${type}_${index + 1}`,
-        label: index === 0 ? label : `${label} ${index + 1}`,
-        type,
-        bind: { nodeId: id, nodeTitle: nodeTitle(id, node) },
-        extract: { source: type === 'text' ? 'node_output' : 'history', multiple: true },
-      })
-    })
+  for (const [type] of OUTPUT_TYPE_ORDER) {
+    for (const node of outputNodes) {
+      if (node.type === type) outputs.push(outputSlotForNode(node, type, usedKeys))
+    }
   }
 
-  const inference: ComfyOutputInference = nodeTypes && untyped.length === 0 ? 'node_types' : 'node_names'
+  const everyNodeTyped = Object.values(workflow).every((node) => Boolean(node.class_type && nodeTypes?.[node.class_type]))
+  const inference: ComfyOutputInference = nodeTypes && everyNodeTyped ? 'node_types' : 'node_names'
   if (outputs.length === 0) {
     outputs.push({
       key: FALLBACK_OUTPUT_KEY,
@@ -443,6 +463,19 @@ export function inferWorkflowOutputs(
     })
   }
   return { outputs, inference }
+}
+
+/** Output nodes that are not output slots yet, ready to be added (like hidden workflow fields for inputs). */
+export function workflowOutputCandidates(
+  workflow: ComfyWorkflow,
+  existingOutputs: FunctionOutputDef[],
+  nodeTypes?: ComfyNodeTypes,
+): FunctionOutputDef[] {
+  const boundNodeIds = new Set(existingOutputs.map((output) => output.bind.nodeId).filter(Boolean))
+  const usedKeys = new Set(existingOutputs.map((output) => output.key))
+  return workflowOutputNodes(workflow, nodeTypes)
+    .filter((node) => !boundNodeIds.has(node.nodeId))
+    .map((node) => outputSlotForNode(node, node.type ?? 'text', usedKeys))
 }
 
 const isFallbackOutput = (output: FunctionOutputDef) =>
@@ -471,40 +504,28 @@ export function repairFallbackComfyOutputs(functionDef: GenerationFunction, node
 }
 
 /**
- * Editing a saved function's workflow keeps the outputs the user already has (keys, labels, wiring) for nodes that are
- * still outputs, retyped from the new inference; outputs of removed nodes go, and new output nodes are appended.
+ * Re-editing a workflow keeps the user's output slots exactly as they set them; slots of deleted nodes go, and only
+ * output nodes that are new in the workflow are added. A node that was already there but not a slot stays off.
  */
-export function mergeWorkflowOutputs(current: FunctionOutputDef[], inferred: FunctionOutputDef[]): FunctionOutputDef[] {
-  const inferredByNodeId = new Map(
-    inferred.filter((output) => output.bind.nodeId).map((output) => [output.bind.nodeId!, output]),
-  )
-  const kept: FunctionOutputDef[] = []
-  for (const output of current) {
-    if (isFallbackOutput(output)) continue
-    if (!output.bind.nodeId) {
-      kept.push(output)
-      continue
-    }
-    const match = inferredByNodeId.get(output.bind.nodeId)
-    if (!match) continue
-    kept.push({ ...output, type: match.type, extract: { ...output.extract, source: match.extract.source } })
-  }
+export function mergeWorkflowOutputs(
+  current: FunctionOutputDef[],
+  inferred: FunctionOutputDef[],
+  nextWorkflow: ComfyWorkflow,
+  previousWorkflow?: ComfyWorkflow,
+): FunctionOutputDef[] {
+  if (current.length === 0 || (current.length === 1 && isFallbackOutput(current[0]!))) return inferred
 
+  const kept = current.filter((output) => !output.bind.nodeId || Object.hasOwn(nextWorkflow, output.bind.nodeId))
   const usedKeys = new Set(kept.map((output) => output.key))
-  const coveredNodeIds = new Set(kept.map((output) => output.bind.nodeId).filter(Boolean))
+  const boundNodeIds = new Set(kept.map((output) => output.bind.nodeId).filter(Boolean))
   const appended: FunctionOutputDef[] = []
   for (const output of inferred) {
-    if (!output.bind.nodeId || coveredNodeIds.has(output.bind.nodeId)) continue
-    let key = output.key
-    let label = output.label
-    if (usedKeys.has(key)) {
-      const baseLabel = OUTPUT_TYPE_ORDER.find(([type]) => type === output.type)?.[1] ?? output.label
-      let index = 2
-      while (usedKeys.has(`${output.type}_${index}`)) index += 1
-      key = `${output.type}_${index}`
-      label = `${baseLabel} ${index}`
-    }
+    const nodeId = output.bind.nodeId
+    if (!nodeId || boundNodeIds.has(nodeId)) continue
+    if (previousWorkflow && Object.hasOwn(previousWorkflow, nodeId)) continue
+    const { key, label } = usedKeys.has(output.key) ? freeOutputKey(output.type, usedKeys) : output
     usedKeys.add(key)
+    boundNodeIds.add(nodeId)
     appended.push({ ...output, key, label })
   }
   return [...kept, ...appended]

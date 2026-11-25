@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import {
   createGenerationFunctionFromWorkflow,
   inferWorkflowOutputs,
-  mergeWorkflowOutputs,
   repairFallbackComfyOutputs,
 } from './workflow'
 import type { ComfyNodeTypes } from './comfyNodeTypes'
@@ -328,8 +327,11 @@ describe('inferWorkflowOutputs with node types (2a)', () => {
         '20': { class_type: 'PreviewImage', _meta: { title: 'Peek' }, inputs: { images: ['8', 0] } },
         '9': { class_type: 'SaveImage', _meta: { title: 'Save' }, inputs: { images: ['8', 0] } },
       }
-      // Name rules: MyFancySaver is not recognized; save is preferred over preview.
-      expect(inferWorkflowOutputs(workflow)).toEqual({ outputs: [out('image', 1, '9', 'Save')], inference: 'node_names' })
+      // Name rules: MyFancySaver is not recognized; save and preview are both enabled (v5.34, no save-over-preview).
+      expect(inferWorkflowOutputs(workflow)).toEqual({
+        outputs: [out('image', 1, '9', 'Save'), out('image', 2, '20', 'Peek')],
+        inference: 'node_names',
+      })
     })
 
     it("uses name rules and 'node_names' with an empty nodeTypes map", () => {
@@ -343,7 +345,7 @@ describe('inferWorkflowOutputs with node types (2a)', () => {
       })
     })
 
-    it('applies save-over-preview only among untyped image nodes', () => {
+    it('enables typed and untyped image output nodes alike', () => {
       // 'Image Save' and 'Preview Image' are unknown classes; PreviewImage is typed.
       const result = inferWorkflowOutputs(
         {
@@ -354,7 +356,11 @@ describe('inferWorkflowOutputs with node types (2a)', () => {
         NODE_TYPES,
       )
       expect(result).toEqual({
-        outputs: [out('image', 1, 'typed_peek', 'Typed Peek'), out('image', 2, 'untyped_save', 'Untyped Save')],
+        outputs: [
+          out('image', 1, 'typed_peek', 'Typed Peek'),
+          out('image', 2, 'untyped_peek', 'Untyped Peek'),
+          out('image', 3, 'untyped_save', 'Untyped Save'),
+        ],
         inference: 'node_names',
       })
     })
@@ -614,132 +620,4 @@ describe('repairFallbackComfyOutputs with node types (2c)', () => {
   })
 })
 
-describe('mergeWorkflowOutputs (2d)', () => {
-  const custom = (
-    key: string,
-    label: string,
-    type: ResourceType,
-    bind: FunctionOutputDef['bind'],
-    extract: FunctionOutputDef['extract'] = { source: 'history', multiple: true },
-  ): FunctionOutputDef => ({ key, label, type, bind, extract })
-
-  it('drops the legacy fallback and appends the inferred outputs', () => {
-    const inferred = [out('image', 1, '12', 'Fancy'), out('text', 1, '50', 'Caption')]
-    expect(mergeWorkflowOutputs([structuredClone(LEGACY_FALLBACK)], inferred)).toEqual(inferred)
-  })
-
-  it('returns the inferred outputs for an empty current list', () => {
-    const inferred = [out('image', 1, '12', 'Fancy'), out('image', 2, '20', 'Peek')]
-    expect(mergeWorkflowOutputs([], inferred)).toEqual(inferred)
-  })
-
-  it('keeps a current output bound to an inferred nodeId, taking type and extract.source from the inferred one', () => {
-    const current = [
-      custom('render', 'My Render', 'image', { nodeId: '9', nodeTitle: 'Old Title', field: 'images' }, {
-        source: 'history',
-        multiple: false,
-        index: 2,
-      }),
-    ]
-    const inferred = [out('video', 1, '9', 'New Title')]
-    expect(mergeWorkflowOutputs(current, inferred)).toEqual([
-      custom('render', 'My Render', 'video', { nodeId: '9', nodeTitle: 'Old Title', field: 'images' }, {
-        source: 'history',
-        multiple: false,
-        index: 2,
-      }),
-    ])
-  })
-
-  it('switches extract.source to node_output when the inferred type is text, and back to history', () => {
-    const current = [
-      custom('caption', 'Caption', 'image', { nodeId: '50', nodeTitle: 'Cap' }, { source: 'history', multiple: true }),
-      custom('pic', 'Pic', 'text', { nodeId: '12', nodeTitle: 'Pic' }, { source: 'node_output', multiple: true }),
-    ]
-    const inferred = [out('image', 1, '12', 'Pic'), out('text', 1, '50', 'Cap')]
-    expect(mergeWorkflowOutputs(current, inferred)).toEqual([
-      custom('caption', 'Caption', 'text', { nodeId: '50', nodeTitle: 'Cap' }, { source: 'node_output', multiple: true }),
-      custom('pic', 'Pic', 'image', { nodeId: '12', nodeTitle: 'Pic' }, { source: 'history', multiple: true }),
-    ])
-  })
-
-  it('drops current outputs whose nodeId matches no inferred output', () => {
-    const current = [
-      custom('gone', 'Gone', 'image', { nodeId: '77', nodeTitle: 'Deleted Node' }),
-      custom('render', 'Render', 'image', { nodeId: '12', nodeTitle: 'Fancy' }),
-    ]
-    const inferred = [out('image', 1, '12', 'Fancy')]
-    expect(mergeWorkflowOutputs(current, inferred)).toEqual([
-      custom('render', 'Render', 'image', { nodeId: '12', nodeTitle: 'Fancy' }),
-    ])
-  })
-
-  it('keeps title-bound current outputs unchanged', () => {
-    const titleBound = custom('caption', 'Caption', 'text', { nodeTitle: 'My Caption' }, { source: 'node_output' })
-    const inferred = [out('image', 1, '12', 'Fancy')]
-    expect(mergeWorkflowOutputs([titleBound], inferred)).toEqual([titleBound, out('image', 1, '12', 'Fancy')])
-  })
-
-  it('appends uncovered inferred outputs after kept ones, in inferred order', () => {
-    const current = [
-      custom('second', 'Second', 'image', { nodeId: '20', nodeTitle: 'Peek' }),
-      custom('first', 'First', 'image', { nodeId: '9', nodeTitle: 'Save' }),
-    ]
-    const inferred = [
-      out('image', 1, '9', 'Save'),
-      out('image', 2, '12', 'Fancy'),
-      out('image', 3, '20', 'Peek'),
-      out('video', 1, '30', 'Video Out'),
-    ]
-    expect(mergeWorkflowOutputs(current, inferred)).toEqual([
-      custom('second', 'Second', 'image', { nodeId: '20', nodeTitle: 'Peek' }),
-      custom('first', 'First', 'image', { nodeId: '9', nodeTitle: 'Save' }),
-      out('image', 2, '12', 'Fancy'),
-      out('video', 1, '30', 'Video Out'),
-    ])
-  })
-
-  it('renames an appended output whose key collides with a kept key to the next free <type>_<n>', () => {
-    const current = [custom('image', 'Image', 'image', { nodeTitle: 'Some Title' })]
-    const inferred = [out('image', 1, '12', 'Fancy')]
-    expect(mergeWorkflowOutputs(current, inferred)).toEqual([
-      custom('image', 'Image', 'image', { nodeTitle: 'Some Title' }),
-      { ...out('image', 1, '12', 'Fancy'), key: 'image_2', label: 'Image 2' },
-    ])
-  })
-
-  it('skips taken numbers when renaming a colliding key', () => {
-    const current = [
-      custom('image', 'Image', 'image', { nodeTitle: 'A' }),
-      custom('image_2', 'Image 2', 'image', { nodeTitle: 'B' }),
-    ]
-    const inferred = [out('image', 1, '12', 'Fancy')]
-    expect(mergeWorkflowOutputs(current, inferred)).toEqual([
-      ...current,
-      { ...out('image', 1, '12', 'Fancy'), key: 'image_3', label: 'Image 3' },
-    ])
-  })
-
-  it('renames a colliding text output with text_<n>', () => {
-    const current = [custom('text', 'Text', 'text', { nodeTitle: 'Cap' }, { source: 'node_output', multiple: true })]
-    const inferred = [out('text', 1, '51', 'Other Cap')]
-    expect(mergeWorkflowOutputs(current, inferred)).toEqual([
-      current[0],
-      { ...out('text', 1, '51', 'Other Cap'), key: 'text_2', label: 'Text 2' },
-    ])
-  })
-
-  it('does not mutate its inputs', () => {
-    const current = [
-      structuredClone(LEGACY_FALLBACK),
-      custom('render', 'Render', 'image', { nodeId: '9', nodeTitle: 'Save' }),
-      custom('image', 'Image', 'image', { nodeTitle: 'T' }),
-    ]
-    const inferred = [out('video', 1, '9', 'Save'), out('image', 1, '12', 'Fancy')]
-    const currentSnapshot = structuredClone(current)
-    const inferredSnapshot = structuredClone(inferred)
-    mergeWorkflowOutputs(current, inferred)
-    expect(current).toEqual(currentSnapshot)
-    expect(inferred).toEqual(inferredSnapshot)
-  })
-})
+// mergeWorkflowOutputs: contract v3 (user-set output slots) supersedes v2 2d; see workflow.outputSlots.test.ts.

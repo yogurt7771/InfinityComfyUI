@@ -49,13 +49,18 @@ describe('ComfyUI image output inference', () => {
     },
   )
 
-  it('prefers save nodes over preview nodes', () => {
+  // v5.34: no save-over-preview rule; every output node is enabled by default and the user keeps what they want.
+  it('enables save and preview nodes alike by default', () => {
     const fn = infer({
       preview_a: { class_type: 'PreviewImage', _meta: { title: 'Preview A' }, inputs: {} },
       save_b: { class_type: 'SaveImage', _meta: { title: 'Save B' }, inputs: {} },
       preview_c: { class_type: 'ImagePreview', _meta: { title: 'Preview C' }, inputs: {} },
     })
-    expect(fn.outputs).toEqual([imageOutput('image', 'Image', 'save_b', 'Save B')])
+    expect(fn.outputs).toEqual([
+      imageOutput('image', 'Image', 'preview_a', 'Preview A'),
+      imageOutput('image_2', 'Image 2', 'save_b', 'Save B'),
+      imageOutput('image_3', 'Image 3', 'preview_c', 'Preview C'),
+    ])
   })
 
   it('never treats websocket nodes as image outputs', () => {

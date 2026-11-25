@@ -9175,3 +9175,125 @@ body[data-theme='light'] .function-run-dialog .local-action-footer button:not(.p
   -webkit-line-clamp: 2;
   line-height: 1.35;
 }
+
+/* Output slots: run dialog list and unused output nodes in function settings */
+:is(body[data-theme], body) .function-run-outputs {
+  display: grid;
+  gap: 8px;
+}
+
+:is(body[data-theme], body) .function-run-outputs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+:is(body[data-theme], body) .function-run-outputs-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+:is(body[data-theme], body) .function-run-output-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+:is(body[data-theme], body) .function-run-output {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-soft);
+}
+
+:is(body[data-theme], body) .function-run-output-text {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+:is(body[data-theme], body) .function-run-output-text strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+:is(body[data-theme], body) .function-run-output-text small,
+:is(body[data-theme], body) .function-run-output-type {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:is(body[data-theme], body) .function-run-output select {
+  width: auto;
+  min-width: 88px;
+}
+
+:is(body[data-theme], body) .function-run-output-remove {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+}
+
+:is(body[data-theme], body) .output-candidates {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+}
+
+:is(body[data-theme], body) .output-candidates-heading {
+  display: grid;
+  gap: 2px;
+}
+
+:is(body[data-theme], body) .output-candidates-heading span {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+:is(body[data-theme], body) .output-candidates-heading small,
+:is(body[data-theme], body) .output-candidate-row small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+:is(body[data-theme], body) .output-candidate-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+:is(body[data-theme], body) .output-candidate-name {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+:is(body[data-theme], body) .output-candidate-row button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}

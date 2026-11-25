@@ -45,7 +45,7 @@ import { getProjectRunHistory, getSelectedNodesRunHistory } from '../domain/runH
 import { formatDurationMs, formatHistoryTimestamp, runDurationMs } from '../domain/runTiming'
 import { downloadConfigPackage, downloadProjectPackage, readPackageFile } from '../domain/projectTransfer'
 import { normalizeComfyEndpointCredentials, parseComfyEndpointUrl } from '../domain/comfyEndpoint'
-import { parseComfyApiWorkflowJson } from '../domain/workflow'
+import { parseComfyApiWorkflowJson, workflowOutputCandidates } from '../domain/workflow'
 import {
   COMFY_PROXY_APP_READY_MESSAGE,
   COMFY_PROXY_LOGIN_HANDLED_MESSAGE,
@@ -54,6 +54,7 @@ import {
   postComfyProxyPassword,
 } from '../domain/comfyProxy'
 import type { ComfyNodeTypes } from '../domain/comfyNodeTypes'
+import { useComfyNodeTypes } from './useComfyNodeTypes'
 import {
   exportApiWorkflowFromComfyEditor,
   exportUiWorkflowFromComfyEditor,
@@ -2417,6 +2418,14 @@ export function FunctionManager({
   const workflowFunctions = functions.filter(isComfyWorkflowFunction)
   const workflowFunctionIds = workflowFunctions.map((fn) => fn.id)
   const selectedIsComfyWorkflow = selectedFunction ? isComfyWorkflowFunction(selectedFunction) : false
+  const selectedNodeTypes = useComfyNodeTypes(selectedIsComfyWorkflow ? selectedFunction : undefined)
+  const unusedOutputNodes = useMemo(
+    () =>
+      selectedFunction && selectedIsComfyWorkflow
+        ? workflowOutputCandidates(selectedFunction.workflow.rawJson, selectedFunction.outputs, selectedNodeTypes)
+        : [],
+    [selectedFunction, selectedIsComfyWorkflow, selectedNodeTypes],
+  )
   const selectedFunctionType = selectedIsComfyWorkflow
     ? 'comfyui'
     : selectedIsRequest
@@ -3274,6 +3283,36 @@ export function FunctionManager({
                     </div>
                   )})}
                 </div>
+                {selectedFunction && selectedIsComfyWorkflow && unusedOutputNodes.length ? (
+                  <div className="output-candidates" role="group" aria-label="Workflow output nodes not used as outputs">
+                    <div className="output-candidates-heading">
+                      <span>Not used as outputs</span>
+                      <small>
+                        {selectedNodeTypes
+                          ? 'Output nodes of this workflow, typed by the ComfyUI server.'
+                          : 'Output nodes of this workflow; types guessed from node names (server node list unavailable).'}
+                      </small>
+                    </div>
+                    {unusedOutputNodes.map((candidate) => (
+                      <div className="output-candidate-row" key={candidate.bind.nodeId}>
+                        <span className="output-candidate-name">{candidate.bind.nodeTitle}</span>
+                        <small>
+                          #{candidate.bind.nodeId} · {candidate.type}
+                        </small>
+                        <button
+                          type="button"
+                          aria-label={`Use ${candidate.bind.nodeTitle} as output`}
+                          onClick={() =>
+                            onUpdateFunction(selectedFunction.id, { outputs: [...selectedFunction.outputs, candidate] })
+                          }
+                        >
+                          <Plus size={14} />
+                          Use as output
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </div>
                 </>
               ) : null}
