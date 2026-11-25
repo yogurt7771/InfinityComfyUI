@@ -291,7 +291,7 @@ describe('describeResultSlot: same-type, mixed-type and batch scenarios', () => 
       [2, 3],
       [3, 3],
     ])
-    expect(described.map(resultSlotText)).toEqual(['Final 1/3', 'Final 2/3', 'Final 3/3'])
+    expect(described.map(resultSlotText)).toEqual(['Final · 1/3', 'Final · 2/3', 'Final · 3/3'])
   })
 
   it('a single-slot single-result run needs no slot tag', () => {
@@ -327,8 +327,8 @@ describe('resultSlotText', () => {
   })
 
   it('adds index/count when the slot has several results', () => {
-    expect(resultSlotText(info({ index: 2, count: 3 }))).toBe('Final 2/3')
-    expect(resultSlotText(info({ index: 1, count: 2, slotCount: 3 }))).toBe('Final 1/2')
+    expect(resultSlotText(info({ index: 2, count: 3 }))).toBe('Final · 2/3')
+    expect(resultSlotText(info({ index: 1, count: 2, slotCount: 3 }))).toBe('Final · 1/2')
   })
 
   it('adds (removed) when the slot was removed, even for a single-slot single result', () => {
@@ -337,7 +337,7 @@ describe('resultSlotText', () => {
   })
 
   it('puts index/count before (removed)', () => {
-    expect(resultSlotText(info({ removed: true, index: 2, count: 3, slotCount: 2 }))).toBe('Final 2/3 (removed)')
+    expect(resultSlotText(info({ removed: true, index: 2, count: 3, slotCount: 2 }))).toBe('Final · 2/3 (removed)')
   })
 })
 

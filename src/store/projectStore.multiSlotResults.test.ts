@@ -392,9 +392,9 @@ describe('multi-slot ComfyUI runs: batch in one slot vs several slots', () => {
     expect(maskNode.position.x).toBeGreaterThan(nodes[0]!.position.x)
 
     expect(batch.map((resource) => resultSlotText(describeResultSlot(resource, view.task, fn)))).toEqual([
-      'Final 1/3',
-      'Final 2/3',
-      'Final 3/3',
+      'Final · 1/3',
+      'Final · 2/3',
+      'Final · 3/3',
     ])
   })
 
@@ -408,9 +408,9 @@ describe('multi-slot ComfyUI runs: batch in one slot vs several slots', () => {
     const batch = view.task.outputRefs.image!.map((ref) => view.project.resources[ref.resourceId]!)
     expect(batch.map((resource) => mediaFilename(resource.value))).toEqual(['a.png', 'b.png', 'c.png'])
     expect(batch.map((resource) => resultSlotText(describeResultSlot(resource, view.task, fn)))).toEqual([
-      'Final 1/3',
-      'Final 2/3',
-      'Final 3/3',
+      'Final · 1/3',
+      'Final · 2/3',
+      'Final · 3/3',
     ])
   })
 

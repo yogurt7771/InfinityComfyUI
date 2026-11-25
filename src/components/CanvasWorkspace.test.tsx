@@ -1436,8 +1436,8 @@ describe('CanvasWorkspace', () => {
     const slotTag = (resourceId: string) =>
       container.querySelector(`.react-flow__node[data-id="node_${resourceId}"] .resource-output-slot`)?.textContent
     // Same type, told apart by slot; one slot's batch numbered within that slot.
-    await waitFor(() => expect(slotTag('res_final')).toBe('Final 1/2'))
-    expect(slotTag('res_final_b')).toBe('Final 2/2')
+    await waitFor(() => expect(slotTag('res_final')).toBe('Final · 1/2'))
+    expect(slotTag('res_final_b')).toBe('Final · 2/2')
     expect(slotTag('res_mask')).toBe('Mask')
 
     // Renaming the slot relabels its old results; disabling it keeps them, marked as removed.
@@ -1446,7 +1446,7 @@ describe('CanvasWorkspace', () => {
         outputs: [{ ...slotFunction.outputs[0]!, label: 'Beauty' }],
       })
     })
-    await waitFor(() => expect(slotTag('res_final')).toBe('Beauty 1/2'))
+    await waitFor(() => expect(slotTag('res_final')).toBe('Beauty · 1/2'))
     expect(slotTag('res_mask')).toBe('Mask (removed)')
 
     act(() => {

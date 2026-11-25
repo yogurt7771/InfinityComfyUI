@@ -44,7 +44,8 @@ export function describeResultSlot(
 /** The tag a result node shows: only when the run had several slots, the slot returned a batch, or it was removed. */
 export function resultSlotText(info: ResultSlotInfo | undefined): string | undefined {
   if (!info || (info.slotCount === 1 && info.count === 1 && !info.removed)) return undefined
-  return `${info.label}${info.count > 1 ? ` ${info.index}/${info.count}` : ''}${info.removed ? ' (removed)' : ''}`
+  // ' · 2/3' marks a position in one slot's batch, so it can't be misread as a slot label such as 'Image 2'.
+  return `${info.label}${info.count > 1 ? ` · ${info.index}/${info.count}` : ''}${info.removed ? ' (removed)' : ''}`
 }
 
 const imageUrl = (resource: Resource | undefined) => {
