@@ -590,6 +590,41 @@ describe('CanvasWorkspace', () => {
     return screen.findByRole('dialog', { name: 'Run ComfyUI Workflow' })
   }
 
+  it('shows the workflow value for a manual input nobody has filled in (what the run will use)', () => {
+    const functionDef: GenerationFunction = {
+      id: 'fn_seeded',
+      name: 'Seeded',
+      workflow: { format: 'comfyui_api_json', rawJson: { '3': { class_type: 'KSampler', inputs: { seed: 42 } } } },
+      inputs: [
+        {
+          key: 'seed',
+          label: 'Seed',
+          type: 'number',
+          required: false,
+          bind: { nodeId: '3', nodeTitle: 'KSampler', path: 'inputs.seed' },
+          upload: { strategy: 'none' },
+        },
+      ],
+      outputs: [],
+      createdAt: '2026-06-25T00:00:00.000Z',
+      updatedAt: '2026-06-25T00:00:00.000Z',
+    }
+    render(
+      <FunctionRunDialog
+        functionDef={functionDef}
+        values={{}}
+        runCount={1}
+        resourcesById={{}}
+        onClose={vi.fn()}
+        onPickInput={vi.fn()}
+        onRun={vi.fn()}
+        onRunCountChange={vi.fn()}
+        onValuesChange={vi.fn()}
+      />,
+    )
+    expect(screen.getByLabelText('Manual input Seed')).toHaveValue(42)
+  })
+
   it('types a new workflow output from the server node types and renders its result as an image node', async () => {
     configureTemporaryComfyProject()
     mockComfyServer('available')

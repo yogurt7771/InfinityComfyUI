@@ -113,6 +113,7 @@ import {
   parseComfyApiWorkflowJson,
   workflowInputBindingExists,
   workflowInputCandidates,
+  workflowPrimitiveInputValue,
 } from '../domain/workflow'
 import { useProjectStore } from '../store/projectStore'
 import { useComfyNodeTypes } from './useComfyNodeTypes'
@@ -1667,7 +1668,10 @@ export function FunctionRunDialog({
               const resourceValue = isResourceRefValue(value) ? value : undefined
               const selectedResource = resourceValue ? resourcesById[resourceValue.resourceId] : undefined
               const matchingResources = Object.values(resourcesById).filter((resource) => resource.type === input.type)
-              const primitiveValue = isResourceRefValue(value) ? '' : value
+              // Nothing entered: the run keeps the workflow's own value (or the slot default), so show that one.
+              const primitiveValue = isResourceRefValue(value)
+                ? ''
+                : (value ?? workflowPrimitiveInputValue(functionDef, input) ?? input.defaultValue)
               const inputLabel = input.label || input.key
               const mediaInput = isMediaResourceType(input.type)
               const workflowSlotExists =
