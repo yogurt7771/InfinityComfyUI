@@ -357,6 +357,89 @@ describe('CanvasWorkspace', () => {
     )
   })
 
+  it('shows a collapsed group as one node with boundary ports and lets you edit inside it', async () => {
+    const member = (id: string, name: string, taskId?: string): Resource => ({
+      ...imageResource,
+      id,
+      name,
+      source: taskId
+        ? { kind: 'function_output', taskId, functionNodeId: 'node_hidden_fn', outputKey: 'image' }
+        : imageResource.source,
+    })
+    const now = '2026-06-25T00:00:00.000Z'
+    const project: ProjectState = {
+      ...originalProject,
+      project: { ...originalProject.project, id: 'project_group_collapse' },
+      canvas: {
+        nodes: [
+          { id: 'node_outside', type: 'resource', position: { x: 0, y: 0 }, data: { resourceId: 'res_outside', resourceType: 'image', title: 'Outside source' } },
+          { id: 'node_member_a', type: 'resource', position: { x: 500, y: 0 }, data: { resourceId: 'res_member_a', resourceType: 'image', title: 'Member A' } },
+          { id: 'node_member_b', type: 'resource', position: { x: 500, y: 400 }, data: { resourceId: 'res_member_b', resourceType: 'image', title: 'Member B' } },
+          {
+            id: 'node_group',
+            type: 'group',
+            position: { x: 450, y: -50 },
+            data: { title: 'Stage', childNodeIds: ['node_member_a', 'node_member_b'], collapsed: true, size: { width: 400, height: 800 } },
+          },
+        ],
+        edges: [],
+        viewport: { x: 0, y: 0, zoom: 1 },
+      },
+      resources: {
+        res_outside: member('res_outside', 'outside.png'),
+        res_member_a: member('res_member_a', 'member-a.png', 'task_a'),
+        res_member_b: member('res_member_b', 'member-b.png'),
+      },
+      tasks: {
+        task_a: {
+          id: 'task_a',
+          functionNodeId: 'node_hidden_fn',
+          functionId: 'fn_missing',
+          runIndex: 1,
+          runTotal: 1,
+          status: 'succeeded',
+          inputRefs: { image: { resourceId: 'res_outside', type: 'image' } },
+          inputSnapshot: {},
+          paramsSnapshot: {},
+          workflowTemplateSnapshot: {},
+          compiledWorkflowSnapshot: {},
+          seedPatchLog: [],
+          outputRefs: { image: [{ resourceId: 'res_member_a', type: 'image' }] },
+          createdAt: now,
+          updatedAt: now,
+          completedAt: now,
+        },
+      } as unknown as ProjectState['tasks'],
+    }
+    projectStore.setState({ project, selectedNodeId: undefined, selectedNodeIds: [] } as Partial<ReturnType<typeof projectStore.getState>>)
+
+    const { container } = render(<CanvasWorkspace />)
+    const group = await waitFor(() => {
+      const element = container.querySelector<HTMLElement>('.react-flow__node[data-id="node_group"]')
+      expect(element).not.toBeNull()
+      return element!
+    })
+    // Members are not mounted; the outside wire lands on an input port that names the member and input it feeds.
+    expect(container.querySelector('.react-flow__node[data-id="node_member_a"]')).toBeNull()
+    const inputs = group.querySelectorAll('.collapsed-group-port.is-input')
+    expect(inputs).toHaveLength(1)
+    expect(inputs[0]).toHaveTextContent('Outside source')
+    expect(inputs[0]).toHaveTextContent('Member A · image')
+    expect(inputs[0]?.querySelector('.react-flow__handle')?.getAttribute('data-handleid')).toBe('group-in:node_outside:resource:res_outside')
+    expect(group.querySelectorAll('.collapsed-group-result')).toHaveLength(1)
+
+    fireEvent.click(group.querySelector('button[aria-label="Enter Stage"]')!)
+    await screen.findByRole('navigation', { name: 'Group editing' })
+    await waitFor(() => expect(container.querySelector('.react-flow__node[data-id="node_member_a"]')).not.toBeNull())
+    expect(container.querySelector('.react-flow__node[data-id="node_member_b"]')).not.toBeNull()
+    expect(container.querySelector('.react-flow__node[data-id="node_outside"]')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to canvas' }))
+    await waitFor(() => expect(container.querySelector('.react-flow__node[data-id="node_member_a"]')).toBeNull())
+    expect(container.querySelector('.react-flow__node[data-id="node_group"] .collapsed-group-node')).not.toBeNull()
+    expect(projectStore.getState().project.canvas.nodes.find((node) => node.id === 'node_member_a')?.position).toEqual({ x: 500, y: 0 })
+  })
+
   it('opens the selected one-off ComfyUI endpoint in a same-origin proxied iframe', () => {
     configureTemporaryComfyProject()
     const openSpy = vi.spyOn(window, 'open').mockReturnValue({} as WindowProxy)

@@ -408,6 +408,8 @@ export type CanvasTemplate = {
   tasks?: Record<string, ExecutionTask>
   inputResourceIds: string[]
   outputResourceIds: string[]
+  /** Saved from one collapsed group: new instances start collapsed too. */
+  collapsed?: boolean
 }
 
 export type ComfyEndpointConfig = {

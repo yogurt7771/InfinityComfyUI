@@ -5,6 +5,7 @@ import {
   Box,
   ChevronDown,
   ChevronRight,
+  LogIn,
   Copy,
   Cpu,
   Download,
@@ -63,6 +64,7 @@ import { ResourcePreview } from './ResourcePreview'
 import { FullResourcePreviewModal, sameTypePreviewResources } from './ResourcePreviewModal'
 import { ModalFrame } from './ModalFrame'
 import { ConfirmationDialog } from './ConfirmationDialog'
+import type { GroupPortView } from '../domain/groupCollapse'
 
 type WorkbenchNodeData = {
   resourceId?: string
@@ -116,6 +118,12 @@ type WorkbenchNodeData = {
   onResizeNode?: (nodeId: string, size: { width: number; height: number }) => void
   collapsed?: boolean
   onSetNodesCollapsed?: (nodeIds: string[], collapsed: boolean) => void
+  onSetGroupCollapsed?: (groupNodeId: string, collapsed: boolean) => void
+  onEnterGroup?: (groupNodeId: string) => void
+  groupInputs?: GroupPortView[]
+  groupOutputs?: GroupPortView[]
+  groupResultIds?: string[]
+  groupMemberResourceIds?: string[]
   onUpdateOpenAiConfig: (nodeId: string, patch: Partial<OpenAILlmConfig>) => void
   onUpdateGeminiConfig: (nodeId: string, patch: Partial<GeminiLlmConfig>) => void
   onUpdateOpenAiImageConfig: (nodeId: string, patch: Partial<OpenAIImageConfig>) => void
@@ -2777,10 +2785,180 @@ export const ResultGroupNodeView = memo(({ id, data, selected }: NodeProps) => {
   )
 })
 
+function CollapsedGroupPortRow({ port, resource }: { port: GroupPortView; resource?: Resource }) {
+  const input = port.direction === 'input'
+  return (
+    <div className={`collapsed-group-port is-${port.direction}`} title={`${port.title} ${port.detail}`.trim()}>
+      <Handle
+        id={port.handleId}
+        type={input ? 'target' : 'source'}
+        position={input ? Position.Left : Position.Right}
+        isConnectable={!input}
+        onPointerDown={input ? undefined : commitActiveTextControl}
+      />
+      <span className="collapsed-group-port-thumb" aria-hidden="true">
+        {resource && isMediaResource(resource) ? (
+          <ResourcePreview resource={resource} />
+        ) : resource?.type === 'number' ? (
+          <Hash size={14} />
+        ) : (
+          <FileText size={14} />
+        )}
+      </span>
+      <span className="collapsed-group-port-text">
+        <strong>{port.title}</strong>
+        {port.detail ? <small>{port.detail}</small> : null}
+      </span>
+    </div>
+  )
+}
+
+function CollapsedGroupView({
+  id,
+  nodeData,
+  title,
+  childCount,
+  toggle,
+}: {
+  id: string
+  nodeData: WorkbenchNodeData
+  title: string
+  childCount: number
+  toggle: ReactNode
+}) {
+  const [previewResource, setPreviewResource] = useState<Resource | undefined>()
+  const inputs = nodeData.groupInputs ?? []
+  const outputs = nodeData.groupOutputs ?? []
+  const results = (nodeData.groupResultIds ?? [])
+    .map((resourceId) => nodeData.resourcesById[resourceId])
+    .filter((resource): resource is Resource => Boolean(resource))
+  const enter = () => nodeData.onEnterGroup?.(id)
+
+  return (
+    <div
+      className={['canvas-node', 'group-node', 'collapsed-group-node', newNodeHighlightClass(nodeData)].filter(Boolean).join(' ')}
+      onDoubleClick={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        enter()
+      }}
+    >
+      <div className="node-title">
+        {toggle}
+        <Layers size={16} />
+        <span className="node-title-text">{title}</span>
+        <small>{childCount} nodes</small>
+        {nodeReferenceBadge(nodeData)}
+        {nodeData.onEnterGroup ? (
+          <button
+            type="button"
+            className="collapsed-group-enter nodrag nopan"
+            aria-label={`Enter ${title}`}
+            title="Edit the nodes inside this group"
+            onClick={(event) => {
+              event.stopPropagation()
+              enter()
+            }}
+          >
+            <LogIn size={14} />
+            Enter
+          </button>
+        ) : null}
+      </div>
+      <div className="collapsed-group-ports">
+        <div className="collapsed-group-port-list" aria-label={`${title} inputs`}>
+          <span className="collapsed-group-port-heading">Inputs</span>
+          {inputs.length ? (
+            inputs.map((port) => (
+              <CollapsedGroupPortRow
+                key={port.handleId}
+                port={port}
+                resource={port.resourceId ? nodeData.resourcesById[port.resourceId] : undefined}
+              />
+            ))
+          ) : (
+            <span className="collapsed-group-empty">None from outside</span>
+          )}
+        </div>
+        <div className="collapsed-group-port-list is-outputs" aria-label={`${title} outputs`}>
+          <span className="collapsed-group-port-heading">Outputs</span>
+          {outputs.length ? (
+            outputs.map((port) => (
+              <CollapsedGroupPortRow
+                key={port.handleId}
+                port={port}
+                resource={port.resourceId ? nodeData.resourcesById[port.resourceId] : undefined}
+              />
+            ))
+          ) : (
+            <span className="collapsed-group-empty">None used outside</span>
+          )}
+        </div>
+      </div>
+      {results.length ? (
+        <div className="collapsed-group-results" aria-label={`${title} results`}>
+          <span className="collapsed-group-port-heading">Results ({results.length})</span>
+          <div className="collapsed-group-result-grid nowheel">
+            {results.map((resource) => (
+              <button
+                key={resource.id}
+                type="button"
+                className="collapsed-group-result nodrag nopan"
+                aria-label={`Preview ${resource.name ?? resource.id}`}
+                title={resource.name ?? resource.id}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setPreviewResource(resource)
+                }}
+              >
+                {isMediaResource(resource) ? (
+                  <ResourcePreview resource={resource} />
+                ) : (
+                  <span className="collapsed-group-result-text">{resource.name ?? resource.type}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      <FullResourcePreviewModal
+        resource={previewResource}
+        resources={previewResource ? results : []}
+        onClose={() => setPreviewResource(undefined)}
+      />
+    </div>
+  )
+}
+
 export const GroupNodeView = memo(({ id, data, selected }: NodeProps) => {
   const nodeData = data as WorkbenchNodeData
   const childCount = Array.isArray(nodeData.childNodeIds) ? nodeData.childNodeIds.length : 0
   const title = typeof nodeData.title === 'string' ? nodeData.title : 'Group'
+  const collapsed = nodeData.collapsed === true
+  const updateNodeInternals = useUpdateNodeInternals()
+  const portSignature = collapsed
+    ? [...(nodeData.groupInputs ?? []), ...(nodeData.groupOutputs ?? [])].map((port) => port.handleId).join('|')
+    : ''
+  const renderedPortsRef = useRef(`${collapsed}:${portSignature}`)
+  useEffect(() => {
+    // Ports appear, vanish or reorder as the group collapses or its wiring changes; edges must follow the handles.
+    // React Flow measures a freshly mounted node itself, so only changes need a re-measure.
+    const rendered = `${collapsed}:${portSignature}`
+    if (renderedPortsRef.current === rendered) return
+    renderedPortsRef.current = rendered
+    updateNodeInternals(id)
+  }, [collapsed, id, portSignature, updateNodeInternals])
+  const toggle = (
+    <NodeCollapseToggle
+      collapsed={collapsed}
+      title={title}
+      onToggle={nodeData.onSetGroupCollapsed ? () => nodeData.onSetGroupCollapsed?.(id, !collapsed) : undefined}
+    />
+  )
+
+  if (collapsed) {
+    return <CollapsedGroupView id={id} nodeData={nodeData} title={title} childCount={childCount} toggle={toggle} />
+  }
 
   return (
     <div
@@ -2793,6 +2971,7 @@ export const GroupNodeView = memo(({ id, data, selected }: NodeProps) => {
     >
       <SelectedResizeControl id={id} minHeight={90} minWidth={180} nodeData={nodeData} selected={Boolean(selected)} />
       <div className="node-title">
+        {toggle}
         <Layers size={16} />
         <span className="node-title-text">{title}</span>
         {childCount > 0 ? <small>{childCount} nodes</small> : null}

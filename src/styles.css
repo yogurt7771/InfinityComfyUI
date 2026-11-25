@@ -8919,3 +8919,253 @@ body[data-theme='light'] .function-run-dialog .local-action-footer button:not(.p
   color: var(--ink);
   background: var(--teal-soft);
 }
+
+/* Collapsed group: one subgraph-style node — inputs down the left edge, outputs down the right, results below. */
+:is(body[data-theme], body) .workspace-canvas .react-flow__node-group:has(> .collapsed-group-node) {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+:is(body[data-theme], body) .workspace-canvas .react-flow__node-group .collapsed-group-node {
+  display: grid;
+  gap: 12px;
+  height: auto;
+  min-height: 0;
+  padding: 12px 14px 14px;
+  border: 1px solid var(--line-strong);
+  border-top: 3px solid var(--teal);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: var(--shadow-soft);
+}
+
+:is(body[data-theme], body) .workspace-canvas .react-flow__node-group .collapsed-group-node > .node-title {
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+:is(body[data-theme], body) .collapsed-group-node > .node-title small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+:is(body[data-theme], body) .collapsed-group-node .collapsed-group-enter {
+  margin-left: auto;
+  min-height: 26px;
+  padding: 0 10px;
+  border-color: var(--line-strong);
+  color: var(--teal);
+  background: var(--teal-soft);
+  box-shadow: none;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+:is(body[data-theme], body) .collapsed-group-ports {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  /* Rows reach the node's outer edge so their handles sit on the border like any other node's. */
+  margin: 0 -14px;
+}
+
+:is(body[data-theme], body) .collapsed-group-port-list {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+}
+
+:is(body[data-theme], body) .collapsed-group-port-heading {
+  padding: 0 14px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+:is(body[data-theme], body) .collapsed-group-port-list.is-outputs .collapsed-group-port-heading {
+  text-align: right;
+}
+
+:is(body[data-theme], body) .collapsed-group-empty {
+  padding: 0 14px;
+  color: var(--muted-light);
+  font-size: 12px;
+}
+
+:is(body[data-theme], body) .collapsed-group-port-list.is-outputs .collapsed-group-empty {
+  text-align: right;
+}
+
+:is(body[data-theme], body) .collapsed-group-port {
+  position: relative;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 14px;
+}
+
+:is(body[data-theme], body) .collapsed-group-port.is-output {
+  grid-template-columns: minmax(0, 1fr) 36px;
+  text-align: right;
+}
+
+:is(body[data-theme], body) .collapsed-group-port.is-output .collapsed-group-port-thumb {
+  order: 2;
+}
+
+:is(body[data-theme], body) .collapsed-group-port-thumb {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  background: var(--media-preview-surface);
+}
+
+:is(body[data-theme], body) .collapsed-group-port-thumb :is(.resource-preview-image, .resource-preview-video) {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+:is(body[data-theme], body) .collapsed-group-port-thumb .resource-preview-audio {
+  display: none;
+}
+
+:is(body[data-theme], body) .collapsed-group-port-text {
+  display: grid;
+  min-width: 0;
+}
+
+:is(body[data-theme], body) .collapsed-group-port-text strong,
+:is(body[data-theme], body) .collapsed-group-port-text small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:is(body[data-theme], body) .collapsed-group-port-text strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+:is(body[data-theme], body) .collapsed-group-port-text small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+:is(body[data-theme], body) .workspace-canvas .collapsed-group-port .react-flow__handle {
+  top: 50%;
+}
+
+:is(body[data-theme], body) .collapsed-group-results {
+  display: grid;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+:is(body[data-theme], body) .collapsed-group-results .collapsed-group-port-heading {
+  padding: 0;
+}
+
+:is(body[data-theme], body) .collapsed-group-result-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 6px;
+  /* Two rows stay in view; more results scroll inside the node instead of being hidden. */
+  max-height: 160px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+:is(body[data-theme], body) .collapsed-group-result {
+  aspect-ratio: 1;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--media-preview-surface);
+  box-shadow: none;
+}
+
+:is(body[data-theme], body) .collapsed-group-result :is(.resource-preview-image, .resource-preview-video) {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+:is(body[data-theme], body) .collapsed-group-result-text {
+  padding: 4px;
+  color: var(--ink-soft);
+  font-size: 11px;
+}
+
+/* Editing inside a group: where you are and how to get back. */
+:is(body[data-theme], body) .subgraph-breadcrumb {
+  position: absolute;
+  top: 12px;
+  left: 16px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(720px, calc(100% - 32px));
+  padding: 6px 12px 6px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  color: var(--ink-soft);
+  background: var(--panel);
+  box-shadow: var(--shadow-soft);
+  font-size: 13px;
+}
+
+:is(body[data-theme], body) .subgraph-breadcrumb button {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+:is(body[data-theme], body) .subgraph-breadcrumb strong {
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+:is(body[data-theme], body) .subgraph-breadcrumb small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Port details name every member and input they reach; wrap to two lines rather than cut them off. */
+:is(body[data-theme], body) .collapsed-group-port-text small {
+  display: -webkit-box;
+  overflow: hidden;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.35;
+}

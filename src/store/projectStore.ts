@@ -376,6 +376,10 @@ export type ProjectStoreState = {
   updateNodeSize: (nodeId: string, size: { width: number; height: number }) => void
   /** Collapses resource nodes to their title bar (or expands them); recorded in undo history. */
   setNodesCollapsed: (nodeIds: string[], collapsed: boolean) => void
+  /** Collapses a group into one subgraph-style node (view state only; members keep their positions). */
+  setGroupCollapsed: (groupNodeId: string, collapsed: boolean) => void
+  /** Adds nodes to a group (used while editing inside a group) and grows its frame to cover them. */
+  addNodesToGroup: (groupNodeId: string, nodeIds: string[], nodeSizesById?: Record<string, CanvasNodeMeasuredSize | undefined>) => void
   renameNode: (nodeId: string, title: string) => void
   deleteSelectedNode: () => void
   deleteNode: (nodeId: string) => void
@@ -8877,6 +8881,84 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       })
     },
 
+    setGroupCollapsed: (groupNodeId, collapsed) => {
+      const now = runtime.now()
+      set((state) => {
+        const group = state.project.canvas.nodes.find((node) => node.id === groupNodeId && node.type === 'group')
+        if (!group || (group.data.collapsed === true) === collapsed) return state
+        const nextProject = {
+          ...ensureProjectHistory(state.project),
+          project: { ...state.project.project, updatedAt: now },
+          canvas: {
+            ...state.project.canvas,
+            nodes: state.project.canvas.nodes.map((node) =>
+              node.id === groupNodeId ? { ...node, data: { ...node.data, collapsed } } : node,
+            ),
+          },
+        }
+        const label = collapsed ? 'Collapse group' : 'Expand group'
+        return {
+          // Hidden members cannot stay selected; the collapsed group stands in for them.
+          ...(collapsed ? selectedState([groupNodeId]) : {}),
+          project: projectWithRecordedHistory(state.project, nextProject, now, {
+            label,
+            transactionType: 'group',
+            nodeIds: [groupNodeId],
+            groupIds: [groupNodeId],
+            preview: { title: label, subtitle: String(group.data.title ?? 'Group'), nodeIds: [groupNodeId], groupIds: [groupNodeId] },
+          }),
+        }
+      })
+    },
+
+    addNodesToGroup: (groupNodeId, nodeIds, nodeSizesById) => {
+      const now = runtime.now()
+      set((state) => {
+        const group = state.project.canvas.nodes.find((node) => node.id === groupNodeId && node.type === 'group')
+        if (!group) return state
+        const existing = groupChildNodeIds(group)
+        const added = uniqueIds(nodeIds).filter(
+          (nodeId) =>
+            !existing.includes(nodeId) &&
+            state.project.canvas.nodes.some((node) => node.id === nodeId && node.type !== 'group'),
+        )
+        if (added.length === 0) return state
+        const childNodeIds = [...existing, ...added]
+        const children = state.project.canvas.nodes.filter((node) => childNodeIds.includes(node.id))
+        const bounds = groupBoundsForNodes(children, state.project.functions, nodeSizesById)
+        const currentSize = group.data.size as { width?: unknown; height?: unknown } | undefined
+        const left = Math.min(group.position.x, bounds.position.x)
+        const top = Math.min(group.position.y, bounds.position.y)
+        const right = Math.max(group.position.x + (Number(currentSize?.width) || 0), bounds.position.x + bounds.size.width)
+        const bottom = Math.max(group.position.y + (Number(currentSize?.height) || 0), bounds.position.y + bounds.size.height)
+        const nextProject = {
+          ...ensureProjectHistory(state.project),
+          project: { ...state.project.project, updatedAt: now },
+          canvas: {
+            ...state.project.canvas,
+            nodes: state.project.canvas.nodes.map((node) =>
+              node.id === groupNodeId
+                ? {
+                    ...node,
+                    position: { x: left, y: top },
+                    data: { ...node.data, childNodeIds, size: { width: right - left, height: bottom - top } },
+                  }
+                : node,
+            ),
+          },
+        }
+        return {
+          project: projectWithRecordedHistory(state.project, nextProject, now, {
+            label: 'Add to group',
+            transactionType: 'group',
+            nodeIds: [groupNodeId, ...added],
+            groupIds: [groupNodeId],
+            preview: { title: 'Add to group', subtitle: `${added.length} nodes`, nodeIds: added, groupIds: [groupNodeId] },
+          }),
+        }
+      })
+    },
+
     renameNode: (nodeId, title) => {
       const trimmedTitle = title.trim()
       if (!trimmedTitle) return
@@ -9101,6 +9183,10 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         tasks,
         inputResourceIds: resourceIds,
         outputResourceIds: resourceIds,
+        ...(selectedIds.length === 1 &&
+        state.project.canvas.nodes.some((node) => node.id === selectedIds[0] && node.type === 'group' && node.data.collapsed === true)
+          ? { collapsed: true }
+          : {}),
       }
 
       set((current) => {
@@ -9372,7 +9458,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           data: {
             title: template.name,
             childNodeIds,
-            collapsed: false,
+            collapsed: template.collapsed === true,
             color: '#14b8a6',
             size: bounds.size,
             createdAt: now,

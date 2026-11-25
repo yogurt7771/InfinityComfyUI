@@ -52,7 +52,9 @@ import {
   Grid2X2,
   Image,
   Info,
+  ArrowLeft,
   Layers,
+  LogIn,
   Network,
   MousePointer2,
   Pencil,
@@ -77,6 +79,7 @@ import { ResourcePreview } from './ResourcePreview'
 import { FullResourcePreviewModal } from './ResourcePreviewModal'
 import { hasActiveModal, ModalFrame } from './ModalFrame'
 import { buildCanvasFlowEdges } from '../domain/canvasEdges'
+import { collapseGroupEdges, describeGroupPorts, isCollapsedGroupNode, type GroupPort } from '../domain/groupCollapse'
 import { targetInputInitialResourceValue } from '../domain/inputInitialValue'
 import { buildNodeReferenceMap } from '../domain/nodeReferences'
 import { readFileAsMediaResource } from '../domain/resourceFiles'
@@ -261,10 +264,18 @@ const builtInFunctionMenuLabels: Record<string, string> = {
 const temporaryRunnerId = (functionId: string) =>
   `temp_${functionId}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 
+const EMPTY_GROUP_PORTS: { inputs: GroupPort[]; outputs: GroupPort[] } = { inputs: [], outputs: [] }
+
+const groupMemberIds = (node: CanvasNode) =>
+  Array.isArray(node.data.childNodeIds)
+    ? node.data.childNodeIds.filter((id): id is string => typeof id === 'string')
+    : []
+
 export const visibleCanvasNodes = (nodes: CanvasNode[]) =>
   nodes.filter((node) => node.type === 'resource' || node.type === 'group')
 
 const GROUP_NODE_Z_INDEX_BASE = 0
+const COLLAPSED_GROUP_WIDTH = 480
 const CANVAS_EDGE_Z_INDEX_BASE = 1000000
 const ASSET_NODE_Z_INDEX_BASE = 2000000
 
@@ -294,8 +305,8 @@ export const buildCanvasNodeZIndexMap = (
 ) => {
   const zIndexById = new Map<string, number>()
   const layers = [
-    { base: GROUP_NODE_Z_INDEX_BASE, nodes: nodes.filter((node) => node.type === 'group') },
-    { base: ASSET_NODE_Z_INDEX_BASE, nodes: nodes.filter((node) => node.type !== 'group') },
+    { base: GROUP_NODE_Z_INDEX_BASE, nodes: nodes.filter((node) => node.type === 'group' && !isCollapsedGroupNode(node)) },
+    { base: ASSET_NODE_Z_INDEX_BASE, nodes: nodes.filter((node) => node.type !== 'group' || isCollapsedGroupNode(node)) },
   ]
 
   for (const layer of layers) {
@@ -861,6 +872,7 @@ export const flowNodeStyle = (node: CanvasNode, context: ResourceNodeLayoutConte
         : Math.max(size?.height ?? minSize.height, minSize.height),
     }
   }
+  if (isCollapsedGroupNode(node)) return { width: COLLAPSED_GROUP_WIDTH }
   return {
     width: size?.width ?? defaultSize.width,
     ...(size?.height ?? defaultSize.height
@@ -2137,6 +2149,8 @@ function CanvasSurface() {
   const updateNodePositions = useProjectStore((state) => state.updateNodePositions)
   const updateNodeSize = useProjectStore((state) => state.updateNodeSize)
   const setNodesCollapsed = useProjectStore((state) => state.setNodesCollapsed)
+  const setGroupCollapsed = useProjectStore((state) => state.setGroupCollapsed)
+  const addNodesToGroup = useProjectStore((state) => state.addNodesToGroup)
   const renameNode = useProjectStore((state) => state.renameNode)
   const deleteNode = useProjectStore((state) => state.deleteNode)
   const deleteNodes = useProjectStore((state) => state.deleteNodes)
@@ -2149,7 +2163,7 @@ function CanvasSurface() {
   const instantiateTemplate = useProjectStore((state) => state.instantiateTemplate)
   const duplicateSelectedNode = useProjectStore((state) => state.duplicateSelectedNode)
   const duplicateNodes = useProjectStore((state) => state.duplicateNodes)
-  const { screenToFlowPosition, setCenter, getNode, getZoom } = useReactFlow()
+  const { screenToFlowPosition, setCenter, getNode, getZoom, getViewport, setViewport, fitView } = useReactFlow()
   const [addMenu, setAddMenu] = useState<AddNodeMenuState | null>(null)
   const [quickToolbar, setQuickToolbar] = useState<QuickToolbarState>()
   const [inspectorNodeId, setInspectorNodeId] = useState<string>()
@@ -2157,6 +2171,7 @@ function CanvasSurface() {
   const [functionNodeMenu, setFunctionNodeMenu] = useState<FunctionNodeMenuState>()
   const [groupNodeMenu, setGroupNodeMenu] = useState<GroupNodeMenuState>()
   const [functionEditor, setFunctionEditor] = useState<FunctionEditorState>()
+  const subgraphReturnViewportRef = useRef<{ x: number; y: number; zoom: number } | undefined>(undefined)
   const [savedWorkflowEditor, setSavedWorkflowEditor] = useState<{ functionId: string; endpointId?: string }>()
   const [functionRunDialog, setFunctionRunDialog] = useState<FunctionRunDialogState>()
   const [temporaryComfyWorkflow, setTemporaryComfyWorkflow] = useState<TemporaryComfyWorkflowState>()
@@ -2268,8 +2283,41 @@ function CanvasSurface() {
     () => new Set(inputPickableRefs.map((ref) => ref.resourceId)),
     [inputPickableRefs],
   )
-  const visibleNodes = useMemo(() => visibleCanvasNodes(project.canvas.nodes), [project.canvas.nodes])
-  const visibleEdges = useMemo(() => visibleFlowEdges(buildCanvasFlowEdges(project), visibleNodes), [project, visibleNodes])
+  const [subgraphGroupId, setSubgraphGroupId] = useState<string>()
+  const subgraphGroup = useMemo(
+    () =>
+      subgraphGroupId
+        ? project.canvas.nodes.find((node) => node.id === subgraphGroupId && node.type === 'group')
+        : undefined,
+    [project.canvas.nodes, subgraphGroupId],
+  )
+  const subgraphMemberKey = useMemo(() => (subgraphGroup ? groupMemberIds(subgraphGroup).join('|') : ''), [subgraphGroup])
+  const allFlowEdges = useMemo(() => buildCanvasFlowEdges(project), [project])
+  const collapsedGroupView = useMemo(
+    () => (subgraphMemberKey ? undefined : collapseGroupEdges(allFlowEdges, project.canvas.nodes)),
+    [allFlowEdges, project.canvas.nodes, subgraphMemberKey],
+  )
+  const visibleNodes = useMemo(() => {
+    const nodes = visibleCanvasNodes(project.canvas.nodes)
+    if (subgraphMemberKey) {
+      const members = new Set(subgraphMemberKey.split('|'))
+      return nodes.filter((node) => members.has(node.id) && node.type !== 'group')
+    }
+    const hiddenBy = collapsedGroupView?.hiddenBy
+    return hiddenBy?.size ? nodes.filter((node) => !hiddenBy.has(node.id)) : nodes
+  }, [collapsedGroupView, project.canvas.nodes, subgraphMemberKey])
+  const visibleEdges = useMemo(
+    () => visibleFlowEdges(collapsedGroupView?.edges ?? allFlowEdges, visibleNodes),
+    [allFlowEdges, collapsedGroupView, visibleNodes],
+  )
+  // Boundary ports of the group being edited, for the breadcrumb (what crosses its border).
+  const subgraphPorts = useMemo(() => {
+    if (!subgraphGroupId || !subgraphMemberKey) return undefined
+    const nodes = project.canvas.nodes.map((node) =>
+      node.id === subgraphGroupId ? { ...node, data: { ...node.data, collapsed: true } } : node,
+    )
+    return collapseGroupEdges(allFlowEdges, nodes).portsByGroupId.get(subgraphGroupId)
+  }, [allFlowEdges, project.canvas.nodes, subgraphGroupId, subgraphMemberKey])
   const activeSelectedNodeIdSet = useMemo(() => new Set(activeSelectedNodeIds), [activeSelectedNodeIds])
   const selectionOrderAttributesById = useMemo(
     () =>
@@ -2425,6 +2473,58 @@ function CanvasSurface() {
     return () => window.removeEventListener('infinity-focus-node', focusNode)
   }, [project.canvas.nodes, setCenter])
 
+  const nodeDisplayTitle = useCallback(
+    (nodeId: string) => {
+      const node = project.canvas.nodes.find((item) => item.id === nodeId)
+      if (!node) return nodeId
+      if (typeof node.data.title === 'string' && node.data.title) return node.data.title
+      const resourceId = typeof node.data.resourceId === 'string' ? node.data.resourceId : undefined
+      return (resourceId && project.resources[resourceId]?.name) || node.type
+    },
+    [project.canvas.nodes, project.resources],
+  )
+  const collapsedGroupNodeData = useCallback(
+    (node: CanvasNode) => {
+      const ports = collapsedGroupView?.portsByGroupId.get(node.id) ?? EMPTY_GROUP_PORTS
+      const memberResourceIds = groupMemberIds(node).flatMap((memberId) => {
+        const member = project.canvas.nodes.find((item) => item.id === memberId)
+        const resourceId = member?.type === 'resource' && typeof member.data.resourceId === 'string' ? member.data.resourceId : undefined
+        return resourceId && project.resources[resourceId] ? [resourceId] : []
+      })
+      return {
+        groupInputs: describeGroupPorts(ports.inputs, nodeDisplayTitle),
+        groupOutputs: describeGroupPorts(ports.outputs, nodeDisplayTitle),
+        // Everything the group produced stays visible on the collapsed node.
+        groupResultIds: memberResourceIds.filter((resourceId) => project.resources[resourceId]?.source.kind === 'function_output'),
+        groupMemberResourceIds: memberResourceIds,
+      }
+    },
+    [collapsedGroupView, nodeDisplayTitle, project.canvas.nodes, project.resources],
+  )
+
+  const enterSubgraph = useStableCallback((groupNodeId: string) => {
+    subgraphReturnViewportRef.current = getViewport()
+    selectNodes([])
+    setSubgraphGroupId(groupNodeId)
+  })
+  const exitSubgraph = useStableCallback(() => {
+    const groupNodeId = subgraphGroupId
+    setSubgraphGroupId(undefined)
+    if (groupNodeId) selectNodes([groupNodeId])
+    const viewport = subgraphReturnViewportRef.current
+    if (viewport) window.setTimeout(() => void setViewport(viewport, { duration: 200 }), 0)
+  })
+  useEffect(() => {
+    if (!subgraphGroupId) return undefined
+    const timer = window.setTimeout(() => void fitView({ padding: 0.2, duration: 250 }), 60)
+    return () => window.clearTimeout(timer)
+  }, [fitView, subgraphGroupId])
+  // Leaving a group that was deleted or ungrouped while open.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the group disappeared from the project
+    if (subgraphGroupId && !subgraphGroup) setSubgraphGroupId(undefined)
+  }, [subgraphGroup, subgraphGroupId])
+
   const flowNodeRenderIndex = useMemo(() => buildFlowNodeRenderIndex(project.resources), [project.resources])
   const flowNodes = useMemo<Node[]>(() => {
     return visibleNodes.map((node) => ({
@@ -2478,6 +2578,13 @@ function CanvasSurface() {
           onOpenFunctionRunForResource: openFunctionRunForResource,
           onResizeNode: updateNodeSize,
           onSetNodesCollapsed: setNodesCollapsed,
+          ...(node.type === 'group'
+            ? {
+                onSetGroupCollapsed: setGroupCollapsed,
+                onEnterGroup: enterSubgraph,
+                ...(isCollapsedGroupNode(node) ? collapsedGroupNodeData(node) : {}),
+              }
+            : {}),
         },
       }))
   }, [
@@ -2511,6 +2618,9 @@ function CanvasSurface() {
       updateFunctionNodeRequestOutputs,
       updateNodeSize,
       setNodesCollapsed,
+      setGroupCollapsed,
+      enterSubgraph,
+      collapsedGroupNodeData,
       updateBooleanResourceValue,
       updateNumberResourceValue,
       updateTextResourceDisplayMode,
@@ -2654,6 +2764,25 @@ function CanvasSurface() {
     },
     [getNode, getZoom],
   )
+
+  // Nodes created while editing inside a group (added, pasted, run results) join that group.
+  const knownNodeIdsRef = useRef<Set<string> | undefined>(undefined)
+  useEffect(() => {
+    const previous = knownNodeIdsRef.current
+    knownNodeIdsRef.current = new Set(project.canvas.nodes.map((node) => node.id))
+    if (!subgraphGroupId || !previous) return undefined
+    const added = project.canvas.nodes
+      .filter((node) => !previous.has(node.id) && node.type === 'resource')
+      .map((node) => node.id)
+    if (added.length === 0) return undefined
+    const groupNodeId = subgraphGroupId
+    // Let React Flow measure the new nodes first, so the group frame grows to their real size.
+    const timer = window.setTimeout(() => {
+      const memberIds = [...groupMemberIds(subgraphGroup ?? { id: '', type: 'group', position: { x: 0, y: 0 }, data: {} }), ...added]
+      addNodesToGroup(groupNodeId, added, measuredSelectedNodeSizes(memberIds))
+    }, 150)
+    return () => window.clearTimeout(timer)
+  }, [addNodesToGroup, measuredSelectedNodeSizes, project.canvas.nodes, subgraphGroup, subgraphGroupId])
 
   const syncFlowNodeSelection = useCallback(
     (nodeIds: string[]) => {
@@ -3061,6 +3190,22 @@ function CanvasSurface() {
       return resource ? [{ resourceId, type: resource.type }] : []
     }
 
+    if (isCollapsedGroupNode(node)) {
+      const outputs = collapsedGroupView?.portsByGroupId.get(node.id)?.outputs ?? []
+      const resourceIds = outputs.length
+        ? outputs.flatMap((port) => (port.resourceId ? [port.resourceId] : []))
+        : groupMemberIds(node).flatMap((memberId) => {
+            const member = project.canvas.nodes.find((item) => item.id === memberId)
+            return member?.type === 'resource' && typeof member.data.resourceId === 'string' ? [member.data.resourceId] : []
+          })
+      return uniqueIds(resourceIds)
+        .filter((resourceId) => !preferredResourceId || preferredResourceId === resourceId)
+        .flatMap((resourceId) => {
+          const resource = project.resources[resourceId]
+          return resource ? [{ resourceId, type: resource.type }] : []
+        })
+    }
+
     if (node.type !== 'result_group' || !Array.isArray(node.data.resources)) return []
     return node.data.resources
       .map((resource) => {
@@ -3071,7 +3216,7 @@ function CanvasSurface() {
         return typedResource ? { resourceId, type: typedResource.type } : undefined
       })
       .filter((resource): resource is ResourceRef => Boolean(resource))
-  }, [project.canvas.nodes, project.resources])
+  }, [collapsedGroupView, project.canvas.nodes, project.resources])
 
   const selectedQuickSourceNodeId = useMemo(() => {
     if (activeSelectedNodeIds.length !== 1) return undefined
@@ -4276,6 +4421,13 @@ function CanvasSurface() {
       case 'group':
         groupActiveSelection()
         return
+      case 'enter-group':
+        if (selectedSingleNode?.type === 'group') enterSubgraph(selectedSingleNode.id)
+        return
+      case 'collapse-group':
+      case 'expand-group':
+        if (selectedSingleNode?.type === 'group') setGroupCollapsed(selectedSingleNode.id, action.id === 'collapse-group')
+        return
       case 'ungroup':
         if (selectedSingleNode?.type === 'group') {
           ignoreSelectionSyncUntil.current = Date.now() + 250
@@ -4360,10 +4512,20 @@ function CanvasSurface() {
     const selectionActions: SelectionRibbonAction[] = []
     const groupableCount = selectedCanvasNodes.filter((node) => node.type !== 'group').length
     const singleGroup = selectedSingleNode?.type === 'group'
-    if (groupableCount >= 2) {
+    // Groups do not nest: grouping is not offered inside a group being edited.
+    if (groupableCount >= 2 && !subgraphGroupId) {
       selectionActions.push({ id: 'group', label: 'Group', title: 'Group selection (Ctrl+G)', icon: <Layers size={15} />, iconOnly: true })
     }
-    if (singleGroup) selectionActions.push({ id: 'ungroup', label: 'Ungroup', icon: <Scissors size={15} />, iconOnly: true })
+    if (singleGroup && selectedSingleNode) {
+      const groupCollapsed = isCollapsedGroupNode(selectedSingleNode)
+      selectionActions.push(
+        { id: 'enter-group', label: 'Enter group', title: 'Edit the nodes inside this group', icon: <LogIn size={15} />, iconOnly: true },
+        groupCollapsed
+          ? { id: 'expand-group', label: 'Expand group', icon: <ChevronsUpDown size={15} />, iconOnly: true }
+          : { id: 'collapse-group', label: 'Collapse group', title: 'Collapse into one node with its inputs and outputs', icon: <ChevronsDownUp size={15} />, iconOnly: true },
+      )
+      selectionActions.push({ id: 'ungroup', label: 'Ungroup', icon: <Scissors size={15} />, iconOnly: true })
+    }
     const selectedResourceNodes = selectedCanvasNodes.filter((node) => node.type === 'resource')
     if (selectedResourceNodes.length > 0) {
       const anyExpanded = selectedResourceNodes.some((node) => !isCollapsedCanvasNode(node))
@@ -4880,6 +5042,21 @@ function CanvasSurface() {
         />
       ) : null}
       {selectionRibbon && !inputPickMode ? <SelectionRibbon {...selectionRibbon} onAction={handleRibbonAction} /> : null}
+      {subgraphGroup ? (
+        <nav className="subgraph-breadcrumb nodrag nopan" aria-label="Group editing">
+          <button type="button" aria-label="Back to canvas" onClick={exitSubgraph}>
+            <ArrowLeft size={15} />
+            Canvas
+          </button>
+          <span aria-hidden="true">›</span>
+          <strong>{String(subgraphGroup.data.title ?? 'Group')}</strong>
+          <small>
+            {groupMemberIds(subgraphGroup).length} nodes · {subgraphPorts?.inputs.length ?? 0} inputs ·{' '}
+            {subgraphPorts?.outputs.length ?? 0} outputs. New nodes join this group; wires to outside nodes show as ports
+            when it is collapsed.
+          </small>
+        </nav>
+      ) : null}
       {comparePair ? <CompareRunResultsModal pair={comparePair} onClose={() => setComparePair(null)} /> : null}
     </section>
   )
