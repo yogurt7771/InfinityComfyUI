@@ -8550,6 +8550,87 @@ body[data-theme='light'] .function-run-dialog .local-action-footer button:not(.p
   color: var(--ink);
 }
 
+/* Image / LLM model settings: model, API format, the model's own parameters, custom JSON, connection */
+:is(body[data-theme], body) .provider-model-settings {
+  display: grid;
+  gap: 8px;
+}
+
+:is(body[data-theme], body) .provider-model-fields {
+  margin: 0;
+}
+
+/* Notes above some fields differ in length: keep every control on the row's bottom line. */
+:is(body[data-theme], body) .provider-model-fields > label:not(.function-run-provider-wide) {
+  align-self: stretch;
+  grid-template-rows: 1fr auto;
+}
+
+:is(body[data-theme], body) .provider-model-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+:is(body[data-theme], body) .provider-model-status strong {
+  color: var(--ink);
+}
+
+:is(body[data-theme], body) .provider-model-badge {
+  padding: 0 6px;
+  border-radius: 999px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--amber) 22%, var(--panel));
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+:is(body[data-theme], body) .provider-model-note {
+  flex-basis: 100%;
+}
+
+:is(body[data-theme], body) .provider-model-sources a {
+  margin-left: 2px;
+  color: var(--teal);
+}
+
+:is(body[data-theme], body) .provider-model-reset {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 10px;
+  align-items: start;
+}
+
+:is(body[data-theme], body) .provider-model-reset ul {
+  grid-column: 1;
+  margin: 0;
+  padding-left: 18px;
+}
+
+:is(body[data-theme], body) .provider-model-reset button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+:is(body[data-theme], body) .provider-param-note {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+:is(body[data-theme], body) .provider-base-url {
+  grid-column: span 2;
+}
+
 /* Collapsible advanced settings */
 :is(body[data-theme], body) .dialog-advanced {
   border: 1px solid var(--line);

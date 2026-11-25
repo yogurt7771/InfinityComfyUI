@@ -7,6 +7,7 @@ import type {
   Resource,
   ResourceRef,
 } from './types'
+import { deepMerge } from './modelCatalog'
 
 export const GEMINI_LLM_FUNCTION_ID = 'fn_gemini_llm'
 
@@ -324,10 +325,11 @@ export async function createGeminiGenerateContentRequest(
     }
   }
 
-  return {
+  const request: GeminiGenerateContentRequest = {
     ...(systemParts.length ? { system_instruction: { parts: systemParts } } : {}),
     contents,
   }
+  return config.extraBody ? (deepMerge(request, config.extraBody) as GeminiGenerateContentRequest) : request
 }
 
 export function extractGeminiGenerateContentText(response: unknown): string {

@@ -9,6 +9,8 @@ import type {
   Resource,
   ResourceRef,
 } from './types'
+import { deepMerge } from './modelCatalog'
+import { MAX_REFERENCE_IMAGES } from './geminiImage'
 
 export const OPENAI_IMAGE_FUNCTION_ID = 'fn_openai_image'
 
@@ -137,6 +139,8 @@ export const mergedOpenAIImageConfig = (
     outputFormat: optionOrDefault(merged.outputFormat, openAiImageFormats, fallback.outputFormat),
     outputCompression: normalizedCompression(merged.outputCompression),
     user: typeof merged.user === 'string' ? merged.user : '',
+    ...(merged.extraBody ? { extraBody: merged.extraBody } : {}),
+    ...(merged.unified ? { unified: merged.unified } : {}),
   }
 }
 
@@ -169,7 +173,7 @@ const mediaValue = (resource: Resource | undefined) =>
     : undefined
 
 const imageResourceRefsFromInput = (inputValues: RuntimeInputValues, resources: Record<string, Resource>) =>
-  Array.from({ length: 10 }, (_, index) => inputValues[`image_${index + 1}`])
+  Array.from({ length: MAX_REFERENCE_IMAGES }, (_, index) => inputValues[`image_${index + 1}`])
     .filter(isResourceRef)
     .map((ref) => resources[ref.resourceId])
     .filter((resource): resource is Resource => Boolean(resource && resource.type === 'image'))
@@ -245,8 +249,10 @@ export function createOpenAIImageGenerationRequest(
   if (normalized.outputFormat !== 'png') request.output_compression = normalized.outputCompression
   if (normalized.user?.trim()) request.user = normalized.user.trim()
 
-  return request
+  return normalized.extraBody ? (deepMerge(request, normalized.extraBody) as OpenAIImageGenerationRequest) : request
 }
+
+const formValue = (value: unknown) => (typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value))
 
 export async function createOpenAIImageApiRequest(
   config: OpenAIImageConfig,
@@ -275,6 +281,10 @@ export async function createOpenAIImageApiRequest(
   if (normalized.outputFormat !== 'png') body.append('output_format', normalized.outputFormat)
   if (normalized.outputFormat !== 'png') body.append('output_compression', String(normalized.outputCompression))
   appendOptionalFormField(body, 'user', normalized.user)
+  for (const [key, value] of Object.entries(normalized.extraBody ?? {})) {
+    body.delete(key)
+    if (value !== undefined && value !== null) body.append(key, formValue(value))
+  }
 
   for (let index = 0; index < images.length; index += 1) {
     body.append('image', await imageResourceAsFile(images[index]!, index, loadResourceBlob))

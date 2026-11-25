@@ -39,8 +39,8 @@ import {
   requestOutputTypesForParse,
   requestParseModes,
 } from '../domain/requestFunction'
-import { defaultOpenAILlmConfig, isOpenAILlmFunction, mergedOpenAILlmConfig } from '../domain/openaiLlm'
-import { defaultGeminiLlmConfig, isGeminiLlmFunction, mergedGeminiLlmConfig } from '../domain/geminiLlm'
+import { defaultImageModelConfig, defaultLlmModelConfig, isImageFunction, isLlmFunction } from '../domain/providerFunctions'
+import { ProviderModelSettings } from './ProviderModelSettings'
 import { getProjectRunHistory, getSelectedNodesRunHistory } from '../domain/runHistory'
 import { formatDurationMs, formatHistoryTimestamp, runDurationMs } from '../domain/runTiming'
 import { downloadConfigPackage, downloadProjectPackage, readPackageFile } from '../domain/projectTransfer'
@@ -74,9 +74,8 @@ import type {
   FunctionInputDef,
   FunctionOutputDef,
   GenerationFunction,
-  GeminiLlmConfig,
   ProjectState,
-  OpenAILlmConfig,
+  LlmModelConfig,
   RequestFunctionConfig,
   Resource,
   ResourceType,
@@ -609,11 +608,12 @@ const taskServerName = (project: ProjectState, task: ExecutionTask) => {
   if (!task.endpointId) return 'Pending server'
   const endpoint = project.comfy.endpoints.find((item) => item.id === task.endpointId)
   if (endpoint) return endpoint.name
+  // Image / LLM runs are labelled by the API format the model used.
   const builtInServers: Record<string, string> = {
-    openai: 'OpenAI',
-    gemini: 'Gemini',
-    openai_image: 'OpenAI Image',
-    gemini_image: 'Gemini Image',
+    openai: 'LLM · OpenAI API',
+    gemini: 'LLM · Gemini API',
+    openai_image: 'Image · OpenAI API',
+    gemini_image: 'Image · Gemini API',
   }
   return builtInServers[task.endpointId] ?? task.endpointId
 }
@@ -879,8 +879,7 @@ type FunctionManagerProps = {
     options?: { uiJson?: ComfyUiWorkflow; editor?: ComfyWorkflowEditorMetadata },
   ) => string | undefined
   onAddRequestFunction: (name: string, config: Partial<RequestFunctionConfig>) => string | undefined
-  onAddOpenAIFunction: (name: string, config: Partial<OpenAILlmConfig>) => string | undefined
-  onAddGeminiFunction: (name: string, config: Partial<GeminiLlmConfig>) => string | undefined
+  onAddLlmFunction: (name: string, config: Partial<LlmModelConfig>) => string | undefined
   onUpdateFunction: (functionId: string, patch: Partial<Omit<GenerationFunction, 'id' | 'createdAt'>>) => void
   onDeleteFunction: (functionId: string) => void
   onUpdateEndpoint?: (endpointId: string, patch: Partial<ComfyEndpointConfig>) => void
@@ -1285,7 +1284,7 @@ function updateOutputBindingSelection(
   updateFunction(fn.id, { outputs })
 }
 
-type NewFunctionType = 'comfyui' | 'request' | 'openai' | 'gemini'
+type NewFunctionType = 'comfyui' | 'request' | 'llm'
 
 const parseHeaderJson = (value: string) => {
   if (!value.trim()) return {}
@@ -1947,8 +1946,7 @@ export function ComfyWorkflowEditorDialog({
 function NewFunctionDialog({
   onSaveComfy,
   onSaveRequest,
-  onSaveOpenAI,
-  onSaveGemini,
+  onSaveLlm,
   onBindComfyEndpoint,
   comfyEndpoints,
   onClose,
@@ -1959,8 +1957,7 @@ function NewFunctionDialog({
     options?: { uiJson?: ComfyUiWorkflow; editor?: ComfyWorkflowEditorMetadata; nodeTypes?: ComfyNodeTypes; slots?: EditorSlotState },
   ) => string | undefined
   onSaveRequest: (name: string, config: Partial<RequestFunctionConfig>) => string | undefined
-  onSaveOpenAI: (name: string, config: Partial<OpenAILlmConfig>) => string | undefined
-  onSaveGemini: (name: string, config: Partial<GeminiLlmConfig>) => string | undefined
+  onSaveLlm: (name: string, config: Partial<LlmModelConfig>) => string | undefined
   onBindComfyEndpoint?: (functionId: string, endpointId: string) => void
   comfyEndpoints: ComfyEndpointConfig[]
   onClose: () => void
@@ -1982,16 +1979,8 @@ function NewFunctionDialog({
   const [requestBody, setRequestBody] = useState('')
   const [responseParse, setResponseParse] = useState<RequestFunctionConfig['responseParse']>('json')
   const [responseEncoding, setResponseEncoding] = useState(requestDefaultEncoding)
-  const defaultOpenAIConfig = useMemo(() => defaultOpenAILlmConfig(), [])
-  const defaultGeminiConfig = useMemo(() => defaultGeminiLlmConfig(), [])
-  const [openAiBaseUrl, setOpenAiBaseUrl] = useState(defaultOpenAIConfig.baseUrl)
-  const [openAiApiKey, setOpenAiApiKey] = useState(defaultOpenAIConfig.apiKey)
-  const [openAiModel, setOpenAiModel] = useState(defaultOpenAIConfig.model)
-  const [openAiMessagesJson, setOpenAiMessagesJson] = useState(JSON.stringify(defaultOpenAIConfig.messages, null, 2))
-  const [geminiBaseUrl, setGeminiBaseUrl] = useState(defaultGeminiConfig.baseUrl)
-  const [geminiApiKey, setGeminiApiKey] = useState(defaultGeminiConfig.apiKey)
-  const [geminiModel, setGeminiModel] = useState(defaultGeminiConfig.model)
-  const [geminiMessagesJson, setGeminiMessagesJson] = useState(JSON.stringify(defaultGeminiConfig.messages, null, 2))
+  const [llmConfig, setLlmConfig] = useState<LlmModelConfig>(defaultLlmModelConfig)
+  const [llmMessagesJson, setLlmMessagesJson] = useState(() => JSON.stringify(defaultLlmModelConfig().messages, null, 2))
   const [error, setError] = useState<string>()
   const selectableComfyEndpoints = useMemo(() => comfyEndpoints.filter((endpoint) => endpoint.enabled), [comfyEndpoints])
   const [selectedComfyEndpointId, setSelectedComfyEndpointId] = useState('')
@@ -2034,12 +2023,9 @@ function NewFunctionDialog({
       return
     }
 
-    if (functionType === 'openai' || functionType === 'gemini') {
+    if (functionType === 'llm') {
       try {
-        const messages = JSON.parse(functionType === 'openai' ? openAiMessagesJson : geminiMessagesJson)
-        const formatted = JSON.stringify(messages, null, 2)
-        if (functionType === 'openai') setOpenAiMessagesJson(formatted)
-        if (functionType === 'gemini') setGeminiMessagesJson(formatted)
+        setLlmMessagesJson(JSON.stringify(JSON.parse(llmMessagesJson), null, 2))
         setError(undefined)
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Invalid messages JSON')
@@ -2060,11 +2046,9 @@ function NewFunctionDialog({
         functionName.trim() ||
         (functionType === 'request'
           ? 'Request Function'
-          : functionType === 'openai'
-            ? 'OpenAI LLM Function'
-            : functionType === 'gemini'
-              ? 'Gemini LLM Function'
-              : 'ComfyUI Function')
+          : functionType === 'llm'
+            ? 'LLM Function'
+            : 'ComfyUI Function')
       let functionId: string | undefined
       if (functionType === 'request') {
         functionId = onSaveRequest(name, {
@@ -2075,19 +2059,11 @@ function NewFunctionDialog({
           responseParse,
           responseEncoding: responseEncoding.trim() || requestDefaultEncoding,
         })
-      } else if (functionType === 'openai') {
-        functionId = onSaveOpenAI(name, {
-          baseUrl: openAiBaseUrl.trim() || defaultOpenAIConfig.baseUrl,
-          apiKey: openAiApiKey,
-          model: openAiModel.trim() || defaultOpenAIConfig.model,
-          messages: JSON.parse(openAiMessagesJson) as OpenAILlmConfig['messages'],
-        })
-      } else if (functionType === 'gemini') {
-        functionId = onSaveGemini(name, {
-          baseUrl: geminiBaseUrl.trim() || defaultGeminiConfig.baseUrl,
-          apiKey: geminiApiKey,
-          model: geminiModel.trim() || defaultGeminiConfig.model,
-          messages: JSON.parse(geminiMessagesJson) as GeminiLlmConfig['messages'],
+      } else if (functionType === 'llm') {
+        functionId = onSaveLlm(name, {
+          ...llmConfig,
+          model: llmConfig.model.trim() || defaultLlmModelConfig().model,
+          messages: JSON.parse(llmMessagesJson) as LlmModelConfig['messages'],
         })
       } else {
         const workflow = workflowRawJson ?? importComfyWorkflowJson()
@@ -2133,8 +2109,7 @@ function NewFunctionDialog({
           >
             <option value="comfyui">comfyui</option>
             <option value="request">request</option>
-            <option value="openai">openai</option>
-            <option value="gemini">gemini</option>
+            <option value="llm">LLM (OpenAI / Gemini / compatible)</option>
           </select>
         </label>
         <label className="field">
@@ -2301,89 +2276,18 @@ function NewFunctionDialog({
               </label>
             ) : null}
           </>
-        ) : functionType === 'openai' ? (
-          <>
-            <div className="manager-grid">
-              <label className="field">
-                <span>Base URL</span>
-                <input
-                  aria-label="OpenAI base URL"
-                  value={openAiBaseUrl}
-                  onChange={(event) => setOpenAiBaseUrl(event.target.value)}
-                />
-              </label>
-              <label className="field">
-                <span>Model</span>
-                <input
-                  aria-label="OpenAI model"
-                  value={openAiModel}
-                  onChange={(event) => setOpenAiModel(event.target.value)}
-                />
-              </label>
-            </div>
-            <label className="field">
-              <span>API Key</span>
-              <input
-                aria-label="OpenAI API key"
-                autoComplete="off"
-                type="password"
-                value={openAiApiKey}
-                onChange={(event) => setOpenAiApiKey(event.target.value)}
-              />
-            </label>
-            <label className="field">
-              <span>Messages JSON</span>
-              <textarea
-                aria-invalid={error ? true : undefined}
-                aria-label="OpenAI messages JSON"
-                rows={8}
-                value={openAiMessagesJson}
-                onChange={(event) => {
-                  setOpenAiMessagesJson(event.target.value)
-                  setError(undefined)
-                }}
-              />
-            </label>
-          </>
         ) : (
           <>
-            <div className="manager-grid">
-              <label className="field">
-                <span>Base URL</span>
-                <input
-                  aria-label="Gemini base URL"
-                  value={geminiBaseUrl}
-                  onChange={(event) => setGeminiBaseUrl(event.target.value)}
-                />
-              </label>
-              <label className="field">
-                <span>Model</span>
-                <input
-                  aria-label="Gemini model"
-                  value={geminiModel}
-                  onChange={(event) => setGeminiModel(event.target.value)}
-                />
-              </label>
-            </div>
-            <label className="field">
-              <span>API Key</span>
-              <input
-                aria-label="Gemini API key"
-                autoComplete="off"
-                type="password"
-                value={geminiApiKey}
-                onChange={(event) => setGeminiApiKey(event.target.value)}
-              />
-            </label>
+            <ProviderModelSettings kind="llm" label="New LLM function" config={llmConfig} onChange={setLlmConfig} />
             <label className="field">
               <span>Messages JSON</span>
               <textarea
                 aria-invalid={error ? true : undefined}
-                aria-label="Gemini messages JSON"
+                aria-label="LLM messages JSON"
                 rows={8}
-                value={geminiMessagesJson}
+                value={llmMessagesJson}
                 onChange={(event) => {
-                  setGeminiMessagesJson(event.target.value)
+                  setLlmMessagesJson(event.target.value)
                   setError(undefined)
                 }}
               />
@@ -2445,8 +2349,7 @@ export function FunctionManager({
   onSelectFunction,
   onAddWorkflow,
   onAddRequestFunction,
-  onAddOpenAIFunction,
-  onAddGeminiFunction,
+  onAddLlmFunction,
   onUpdateFunction,
   onDeleteFunction,
   onUpdateEndpoint,
@@ -2466,18 +2369,13 @@ export function FunctionManager({
   const selectedWorkflowJsonError =
     selectedWorkflowDraft.functionId === selectedFunction?.id ? selectedWorkflowDraft.error : undefined
   const selectedIsRequest = selectedFunction ? isRequestFunction(selectedFunction) : false
-  const selectedIsOpenAI = selectedFunction ? isOpenAILlmFunction(selectedFunction) : false
-  const selectedIsGemini = selectedFunction ? isGeminiLlmFunction(selectedFunction) : false
-  const selectedIsProvider = selectedIsOpenAI || selectedIsGemini
+  const selectedIsLlm = selectedFunction ? isLlmFunction(selectedFunction) : false
+  const selectedIsImage = selectedFunction ? isImageFunction(selectedFunction) : false
+  const selectedIsProvider = selectedIsLlm || selectedIsImage
   const selectedRequestConfig = mergedRequestConfig(selectedFunction?.request)
-  const selectedOpenAIConfig = selectedIsOpenAI
-    ? mergedOpenAILlmConfig(selectedFunction?.openai ?? defaultOpenAILlmConfig())
-    : undefined
-  const selectedGeminiConfig = selectedIsGemini
-    ? mergedGeminiLlmConfig(selectedFunction?.gemini ?? defaultGeminiLlmConfig())
-    : undefined
-  const [openAiMessagesError, setOpenAiMessagesError] = useState<string>()
-  const [geminiMessagesError, setGeminiMessagesError] = useState<string>()
+  const selectedLlmConfig = selectedIsLlm ? { ...defaultLlmModelConfig(), ...selectedFunction?.llm } : undefined
+  const selectedImageConfig = selectedIsImage ? { ...defaultImageModelConfig(), ...selectedFunction?.image } : undefined
+  const [llmMessagesError, setLlmMessagesError] = useState<string>()
   const workflowFunctions = functions.filter(isComfyWorkflowFunction)
   const workflowFunctionIds = workflowFunctions.map((fn) => fn.id)
   const selectedIsComfyWorkflow = selectedFunction ? isComfyWorkflowFunction(selectedFunction) : false
@@ -2493,10 +2391,10 @@ export function FunctionManager({
     ? 'comfyui'
     : selectedIsRequest
       ? 'request'
-      : selectedIsOpenAI
-        ? 'openai'
-        : selectedIsGemini
-          ? 'gemini'
+      : selectedIsLlm
+        ? 'llm'
+        : selectedIsImage
+          ? 'image'
           : selectedFunction?.workflow.format ?? ''
   const selectableEditorComfyEndpoints =
     selectedFunction && selectedIsComfyWorkflow
@@ -2662,31 +2560,15 @@ export function FunctionManager({
     }
   }
 
-  const updateOpenAIConfig = (patch: Partial<OpenAILlmConfig>) => {
-    if (!selectedFunction) return
-    onUpdateFunction(selectedFunction.id, { openai: mergedOpenAILlmConfig(selectedFunction.openai, patch) })
-  }
-
-  const updateGeminiConfig = (patch: Partial<GeminiLlmConfig>) => {
-    if (!selectedFunction) return
-    onUpdateFunction(selectedFunction.id, { gemini: mergedGeminiLlmConfig(selectedFunction.gemini, patch) })
-  }
-
-  const updateOpenAIMessages = (value: string) => {
+  const updateLlmMessages = (value: string) => {
+    if (!selectedFunction || !selectedLlmConfig) return
     try {
-      updateOpenAIConfig({ messages: JSON.parse(value) as OpenAILlmConfig['messages'] })
-      setOpenAiMessagesError(undefined)
+      onUpdateFunction(selectedFunction.id, {
+        llm: { ...selectedLlmConfig, messages: JSON.parse(value) as LlmModelConfig['messages'] },
+      })
+      setLlmMessagesError(undefined)
     } catch (err) {
-      setOpenAiMessagesError(err instanceof Error ? err.message : 'Invalid messages JSON')
-    }
-  }
-
-  const updateGeminiMessages = (value: string) => {
-    try {
-      updateGeminiConfig({ messages: JSON.parse(value) as GeminiLlmConfig['messages'] })
-      setGeminiMessagesError(undefined)
-    } catch (err) {
-      setGeminiMessagesError(err instanceof Error ? err.message : 'Invalid messages JSON')
+      setLlmMessagesError(err instanceof Error ? err.message : 'Invalid messages JSON')
     }
   }
 
@@ -2904,91 +2786,41 @@ export function FunctionManager({
                     </label>
                   ) : null}
                 </div>
-              ) : selectedIsOpenAI && selectedOpenAIConfig ? (
+              ) : selectedIsLlm && selectedLlmConfig && selectedFunction ? (
                 <div className="workflow-editor-section">
                   <div className="binding-header">
-                    <h4>OpenAI</h4>
-                    {openAiMessagesError ? <span className="field-error">{openAiMessagesError}</span> : null}
+                    <h4>LLM</h4>
+                    {llmMessagesError ? <span className="field-error">{llmMessagesError}</span> : null}
                   </div>
-                  <div className="manager-grid">
-                    <label className="field">
-                      <span>Base URL</span>
-                      <CommittedTextInput
-                        ariaLabel="OpenAI base URL"
-                        value={selectedOpenAIConfig.baseUrl}
-                        onCommit={(baseUrl) => updateOpenAIConfig({ baseUrl })}
-                      />
-                    </label>
-                    <label className="field">
-                      <span>Model</span>
-                      <CommittedTextInput
-                        ariaLabel="OpenAI model"
-                        value={selectedOpenAIConfig.model}
-                        onCommit={(model) => updateOpenAIConfig({ model })}
-                      />
-                    </label>
-                  </div>
-                  <label className="field">
-                    <span>API Key</span>
-                    <CommittedTextInput
-                      ariaLabel="OpenAI API key"
-                      type="password"
-                      value={selectedOpenAIConfig.apiKey}
-                      onCommit={(apiKey) => updateOpenAIConfig({ apiKey })}
-                    />
-                  </label>
+                  <ProviderModelSettings
+                    key={selectedFunction.id}
+                    kind="llm"
+                    label="LLM"
+                    config={selectedLlmConfig}
+                    onChange={(llm) => onUpdateFunction(selectedFunction.id, { llm })}
+                  />
                   <label className="field">
                     <span>Messages JSON</span>
                     <CommittedTextarea
-                      ariaLabel="OpenAI messages JSON"
-                      value={JSON.stringify(selectedOpenAIConfig.messages, null, 2)}
-                      onCommit={updateOpenAIMessages}
+                      ariaLabel="LLM messages JSON"
+                      value={JSON.stringify(selectedLlmConfig.messages, null, 2)}
+                      onCommit={updateLlmMessages}
                       rows={8}
                     />
                   </label>
                 </div>
-              ) : selectedIsGemini && selectedGeminiConfig ? (
+              ) : selectedIsImage && selectedImageConfig && selectedFunction ? (
                 <div className="workflow-editor-section">
                   <div className="binding-header">
-                    <h4>Gemini</h4>
-                    {geminiMessagesError ? <span className="field-error">{geminiMessagesError}</span> : null}
+                    <h4>Image</h4>
                   </div>
-                  <div className="manager-grid">
-                    <label className="field">
-                      <span>Base URL</span>
-                      <CommittedTextInput
-                        ariaLabel="Gemini base URL"
-                        value={selectedGeminiConfig.baseUrl}
-                        onCommit={(baseUrl) => updateGeminiConfig({ baseUrl })}
-                      />
-                    </label>
-                    <label className="field">
-                      <span>Model</span>
-                      <CommittedTextInput
-                        ariaLabel="Gemini model"
-                        value={selectedGeminiConfig.model}
-                        onCommit={(model) => updateGeminiConfig({ model })}
-                      />
-                    </label>
-                  </div>
-                  <label className="field">
-                    <span>API Key</span>
-                    <CommittedTextInput
-                      ariaLabel="Gemini API key"
-                      type="password"
-                      value={selectedGeminiConfig.apiKey}
-                      onCommit={(apiKey) => updateGeminiConfig({ apiKey })}
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Messages JSON</span>
-                    <CommittedTextarea
-                      ariaLabel="Gemini messages JSON"
-                      value={JSON.stringify(selectedGeminiConfig.messages, null, 2)}
-                      onCommit={updateGeminiMessages}
-                      rows={8}
-                    />
-                  </label>
+                  <ProviderModelSettings
+                    key={selectedFunction.id}
+                    kind="image"
+                    label="Image"
+                    config={selectedImageConfig}
+                    onChange={(image) => onUpdateFunction(selectedFunction.id, { image })}
+                  />
                 </div>
               ) : (
                 <div className="workflow-editor-section">
@@ -3406,13 +3238,8 @@ export function FunctionManager({
             if (functionId) onSelectFunction(functionId)
             return functionId
           }}
-          onSaveOpenAI={(name, config) => {
-            const functionId = onAddOpenAIFunction(name, config)
-            if (functionId) onSelectFunction(functionId)
-            return functionId
-          }}
-          onSaveGemini={(name, config) => {
-            const functionId = onAddGeminiFunction(name, config)
+          onSaveLlm={(name, config) => {
+            const functionId = onAddLlmFunction(name, config)
             if (functionId) onSelectFunction(functionId)
             return functionId
           }}
@@ -3963,8 +3790,7 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
   const deleteProject = useProjectStore((state) => state.deleteProject)
   const addFunctionFromWorkflow = useProjectStore((state) => state.addFunctionFromWorkflow)
   const addRequestFunction = useProjectStore((state) => state.addRequestFunction)
-  const addOpenAILlmFunction = useProjectStore((state) => state.addOpenAILlmFunction)
-  const addGeminiLlmFunction = useProjectStore((state) => state.addGeminiLlmFunction)
+  const addLlmFunction = useProjectStore((state) => state.addLlmFunction)
   const updateFunction = useProjectStore((state) => state.updateFunction)
   const deleteFunction = useProjectStore((state) => state.deleteFunction)
   const addEndpoint = useProjectStore((state) => state.addEndpoint)
@@ -4030,24 +3856,13 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
     }
   }
 
-  const handleOpenAIFunctionAdd = (name: string, config: Partial<OpenAILlmConfig>) => {
+  const handleLlmFunctionAdd = (name: string, config: Partial<LlmModelConfig>) => {
     try {
-      const functionId = addOpenAILlmFunction(name.trim() || 'OpenAI LLM Function', config)
+      const functionId = addLlmFunction(name.trim() || 'LLM Function', config)
       setError(undefined)
       return functionId
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid OpenAI function')
-      return undefined
-    }
-  }
-
-  const handleGeminiFunctionAdd = (name: string, config: Partial<GeminiLlmConfig>) => {
-    try {
-      const functionId = addGeminiLlmFunction(name.trim() || 'Gemini LLM Function', config)
-      setError(undefined)
-      return functionId
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid Gemini function')
+      setError(err instanceof Error ? err.message : 'Invalid LLM function')
       return undefined
     }
   }
@@ -4217,8 +4032,7 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
           onSelectFunction={setSelectedFunctionId}
           onAddWorkflow={handleWorkflowAdd}
           onAddRequestFunction={handleRequestFunctionAdd}
-          onAddOpenAIFunction={handleOpenAIFunctionAdd}
-          onAddGeminiFunction={handleGeminiFunctionAdd}
+          onAddLlmFunction={handleLlmFunctionAdd}
           onUpdateFunction={updateFunction}
           onDeleteFunction={deleteFunction}
           onUpdateEndpoint={updateEndpoint}
@@ -4270,8 +4084,7 @@ export function LeftPanel() {
   const fetchComfyHistory = useProjectStore((state) => state.fetchComfyHistory)
   const addFunctionFromWorkflow = useProjectStore((state) => state.addFunctionFromWorkflow)
   const addRequestFunction = useProjectStore((state) => state.addRequestFunction)
-  const addOpenAILlmFunction = useProjectStore((state) => state.addOpenAILlmFunction)
-  const addGeminiLlmFunction = useProjectStore((state) => state.addGeminiLlmFunction)
+  const addLlmFunction = useProjectStore((state) => state.addLlmFunction)
   const updateFunction = useProjectStore((state) => state.updateFunction)
   const deleteFunction = useProjectStore((state) => state.deleteFunction)
   const addEndpoint = useProjectStore((state) => state.addEndpoint)
@@ -4438,25 +4251,14 @@ export function LeftPanel() {
       return undefined
     }
   }
-  const handleOpenAIFunctionAdd = (name: string, config: Partial<OpenAILlmConfig>) => {
+  const handleLlmFunctionAdd = (name: string, config: Partial<LlmModelConfig>) => {
     try {
-      const functionId = addOpenAILlmFunction(name.trim() || 'OpenAI LLM Function', config)
+      const functionId = addLlmFunction(name.trim() || 'LLM Function', config)
       setDockError(undefined)
       setSelectedFunctionId(functionId)
       return functionId
     } catch (err) {
-      setDockError(err instanceof Error ? err.message : 'Invalid OpenAI function')
-      return undefined
-    }
-  }
-  const handleGeminiFunctionAdd = (name: string, config: Partial<GeminiLlmConfig>) => {
-    try {
-      const functionId = addGeminiLlmFunction(name.trim() || 'Gemini LLM Function', config)
-      setDockError(undefined)
-      setSelectedFunctionId(functionId)
-      return functionId
-    } catch (err) {
-      setDockError(err instanceof Error ? err.message : 'Invalid Gemini function')
+      setDockError(err instanceof Error ? err.message : 'Invalid LLM function')
       return undefined
     }
   }
@@ -4504,8 +4306,8 @@ export function LeftPanel() {
   }
   const functionKind = (fn: GenerationFunction) => {
     if (isRequestFunction(fn)) return 'request'
-    if (isOpenAILlmFunction(fn)) return 'openai'
-    if (isGeminiLlmFunction(fn)) return 'gemini'
+    if (isLlmFunction(fn)) return 'llm'
+    if (isImageFunction(fn)) return 'image'
     return 'comfyui'
   }
   const functionSummary = (fn: GenerationFunction) =>
@@ -4568,8 +4370,7 @@ export function LeftPanel() {
           onSelectFunction={setSelectedFunctionId}
           onAddWorkflow={handleWorkflowAdd}
           onAddRequestFunction={handleRequestFunctionAdd}
-          onAddOpenAIFunction={handleOpenAIFunctionAdd}
-          onAddGeminiFunction={handleGeminiFunctionAdd}
+          onAddLlmFunction={handleLlmFunctionAdd}
           onUpdateFunction={updateFunction}
           onDeleteFunction={deleteFunction}
           onUpdateEndpoint={updateEndpoint}
@@ -4582,8 +4383,7 @@ export function LeftPanel() {
           onClose={() => setCreateFunctionOpen(false)}
           onSaveComfy={handleWorkflowAdd}
           onSaveRequest={handleRequestFunctionAdd}
-          onSaveOpenAI={handleOpenAIFunctionAdd}
-          onSaveGemini={handleGeminiFunctionAdd}
+          onSaveLlm={handleLlmFunctionAdd}
           onBindComfyEndpoint={bindNewWorkflowFunctionToEndpoint}
         />
       ) : null}

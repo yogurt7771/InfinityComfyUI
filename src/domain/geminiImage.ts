@@ -8,6 +8,7 @@ import type {
   Resource,
   ResourceRef,
 } from './types'
+import { deepMerge } from './modelCatalog'
 
 export const GEMINI_IMAGE_FUNCTION_ID = 'fn_gemini_image'
 
@@ -20,11 +21,9 @@ export type GeminiImageGenerationRequest = {
   }>
   generationConfig: {
     responseModalities: Array<'TEXT' | 'IMAGE'>
-    responseFormat?: {
-      image: {
-        aspectRatio?: Exclude<GeminiImageAspectRatio, 'auto'>
-        imageSize?: Exclude<GeminiImageSize, 'auto'>
-      }
+    imageConfig?: {
+      aspectRatio?: Exclude<GeminiImageAspectRatio, 'auto'>
+      imageSize?: Exclude<GeminiImageSize, 'auto'>
     }
   }
 }
@@ -54,6 +53,8 @@ const geminiImageSizes: GeminiImageSize[] = ['auto', '1K', '2K', '4K']
 
 const optionOrDefault = <T extends string>(value: unknown, options: readonly T[], fallback: T): T =>
   options.includes(value as T) ? (value as T) : fallback
+
+export const MAX_REFERENCE_IMAGES = 16
 
 const imageInputs = () =>
   Array.from({ length: 10 }, (_, index) => ({
@@ -130,6 +131,8 @@ export const mergedGeminiImageConfig = (
     responseModalities: optionOrDefault(merged.responseModalities, geminiModalities, fallback.responseModalities),
     aspectRatio: optionOrDefault(merged.aspectRatio, geminiAspectRatios, fallback.aspectRatio),
     imageSize: optionOrDefault(merged.imageSize, geminiImageSizes, fallback.imageSize),
+    ...(merged.extraBody ? { extraBody: merged.extraBody } : {}),
+    ...(merged.unified ? { unified: merged.unified } : {}),
   }
 }
 
@@ -165,7 +168,7 @@ const mediaValue = (resource: Resource | undefined) =>
     : undefined
 
 const imageResourceRefsFromInput = (inputValues: RuntimeInputValues, resources: Record<string, Resource>) =>
-  Array.from({ length: 10 }, (_, index) => inputValues[`image_${index + 1}`])
+  Array.from({ length: MAX_REFERENCE_IMAGES }, (_, index) => inputValues[`image_${index + 1}`])
     .filter(isResourceRef)
     .map((ref) => resources[ref.resourceId])
     .filter((resource): resource is Resource => Boolean(resource && resource.type === 'image'))
@@ -240,7 +243,8 @@ export async function createGeminiImageGenerationRequest(
     imageResourceRefsFromInput(inputValues, resources).map((resource) => imageResourceAsInlineData(resource, loadResourceBlob)),
   )
 
-  return {
+  // `imageConfig` takes the "16:9" / "2K" strings (the API reference's responseFormat.image wants enum names instead).
+  const request: GeminiImageGenerationRequest = {
     contents: [
       {
         parts: [...imageParts, { text: promptFromInput(inputValues, resources, defaultPrompt) }],
@@ -248,9 +252,10 @@ export async function createGeminiImageGenerationRequest(
     ],
     generationConfig: {
       responseModalities: responseModalities(normalized.responseModalities),
-      ...(Object.keys(imageOptions).length ? { responseFormat: { image: imageOptions } } : {}),
+      ...(Object.keys(imageOptions).length ? { imageConfig: imageOptions } : {}),
     },
   }
+  return normalized.extraBody ? (deepMerge(request, normalized.extraBody) as GeminiImageGenerationRequest) : request
 }
 
 const extensionForMimeType = (mimeType: string) => {

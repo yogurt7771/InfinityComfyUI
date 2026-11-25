@@ -13,6 +13,7 @@ import { runComfyPrompt, type ComfyPromptClient } from '../domain/comfyRunner'
 import {
   createOpenAIChatCompletionRequest,
   createOpenAILlmFunction,
+  OPENAI_LLM_FUNCTION_ID,
   extractOpenAIChatCompletionText,
   isOpenAILlmFunction,
   mergedOpenAILlmConfig,
@@ -20,24 +21,31 @@ import {
 import {
   createGeminiGenerateContentRequest,
   createGeminiLlmFunction,
+  GEMINI_LLM_FUNCTION_ID,
   extractGeminiGenerateContentText,
   isGeminiLlmFunction,
   mergedGeminiLlmConfig,
 } from '../domain/geminiLlm'
 import {
   createOpenAIImageApiRequest,
-  createOpenAIImageFunction,
+  OPENAI_IMAGE_FUNCTION_ID,
   extractOpenAIImageGenerationOutputs,
   isOpenAIImageFunction,
   mergedOpenAIImageConfig,
 } from '../domain/openaiImage'
 import {
-  createGeminiImageFunction,
+  GEMINI_IMAGE_FUNCTION_ID,
   createGeminiImageGenerationRequest,
   extractGeminiImageGenerationOutputs,
   isGeminiImageFunction,
   mergedGeminiImageConfig,
 } from '../domain/geminiImage'
+import {
+  compileProviderFunction,
+  createImageFunction,
+  createLlmFunction,
+  migrateProviderFunction,
+} from '../domain/providerFunctions'
 import {
   compileRequestFunctionRequest,
   createRequestFunction,
@@ -111,6 +119,7 @@ import type {
   ResourceType,
   SeedPatchRecord,
   TextDisplayMode,
+  LlmModelConfig,
 } from '../domain/types'
 
 type RuntimeInputValues = Record<string, PrimitiveInputValue | InputResourceRef>
@@ -340,6 +349,7 @@ export type ProjectStoreState = {
   addRequestFunction: (name: string, config?: Partial<RequestFunctionConfig>) => string
   addOpenAILlmFunction: (name: string, config?: Partial<OpenAILlmConfig>) => string
   addGeminiLlmFunction: (name: string, config?: Partial<GeminiLlmConfig>) => string
+  addLlmFunction: (name: string, config?: Partial<LlmModelConfig>) => string
   updateFunction: (functionId: string, patch: Partial<Omit<GenerationFunction, 'id' | 'createdAt'>>) => void
   ensureEditableFunctionForNode: (nodeId: string, scope: FunctionEditScope) => string | undefined
   deleteFunction: (functionId: string) => void
@@ -680,10 +690,8 @@ const restoreProjectHistorySnapshot = (
 }
 
 const initialProject = (now: string, options: ProjectCreateOptions & { id?: string } = {}): ProjectState => {
-  const openAiFunction = createOpenAILlmFunction(now)
-  const geminiFunction = createGeminiLlmFunction(now)
-  const openAiImageFunction = createOpenAIImageFunction(now)
-  const geminiImageFunction = createGeminiImageFunction(now)
+  const imageFunction = createImageFunction(now)
+  const llmFunction = createLlmFunction(now)
   const requestFunction = createRequestFunction(REQUEST_FUNCTION_ID, 'Request', now)
   const localFunctions = createLocalTransformFunctions(now)
   return {
@@ -703,10 +711,8 @@ const initialProject = (now: string, options: ProjectCreateOptions & { id?: stri
     resources: {},
     assets: {},
     functions: {
-      [openAiFunction.id]: openAiFunction,
-      [geminiFunction.id]: geminiFunction,
-      [openAiImageFunction.id]: openAiImageFunction,
-      [geminiImageFunction.id]: geminiImageFunction,
+      [llmFunction.id]: llmFunction,
+      [imageFunction.id]: imageFunction,
       [requestFunction.id]: requestFunction,
       ...Object.fromEntries(localFunctions.map((fn) => [fn.id, fn])),
     },
@@ -746,17 +752,70 @@ const syncBuiltInFunction = (current: GenerationFunction | undefined, latest: Ge
     gemini: current.gemini ? { ...latest.gemini, ...current.gemini } : latest.gemini,
     openaiImage: current.openaiImage ? { ...latest.openaiImage, ...current.openaiImage } : latest.openaiImage,
     geminiImage: current.geminiImage ? { ...latest.geminiImage, ...current.geminiImage } : latest.geminiImage,
+    image: current.image ? { ...latest.image!, ...current.image } : latest.image,
+    llm: current.llm ? { ...latest.llm!, ...current.llm } : latest.llm,
     request: current.request ? { ...latest.request, ...current.request } : latest.request,
     localTransform: latest.localTransform,
   }
 }
 
-const withBuiltInFunctions = (project: ProjectState, now: string): ProjectState => {
+const retiredBuiltInFunctionIds = [OPENAI_LLM_FUNCTION_ID, GEMINI_LLM_FUNCTION_ID, OPENAI_IMAGE_FUNCTION_ID, GEMINI_IMAGE_FUNCTION_ID]
+
+const migrateFunctions = (functions: Record<string, GenerationFunction>) =>
+  Object.fromEntries(Object.entries(functions).map(([id, fn]) => [id, migrateProviderFunction(fn)]))
+
+const migrateTasks = (tasks: Record<string, ExecutionTask>) =>
+  Object.fromEntries(
+    Object.entries(tasks).map(([id, task]) => [
+      id,
+      task.functionSnapshot ? { ...task, functionSnapshot: migrateProviderFunction(task.functionSnapshot) } : task,
+    ]),
+  )
+
+const migrateResources = (resources: Record<string, Resource>) =>
+  Object.fromEntries(
+    Object.entries(resources).map(([id, resource]) => [
+      id,
+      resource.metadata?.functionSnapshot
+        ? { ...resource, metadata: { ...resource.metadata, functionSnapshot: migrateProviderFunction(resource.metadata.functionSnapshot) } }
+        : resource,
+    ]),
+  )
+
+/**
+ * OpenAI / Gemini Image and LLM functions (custom functions, run snapshots, templates) become the merged Image / LLM
+ * format when a project is loaded; the files themselves change only when the project is saved again.
+ */
+const migrateProjectProviders = (project: ProjectState): ProjectState => {
+  const functions = migrateFunctions(project.functions)
+  for (const id of retiredBuiltInFunctionIds) delete functions[id]
+  return {
+    ...project,
+    functions,
+    tasks: migrateTasks(project.tasks ?? {}),
+    resources: migrateResources(project.resources ?? {}),
+    templates: Object.fromEntries(
+      Object.entries(project.templates ?? {}).map(([id, template]) => [
+        id,
+        {
+          ...template,
+          resources: migrateResources(template.resources ?? {}),
+          ...(template.functions ? { functions: migrateFunctions(template.functions) } : {}),
+          ...(template.tasks ? { tasks: migrateTasks(template.tasks) } : {}),
+        },
+      ]),
+    ),
+  }
+}
+
+/** A run snapshot keeps the merged Image / LLM form (compiled definitions carry it), so Edit & Rerun shows the model settings. */
+const functionSnapshot = (fn: GenerationFunction) => structuredClone(migrateProviderFunction(fn))
+
+const withBuiltInFunctions = (sourceProject: ProjectState, now: string): ProjectState => {
+  const project = migrateProjectProviders(sourceProject)
   const latestBuiltIns = [
-    createOpenAILlmFunction(now),
-    createGeminiLlmFunction(now),
-    createOpenAIImageFunction(now),
-    createGeminiImageFunction(now),
+    createLlmFunction(now),
+    createImageFunction(now),
     createRequestFunction(REQUEST_FUNCTION_ID, 'Request', now),
     ...createLocalTransformFunctions(now),
   ]
@@ -1751,10 +1810,15 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
   const temporaryFunctionDrafts = new Map<string, GenerationFunction>()
 
   return createStore<ProjectStoreState>((set, get) => {
-    const functionDefinitionById = (functionId: string) =>
+    const storedFunctionById = (functionId: string) =>
       get().project.functions[functionId] ?? temporaryFunctionDrafts.get(functionId)
+    // Image / LLM functions run as the provider format their model uses.
+    const functionDefinitionById = (functionId: string) => {
+      const fn = storedFunctionById(functionId)
+      return fn ? compileProviderFunction(fn) : undefined
+    }
     const functionDefinitionForTask = (task: ExecutionTask) =>
-      task.functionSnapshot ?? functionDefinitionById(task.functionId)
+      task.functionSnapshot ? compileProviderFunction(task.functionSnapshot) : functionDefinitionById(task.functionId)
 
     // object_info can be tens of MB; keep only the parsed node types, once per server.
     const comfyNodeTypesCache = new Map<string, Promise<ComfyNodeTypes | undefined>>()
@@ -2309,7 +2373,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
               source: { kind: 'function_output', functionNodeId: item.taskId, taskId: item.taskId, outputKey: output.key },
               metadata: {
                 workflowFunctionId: item.functionId,
-                functionSnapshot: structuredClone(item.functionDef),
+                functionSnapshot: functionSnapshot(item.functionDef),
                 endpointId: endpoint.id,
                 createdAt: completedAt,
               },
@@ -2357,7 +2421,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
               source: { kind: 'function_output', functionNodeId: item.taskId, taskId: item.taskId, outputKey: output.key },
               metadata: {
                 workflowFunctionId: item.functionId,
-                functionSnapshot: structuredClone(item.functionDef),
+                functionSnapshot: functionSnapshot(item.functionDef),
                 endpointId: endpoint.id,
                 createdAt: completedAt,
               },
@@ -6018,11 +6082,26 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
     addOpenAILlmFunction: (name, config) => {
       const id = runtime.idFactory()
       const now = runtime.now()
-      const generationFunction = createOpenAILlmFunction(now, {
+      const generationFunction = migrateProviderFunction(createOpenAILlmFunction(now, {
         id,
         name,
         config,
-      })
+      }))
+
+      set((state) => ({
+        project: {
+          ...state.project,
+          project: { ...state.project.project, updatedAt: now },
+          functions: { ...state.project.functions, [id]: generationFunction },
+        },
+      }))
+      return id
+    },
+
+    addLlmFunction: (name, config) => {
+      const id = runtime.idFactory()
+      const now = runtime.now()
+      const generationFunction = createLlmFunction(now, { id, name, config })
 
       set((state) => ({
         project: {
@@ -6037,11 +6116,11 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
     addGeminiLlmFunction: (name, config) => {
       const id = runtime.idFactory()
       const now = runtime.now()
-      const generationFunction = createGeminiLlmFunction(now, {
+      const generationFunction = migrateProviderFunction(createGeminiLlmFunction(now, {
         id,
         name,
         config,
-      })
+      }))
 
       set((state) => ({
         project: {
@@ -6426,7 +6505,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             },
             metadata: {
               workflowFunctionId: functionId,
-              functionSnapshot: structuredClone(functionDef),
+              functionSnapshot: functionSnapshot(functionDef),
               endpointId: functionDef.workflow.format === 'local_transform' ? 'local' : undefined,
               createdAt: now,
             },
@@ -6481,7 +6560,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
           inputSnapshot: resourceInputSnapshot(runtimeInputValues, state.project.resources),
           inputValuesSnapshot: executionInputSnapshot(functionDef, runtimeInputValues, state.project.resources),
           paramsSnapshot: { runCount: normalizedRuns, mode: 'function_command' },
-          ...(state.project.functions[functionId] ? {} : { functionSnapshot: structuredClone(functionDef) }),
+          ...(state.project.functions[functionId] ? {} : { functionSnapshot: functionSnapshot(functionDef) }),
           workflowTemplateSnapshot: functionDef.workflow.rawJson,
           compiledWorkflowSnapshot: functionDef.workflow.rawJson,
           seedPatchLog: [],
@@ -6589,7 +6668,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
               source: { kind: 'function_output', functionNodeId: taskId, taskId, outputKey: output.key },
               metadata: {
                 workflowFunctionId: functionId,
-                functionSnapshot: structuredClone(functionDef),
+                functionSnapshot: functionSnapshot(functionDef),
                 endpointId: 'local',
                 createdAt: completedAt,
               },
@@ -6607,7 +6686,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
               source: { kind: 'function_output', functionNodeId: taskId, taskId, outputKey: output.key },
               metadata: {
                 workflowFunctionId: functionId,
-                functionSnapshot: structuredClone(functionDef),
+                functionSnapshot: functionSnapshot(functionDef),
                 endpointId: 'local',
                 createdAt: completedAt,
               },
@@ -6639,7 +6718,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
               source: { kind: 'function_output', functionNodeId: taskId, taskId, outputKey: output.key },
               metadata: {
                 workflowFunctionId: functionId,
-                functionSnapshot: structuredClone(functionDef),
+                functionSnapshot: functionSnapshot(functionDef),
                 endpointId: 'local',
                 createdAt: completedAt,
               },
@@ -6656,7 +6735,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
             source: { kind: 'function_output', functionNodeId: taskId, taskId, outputKey: output.key },
             metadata: {
               workflowFunctionId: functionId,
-              functionSnapshot: structuredClone(functionDef),
+              functionSnapshot: functionSnapshot(functionDef),
               endpointId: 'local',
               createdAt: completedAt,
             },
@@ -6746,7 +6825,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
       ): { resource: Resource; asset?: ProjectState['assets'][string] } => {
         const metadata = {
           workflowFunctionId: functionId,
-          functionSnapshot: structuredClone(functionDef),
+          functionSnapshot: functionSnapshot(functionDef),
           endpointId,
           createdAt: completedAt,
         }

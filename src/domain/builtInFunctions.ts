@@ -4,6 +4,7 @@ import { GEMINI_IMAGE_FUNCTION_ID } from './geminiImage'
 import { OPENAI_LLM_FUNCTION_ID } from './openaiLlm'
 import { OPENAI_IMAGE_FUNCTION_ID } from './openaiImage'
 import { REQUEST_FUNCTION_ID } from './requestFunction'
+import { IMAGE_FUNCTION_ID, LLM_FUNCTION_ID } from './providerFunctions'
 import {
   LOCAL_AUDIO_INFO_FUNCTION_ID,
   LOCAL_IMAGE_BLUR_FUNCTION_ID,
@@ -15,7 +16,10 @@ import {
   LOCAL_VIDEO_INFO_FUNCTION_ID,
 } from './localTransforms'
 
+// The four OpenAI / Gemini ids were built-ins before Image / LLM merged them; they stay built-in so they are never saved.
 const builtInFunctionIds = new Set([
+  LLM_FUNCTION_ID,
+  IMAGE_FUNCTION_ID,
   OPENAI_LLM_FUNCTION_ID,
   GEMINI_LLM_FUNCTION_ID,
   OPENAI_IMAGE_FUNCTION_ID,

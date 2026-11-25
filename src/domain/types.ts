@@ -217,6 +217,10 @@ export type OpenAILlmConfig = {
   apiKey: string
   model: string
   messages: OpenAILlmMessage[]
+  /** Request fields merged in last (deep); set when the config was compiled from an Image / LLM model config. */
+  extraBody?: Record<string, unknown>
+  /** The Image / LLM model config this legacy config was compiled from (kept so it can be restored losslessly). */
+  unified?: ProviderModelConfig | LlmModelConfig
 }
 
 export type OpenAIImageSize = 'auto' | '1024x1024' | '1024x1536' | '1536x1024'
@@ -234,6 +238,10 @@ export type OpenAIImageConfig = {
   outputFormat: OpenAIImageOutputFormat
   outputCompression: number
   user?: string
+  /** Request fields merged in last (deep); set when the config was compiled from an Image / LLM model config. */
+  extraBody?: Record<string, unknown>
+  /** The Image / LLM model config this legacy config was compiled from (kept so it can be restored losslessly). */
+  unified?: ProviderModelConfig | LlmModelConfig
 }
 
 export type GeminiMessageRole = 'system' | 'user' | 'model'
@@ -253,6 +261,10 @@ export type GeminiLlmConfig = {
   apiKey: string
   model: string
   messages: GeminiLlmMessage[]
+  /** Request fields merged in last (deep); set when the config was compiled from an Image / LLM model config. */
+  extraBody?: Record<string, unknown>
+  /** The Image / LLM model config this legacy config was compiled from (kept so it can be restored losslessly). */
+  unified?: ProviderModelConfig | LlmModelConfig
 }
 
 export type GeminiImageResponseModalities = 'IMAGE' | 'TEXT_IMAGE'
@@ -266,7 +278,30 @@ export type GeminiImageConfig = {
   responseModalities: GeminiImageResponseModalities
   aspectRatio: GeminiImageAspectRatio
   imageSize: GeminiImageSize
+  /** Request fields merged in last (deep); set when the config was compiled from an Image / LLM model config. */
+  extraBody?: Record<string, unknown>
+  /** The Image / LLM model config this legacy config was compiled from (kept so it can be restored losslessly). */
+  unified?: ProviderModelConfig | LlmModelConfig
 }
+
+/** Which wire protocol a model speaks: OpenAI-compatible or Gemini. */
+export type ProviderApiFormat = 'openai' | 'gemini'
+
+/** The merged Image / LLM built-ins: one config whose model decides the API format and the parameters on offer. */
+export type ProviderModelConfig = {
+  apiFormat: ProviderApiFormat
+  /** Free text; may be a model outside the capability catalog. */
+  model: string
+  /** '' = the API format's default endpoint. */
+  baseUrl: string
+  apiKey: string
+  /** Catalog parameter id -> value. */
+  params: Record<string, string | number | boolean>
+  /** JSON object merged into the request body last (overrides the parameters above). */
+  customParams: string
+}
+
+export type LlmModelConfig = ProviderModelConfig & { messages: OpenAILlmMessage[] }
 
 export type RequestFunctionConfig = {
   url: string
@@ -304,6 +339,8 @@ export type GenerationFunction = {
       | 'gemini_generate_content'
       | 'openai_image_generation'
       | 'gemini_image_generation'
+      | 'image_generation'
+      | 'llm_chat'
       | 'http_request'
       | 'local_transform'
     version?: string
@@ -315,6 +352,10 @@ export type GenerationFunction = {
   gemini?: GeminiLlmConfig
   openaiImage?: OpenAIImageConfig
   geminiImage?: GeminiImageConfig
+  /** Merged Image built-in (format image_generation). */
+  image?: ProviderModelConfig
+  /** Merged LLM built-in (format llm_chat). */
+  llm?: LlmModelConfig
   request?: RequestFunctionConfig
   localTransform?: LocalTransformConfig
   inputs: FunctionInputDef[]

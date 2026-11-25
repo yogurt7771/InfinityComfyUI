@@ -8,6 +8,7 @@ import type {
   Resource,
   ResourceRef,
 } from './types'
+import { deepMerge } from './modelCatalog'
 
 export const OPENAI_LLM_FUNCTION_ID = 'fn_openai_llm'
 
@@ -286,10 +287,11 @@ export async function createOpenAIChatCompletionRequest(
     })),
   )
 
-  return {
+  const request: OpenAIChatCompletionRequest = {
     model: config.model.trim() || 'gpt-4.1-mini',
     messages: messages.filter((message) => message.content.length > 0),
   }
+  return config.extraBody ? (deepMerge(request, config.extraBody) as OpenAIChatCompletionRequest) : request
 }
 
 const collectTextParts = (value: unknown): string[] => {

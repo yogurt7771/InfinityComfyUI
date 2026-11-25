@@ -86,10 +86,18 @@ import { targetInputInitialResourceValue } from '../domain/inputInitialValue'
 import { buildNodeReferenceMap } from '../domain/nodeReferences'
 import { readFileAsMediaResource } from '../domain/resourceFiles'
 import { isBuiltInFunction } from '../domain/builtInFunctions'
-import { GEMINI_LLM_FUNCTION_ID, isGeminiLlmFunction, mergedGeminiLlmConfig } from '../domain/geminiLlm'
-import { GEMINI_IMAGE_FUNCTION_ID, isGeminiImageFunction, mergedGeminiImageConfig } from '../domain/geminiImage'
-import { OPENAI_LLM_FUNCTION_ID, isOpenAILlmFunction, mergedOpenAILlmConfig } from '../domain/openaiLlm'
-import { OPENAI_IMAGE_FUNCTION_ID, isOpenAIImageFunction, mergedOpenAIImageConfig } from '../domain/openaiImage'
+import {
+  customParamsError,
+  defaultImageModelConfig,
+  defaultLlmModelConfig,
+  IMAGE_FUNCTION_ID,
+  isImageFunction,
+  isLlmFunction,
+  LLM_FUNCTION_ID,
+  migrateProviderFunction,
+} from '../domain/providerFunctions'
+import { findModel } from '../domain/modelCatalog'
+import { ProviderModelSettings } from './ProviderModelSettings'
 import {
   isRequestFunction,
   mergedRequestConfig,
@@ -135,6 +143,7 @@ import type {
   ComfyEndpointConfig,
   PrimitiveInputValue,
   ProjectState,
+  OpenAILlmMessage,
   Resource,
   ResourceRef,
   ResourceType,
@@ -254,20 +263,12 @@ const nodeTypes: NodeTypes = {
 }
 const EMPTY_NODE_REFERENCES: never[] = []
 
-const builtInFunctionMenuOrder = [
-  REQUEST_FUNCTION_ID,
-  OPENAI_LLM_FUNCTION_ID,
-  GEMINI_LLM_FUNCTION_ID,
-  OPENAI_IMAGE_FUNCTION_ID,
-  GEMINI_IMAGE_FUNCTION_ID,
-]
+const builtInFunctionMenuOrder = [REQUEST_FUNCTION_ID, LLM_FUNCTION_ID, IMAGE_FUNCTION_ID]
 
 const builtInFunctionMenuLabels: Record<string, string> = {
   [REQUEST_FUNCTION_ID]: 'Request',
-  [OPENAI_LLM_FUNCTION_ID]: 'OpenAI LLM',
-  [GEMINI_LLM_FUNCTION_ID]: 'Gemini LLM',
-  [OPENAI_IMAGE_FUNCTION_ID]: 'OpenAI Image',
-  [GEMINI_IMAGE_FUNCTION_ID]: 'Gemini Image',
+  [LLM_FUNCTION_ID]: 'LLM',
+  [IMAGE_FUNCTION_ID]: 'Image',
 }
 
 const temporaryRunnerId = (functionId: string) =>
@@ -1194,6 +1195,23 @@ const providerImageContentParts = (functionDef: GenerationFunction) =>
     .filter((input) => input.type === 'image')
     .map((input) => ({ type: 'image_url' as const, content: input.key, detail: 'auto' as const }))
 
+/** Sets the text of the first user message; the system / developer messages and image parts stay as they are. */
+const messagesWithPrompt = (functionDef: GenerationFunction, messages: OpenAILlmMessage[], prompt: string): OpenAILlmMessage[] => {
+  const index = messages.findIndex((message) => message.role === 'user')
+  if (index < 0) {
+    return [...messages, { role: 'user', content: [{ type: 'text', content: prompt }, ...providerImageContentParts(functionDef)] }]
+  }
+  return messages.map((message, messageIndex) => {
+    if (messageIndex !== index) return message
+    const textIndex = message.content.findIndex((part) => part.type === 'text')
+    const content =
+      textIndex < 0
+        ? [{ type: 'text' as const, content: prompt }, ...message.content]
+        : message.content.map((part, partIndex) => (partIndex === textIndex ? { ...part, content: prompt } : part))
+    return { ...message, content }
+  })
+}
+
 const OUTPUT_SLOT_TYPES: ResourceType[] = ['image', 'video', 'audio', 'text']
 /** Slot editing for a workflow that has no function yet. */
 const NEW_FUNCTION_SLOTS: ComfySlotSource = { inputs: [], outputs: [] }
@@ -1359,10 +1377,17 @@ export function FunctionRunDialog({
   const missingRequiredInputs = functionDef.inputs.filter(
     (input) => input.required && !functionInputSatisfied(values[input.key], resourcesById),
   )
+  const invalidCustomParams = isImageFunction(functionDef)
+    ? customParamsError(functionDef.image)
+    : isLlmFunction(functionDef)
+      ? customParamsError(functionDef.llm)
+      : undefined
   const disabledRunTitle =
     missingRequiredInputs.length > 0
       ? `Missing ${missingRequiredInputs.map((input) => input.label || input.key).join(', ')}`
-      : undefined
+      : invalidCustomParams
+        ? `Custom parameters: ${invalidCustomParams}`
+        : undefined
   const runBlocked = Boolean(disabledRunTitle)
   const handleRun = (mode: FunctionRunMode) => {
     onRun(values, runCount, mode)
@@ -1446,53 +1471,9 @@ export function FunctionRunDialog({
     updateRequestConfig({ headers: nextHeaders })
   }
 
-  const updateOpenAiConfig = (patch: Parameters<typeof mergedOpenAILlmConfig>[1]) => {
-    onFunctionDefChange?.({ ...functionDef, openai: mergedOpenAILlmConfig(functionDef.openai, patch) })
-  }
-
-  const updateGeminiConfig = (patch: Parameters<typeof mergedGeminiLlmConfig>[1]) => {
-    onFunctionDefChange?.({ ...functionDef, gemini: mergedGeminiLlmConfig(functionDef.gemini, patch) })
-  }
-
-  const updateOpenAiImageConfig = (patch: Parameters<typeof mergedOpenAIImageConfig>[1]) => {
-    onFunctionDefChange?.({ ...functionDef, openaiImage: mergedOpenAIImageConfig(functionDef.openaiImage, patch) })
-  }
-
-  const updateGeminiImageConfig = (patch: Parameters<typeof mergedGeminiImageConfig>[1]) => {
-    onFunctionDefChange?.({ ...functionDef, geminiImage: mergedGeminiImageConfig(functionDef.geminiImage, patch) })
-  }
-
-  const updateOpenAiPrompt = (prompt: string) => {
-    updateOpenAiConfig({
-      messages: [
-        {
-          role: 'user',
-          content: [{ type: 'text', content: prompt }, ...providerImageContentParts(functionDef)],
-        },
-      ],
-    })
-  }
-
-  const updateGeminiPrompt = (prompt: string) => {
-    updateGeminiConfig({
-      messages: [
-        {
-          role: 'user',
-          content: [{ type: 'text', content: prompt }, ...providerImageContentParts(functionDef)],
-        },
-      ],
-    })
-  }
-
   const requestConfig = isRequestFunction(functionDef) ? mergedRequestConfig(functionDef.request) : undefined
-  const openAiConfig = isOpenAILlmFunction(functionDef) ? mergedOpenAILlmConfig(functionDef.openai) : undefined
-  const geminiConfig = isGeminiLlmFunction(functionDef) ? mergedGeminiLlmConfig(functionDef.gemini) : undefined
-  const openAiImageConfig = isOpenAIImageFunction(functionDef)
-    ? mergedOpenAIImageConfig(functionDef.openaiImage)
-    : undefined
-  const geminiImageConfig = isGeminiImageFunction(functionDef)
-    ? mergedGeminiImageConfig(functionDef.geminiImage)
-    : undefined
+  const imageModelConfig = isImageFunction(functionDef) ? { ...defaultImageModelConfig(), ...functionDef.image } : undefined
+  const llmModelConfig = isLlmFunction(functionDef) ? { ...defaultLlmModelConfig(), ...functionDef.llm } : undefined
 
   const inputPartition = partitionRunInputs(functionDef.inputs, values, resourcesById)
   const shownInputs = showAllInputs ? functionDef.inputs : inputPartition.visible
@@ -1609,57 +1590,37 @@ export function FunctionRunDialog({
               </AdvancedSettings>
             </section>
           ) : null}
-          {onFunctionDefChange && openAiConfig ? (
-            <section className="function-run-provider" aria-label="OpenAI settings">
+          {onFunctionDefChange && llmModelConfig ? (
+            <section className="function-run-provider" aria-label="LLM settings">
               <label className="dialog-field">
                 <span>Prompt</span>
                 <textarea
-                  aria-label="OpenAI prompt"
+                  aria-label="LLM prompt"
                   rows={3}
-                  value={textPromptFromProviderMessages(openAiConfig.messages)}
-                  onChange={(event) => updateOpenAiPrompt(event.target.value)}
+                  value={textPromptFromProviderMessages(llmModelConfig.messages)}
+                  onChange={(event) =>
+                    onFunctionDefChange({
+                      ...functionDef,
+                      llm: { ...llmModelConfig, messages: messagesWithPrompt(functionDef, llmModelConfig.messages, event.target.value) },
+                    })
+                  }
                 />
               </label>
-              <ProviderConnectionSettings
-                provider="OpenAI"
-                config={openAiConfig}
-                onChange={(patch) => updateOpenAiConfig(patch)}
+              <ProviderModelSettings
+                kind="llm"
+                label="LLM"
+                config={llmModelConfig}
+                onChange={(llm) => onFunctionDefChange({ ...functionDef, llm })}
               />
             </section>
           ) : null}
-          {onFunctionDefChange && geminiConfig ? (
-            <section className="function-run-provider" aria-label="Gemini settings">
-              <label className="dialog-field">
-                <span>Prompt</span>
-                <textarea
-                  aria-label="Gemini prompt"
-                  rows={3}
-                  value={textPromptFromProviderMessages(geminiConfig.messages)}
-                  onChange={(event) => updateGeminiPrompt(event.target.value)}
-                />
-              </label>
-              <ProviderConnectionSettings
-                provider="Gemini"
-                config={geminiConfig}
-                onChange={(patch) => updateGeminiConfig(patch)}
-              />
-            </section>
-          ) : null}
-          {onFunctionDefChange && openAiImageConfig ? (
-            <section className="function-run-provider" aria-label="OpenAI image settings">
-              <ProviderConnectionSettings
-                provider="OpenAI image"
-                config={openAiImageConfig}
-                onChange={(patch) => updateOpenAiImageConfig(patch)}
-              />
-            </section>
-          ) : null}
-          {onFunctionDefChange && geminiImageConfig ? (
-            <section className="function-run-provider" aria-label="Gemini image settings">
-              <ProviderConnectionSettings
-                provider="Gemini image"
-                config={geminiImageConfig}
-                onChange={(patch) => updateGeminiImageConfig(patch)}
+          {onFunctionDefChange && imageModelConfig ? (
+            <section className="function-run-provider" aria-label="Image settings">
+              <ProviderModelSettings
+                kind="image"
+                label="Image"
+                config={imageModelConfig}
+                onChange={(image) => onFunctionDefChange({ ...functionDef, image })}
               />
             </section>
           ) : null}
@@ -1879,10 +1840,13 @@ const functionKindLabel = (functionDef: GenerationFunction) => {
   if (functionDef.workflow.format === 'comfyui_api_json') return 'ComfyUI workflow'
   if (functionDef.workflow.format === 'local_transform') return 'Local tool'
   if (isRequestFunction(functionDef)) return 'HTTP request'
-  if (isOpenAILlmFunction(functionDef)) return 'OpenAI text'
-  if (isGeminiLlmFunction(functionDef)) return 'Gemini text'
-  if (isOpenAIImageFunction(functionDef)) return 'OpenAI image'
-  if (isGeminiImageFunction(functionDef)) return 'Gemini image'
+  if (isImageFunction(functionDef) || isLlmFunction(functionDef)) {
+    const config = isImageFunction(functionDef) ? functionDef.image : functionDef.llm
+    const model = config ? (findModel(isImageFunction(functionDef) ? 'image' : 'llm', config.model)?.label ?? config.model) : ''
+    return [isImageFunction(functionDef) ? 'Image' : 'LLM', model, config?.apiFormat === 'gemini' ? 'Gemini API' : 'OpenAI-compatible API']
+      .filter(Boolean)
+      .join(' · ')
+  }
   return functionDef.category ?? 'Function'
 }
 
@@ -1898,58 +1862,6 @@ function AdvancedSettings({ summary, warning, children }: { summary: string; war
       </summary>
       <div className="dialog-advanced-body function-run-provider-fields">{children}</div>
     </details>
-  )
-}
-
-type ProviderConnectionConfig = { apiKey: string; baseUrl: string; model: string }
-
-function ProviderConnectionSettings({
-  provider,
-  config,
-  onChange,
-}: {
-  provider: string
-  config: ProviderConnectionConfig
-  onChange: (patch: Partial<ProviderConnectionConfig>) => void
-}) {
-  let host = config.baseUrl
-  try {
-    host = new URL(config.baseUrl).host
-  } catch {
-    // Show the raw value while the user is still typing a URL.
-  }
-  return (
-    <AdvancedSettings
-      summary={[config.model || 'No model', host].filter(Boolean).join(' · ')}
-      warning={config.apiKey.trim() ? undefined : 'API key needed'}
-    >
-      <label>
-        <span>API key</span>
-        <input
-          aria-label={`${provider} API key`}
-          autoComplete="off"
-          type="password"
-          value={config.apiKey}
-          onChange={(event) => onChange({ apiKey: event.target.value })}
-        />
-      </label>
-      <label>
-        <span>Base URL</span>
-        <input
-          aria-label={`${provider} base URL`}
-          value={config.baseUrl}
-          onChange={(event) => onChange({ baseUrl: event.target.value })}
-        />
-      </label>
-      <label>
-        <span>Model</span>
-        <input
-          aria-label={`${provider} model`}
-          value={config.model}
-          onChange={(event) => onChange({ model: event.target.value })}
-        />
-      </label>
-    </AdvancedSettings>
   )
 }
 
@@ -2290,8 +2202,7 @@ function CanvasSurface() {
   const loadComfyNodeTypes = useProjectStore((state) => state.loadComfyNodeTypes)
   const saveFunctionWorkflow = useProjectStore((state) => state.saveFunctionWorkflow)
   const addRequestFunction = useProjectStore((state) => state.addRequestFunction)
-  const addOpenAILlmFunction = useProjectStore((state) => state.addOpenAILlmFunction)
-  const addGeminiLlmFunction = useProjectStore((state) => state.addGeminiLlmFunction)
+  const addLlmFunction = useProjectStore((state) => state.addLlmFunction)
   const updateFunction = useProjectStore((state) => state.updateFunction)
   const connectNodes = useProjectStore((state) => state.connectNodes)
   const deleteEdges = useProjectStore((state) => state.deleteEdges)
@@ -2516,9 +2427,11 @@ function CanvasSurface() {
       const taskId = resource?.source.taskId
       const task = taskId ? project.tasks[taskId] : undefined
       const functionId = task?.functionId ?? resource?.metadata?.workflowFunctionId
-      const functionDef = functionId
+      const storedFunctionDef = functionId
         ? project.functions[functionId] ?? task?.functionSnapshot ?? resource?.metadata?.functionSnapshot
         : undefined
+      // Snapshots of OpenAI / Gemini runs open as the merged Image / LLM function.
+      const functionDef = storedFunctionDef ? migrateProviderFunction(storedFunctionDef) : undefined
       if (!resource || !functionId || !functionDef) return
 
       const sourceNode = project.canvas.nodes.find(
@@ -5210,8 +5123,7 @@ function CanvasSurface() {
           }}
           onAddWorkflow={addFunctionFromWorkflow}
           onAddRequestFunction={addRequestFunction}
-          onAddOpenAIFunction={addOpenAILlmFunction}
-          onAddGeminiFunction={addGeminiLlmFunction}
+          onAddLlmFunction={addLlmFunction}
           onUpdateFunction={updateFunction}
           onDeleteFunction={() => undefined}
           onClose={() => setFunctionEditor(undefined)}
