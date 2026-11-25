@@ -858,7 +858,9 @@ describe('CanvasWorkspace', () => {
     })
 
     fireEvent.contextMenu(assetNode, { clientX: 220, clientY: 160 })
-    fireEvent.click(screen.getByRole('button', { name: /Inspect|查看/ }))
+    // The selection ribbon also offers Inspect; this test covers the context menu entry.
+    const quickActions = screen.getByLabelText('Resource quick actions')
+    fireEvent.click(within(quickActions).getByRole('button', { name: /Inspect|查看/ }))
 
     const dialog = screen.getByRole('dialog', { name: /Inspector|查看/ })
     expect(within(dialog).getByText('node_asset_inspect')).toBeVisible()
@@ -874,7 +876,7 @@ describe('CanvasWorkspace', () => {
     expect(screen.queryByRole('dialog', { name: /Inspector|查看/ })).not.toBeInTheDocument()
 
     fireEvent.contextMenu(assetNode, { clientX: 220, clientY: 160 })
-    fireEvent.click(screen.getByRole('button', { name: /Inspect|查看/ }))
+    fireEvent.click(within(screen.getByLabelText('Resource quick actions')).getByRole('button', { name: /Inspect|查看/ }))
     const reopenedDialog = screen.getByRole('dialog', { name: /Inspector|查看/ })
     fireEvent.click(within(reopenedDialog).getByRole('button', { name: 'Open Inspector Reference preview' }))
     expect(screen.getByRole('dialog', { name: /Preview inspect\.png/ })).toBeVisible()

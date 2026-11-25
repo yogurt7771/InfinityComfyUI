@@ -38,8 +38,13 @@ import {
   useViewport,
 } from '@xyflow/react'
 import {
+  BookmarkPlus,
   CaseSensitive,
+  Copy,
   GitCompareArrows,
+  RefreshCcw,
+  SlidersHorizontal,
+  Sparkles,
   Grid2X2,
   Image,
   Info,
@@ -93,11 +98,12 @@ import {
   parseComfyApiWorkflowJson,
   workflowInputBindingExists,
   workflowInputCandidates,
-  workflowPrimitiveInputValue,
 } from '../domain/workflow'
 import { useProjectStore } from '../store/projectStore'
 import { shouldIgnoreCanvasShortcut } from './canvasKeyboard'
 import { buildFlowNodeRenderIndex, flowNodeRenderDependencies, stabilizeFlowNodes } from './canvasFlowNodes'
+import { buildFunctionRunInputDraft, matchFunctionsForSelection, readingOrderNodeIds, type SelectionFunctionMatch } from './selectionFunctionMatches'
+import { SelectionRibbon, type SelectionRibbonAction } from './SelectionRibbon'
 import type {
   CanvasNode,
   ExecutionTask,
@@ -374,36 +380,7 @@ const functionRunInputsFromTask = (task: ExecutionTask): Record<string, Primitiv
   return values
 }
 
-export const buildFunctionRunInputDraft = (
-  functionDef: GenerationFunction,
-  resourcesById: Record<string, Resource>,
-  candidateRefs: ResourceRef[],
-) => {
-  const usedResourceIds = new Set<string>()
-  const inputValues: Record<string, PrimitiveInputValue | ResourceRef> = {}
-
-  for (const input of functionDef.inputs) {
-    const resourceRef = candidateRefs.find((ref) => {
-      if (usedResourceIds.has(ref.resourceId) || ref.type !== input.type) return false
-      return Boolean(resourcesById[ref.resourceId])
-    })
-
-    if (resourceRef) {
-      inputValues[input.key] = resourceRef
-      usedResourceIds.add(resourceRef.resourceId)
-      continue
-    }
-
-    if (input.type === 'text' || input.type === 'number' || input.type === 'boolean') {
-      inputValues[input.key] =
-        input.defaultValue ??
-        workflowPrimitiveInputValue(functionDef, input) ??
-        (input.type === 'number' ? 0 : input.type === 'boolean' ? false : '')
-    }
-  }
-
-  return inputValues
-}
+export { buildFunctionRunInputDraft }
 
 export const pickableResourceRefsForInput = (project: ProjectState, inputType: ResourceType) =>
   visibleCanvasNodes(project.canvas.nodes).flatMap((node) => {
@@ -2255,6 +2232,19 @@ function CanvasSurface() {
   const visibleNodes = useMemo(() => visibleCanvasNodes(project.canvas.nodes), [project.canvas.nodes])
   const visibleEdges = useMemo(() => visibleFlowEdges(buildCanvasFlowEdges(project), visibleNodes), [project, visibleNodes])
   const activeSelectedNodeIdSet = useMemo(() => new Set(activeSelectedNodeIds), [activeSelectedNodeIds])
+  const selectionOrderAttributesById = useMemo(
+    () =>
+      new Map(
+        activeSelectedNodeIds.length > 1
+          ? activeSelectedNodeIds.map(
+              (nodeId, index) =>
+                // React Flow spreads domAttributes onto the node element; data-* is valid there but not in its type.
+                [nodeId, { 'data-selection-order': String(index + 1) } as unknown as Node['domAttributes']] as const,
+            )
+          : [],
+      ),
+    [activeSelectedNodeIds],
+  )
   const selectedEdgeIdSet = useMemo(() => new Set(selectedEdgeIds), [selectedEdgeIds])
   const selectionHighlights = useMemo(
     () => buildCanvasSelectionHighlights(visibleNodes, visibleEdges, activeSelectedNodeIds, selectedEdgeIds, traceHighlightNodeIds),
@@ -2401,6 +2391,7 @@ function CanvasSurface() {
         type: node.type,
         position: node.position,
         selected: activeSelectedNodeIdSet.has(node.id),
+        domAttributes: selectionOrderAttributesById.get(node.id),
         zIndex: zIndexByNodeId.get(node.id),
         className: mergeClassNames(
           selectionHighlights.nodeClassNamesById.get(node.id),
@@ -2466,6 +2457,7 @@ function CanvasSurface() {
       rerunResultNode,
       runFunctionNodeWithComfy,
       activeSelectedNodeIdSet,
+      selectionOrderAttributesById,
       cancelResultRun,
       updateFunctionNodeInputValue,
       updateFunctionNodeRunCount,
@@ -3896,11 +3888,21 @@ function CanvasSurface() {
         .filter((nodeId): nodeId is string => Boolean(nodeId))
 
       const rectSelectedIds = selectionBoxRect.current ? selectedNodeIdsFromClientSelectionRect(selectionBoxRect.current) : []
-      const nextSelectedIds = expandGroupSelectionIds(
-        uniqueIds(
-          selectedIds.length > 0 ? selectedIds : rectSelectedIds.length > 0 ? rectSelectedIds : selectionBoxNodeIds.current,
-        ),
+      const boxedIds = uniqueIds(
+        selectedIds.length > 0 ? selectedIds : rectSelectedIds.length > 0 ? rectSelectedIds : selectionBoxNodeIds.current,
       )
+      // Selection order drives the order badges and order-dependent ribbon actions: nodes that stay selected
+      // keep their order, newly boxed nodes follow in reading order.
+      const boxedIdSet = new Set(boxedIds)
+      const keptIds = activeSelectedNodeIds.filter((nodeId) => boxedIdSet.has(nodeId))
+      const keptIdSet = new Set(keptIds)
+      const nextSelectedIds = expandGroupSelectionIds([
+        ...keptIds,
+        ...readingOrderNodeIds(
+          visibleNodes,
+          boxedIds.filter((nodeId) => !keptIdSet.has(nodeId)),
+        ),
+      ])
       ignoreSelectionSyncUntil.current = Date.now() + 250
       forcedFlowSelectionNodeIds.current = nextSelectedIds
       clearSelectedEdgeIds()
@@ -3910,7 +3912,15 @@ function CanvasSurface() {
       selectionBoxNodeIds.current = []
       selectionBoxRect.current = null
     })
-  }, [clearSelectedEdgeIds, expandGroupSelectionIds, recordNodeSelectionRecency, selectNodes, syncFlowNodeSelection])
+  }, [
+    activeSelectedNodeIds,
+    clearSelectedEdgeIds,
+    expandGroupSelectionIds,
+    recordNodeSelectionRecency,
+    selectNodes,
+    syncFlowNodeSelection,
+    visibleNodes,
+  ])
 
   const handleEdgeClick = useCallback<EdgeMouseHandler>(
     (event, edge) => {
@@ -4113,6 +4123,175 @@ function CanvasSurface() {
   const onNodeContextMenu: NodeMouseHandler = useStableCallback(handleNodeContextMenu)
   const onEdgeClick: EdgeMouseHandler = useStableCallback(handleEdgeClick)
 
+  const selectedCanvasNodes = useMemo(() => {
+    const nodesById = new Map(project.canvas.nodes.map((node) => [node.id, node]))
+    return activeSelectedNodeIds.flatMap((nodeId) => {
+      const node = nodesById.get(nodeId)
+      return node ? [node] : []
+    })
+  }, [activeSelectedNodeIds, project.canvas.nodes])
+  const selectedResourceRefs = useMemo(
+    () => activeSelectedNodeIds.flatMap((nodeId) => sourceResourceRefs(nodeId)),
+    [activeSelectedNodeIds, sourceResourceRefs],
+  )
+  const selectionFunctionMatches = useMemo(
+    () =>
+      selectedResourceRefs.length > 0
+        ? matchFunctionsForSelection(Object.values(project.functions), project.resources, selectedResourceRefs)
+        : [],
+    [project.functions, project.resources, selectedResourceRefs],
+  )
+
+  const runSelectionFunction = (match: SelectionFunctionMatch) => {
+    const anchorNode = [...selectedCanvasNodes].reverse().find((node) => node.type === 'resource') ?? selectedCanvasNodes.at(-1)
+    const position = anchorNode ? commandPositionForSourceNode(anchorNode.id) : clipboardPastePosition()
+    const functionDef = match.functionDef
+    const runCount = functionDef.runtimeDefaults?.runCount ?? 1
+    if (isBuiltInFunction(functionDef) && functionDef.workflow.format !== 'local_transform') {
+      // Built-in runners run as temporary functions, as from the Add node menu.
+      const temporaryFunction = {
+        ...functionDef,
+        id: temporaryRunnerId(functionDef.id),
+        name: builtInFunctionMenuLabels[functionDef.id] ?? functionDef.name,
+      }
+      openFunctionRunDialog({ functionId: temporaryFunction.id, temporaryFunction, inputValues: match.inputValues, runCount, position })
+      return
+    }
+    openFunctionRunDialog({ functionId: functionDef.id, inputValues: match.inputValues, runCount, position })
+  }
+
+  const selectedSingleNode = selectedCanvasNodes.length === 1 ? selectedCanvasNodes[0] : undefined
+  const selectedSingleResource =
+    selectedSingleNode?.type === 'resource' && typeof selectedSingleNode.data.resourceId === 'string'
+      ? project.resources[selectedSingleNode.data.resourceId]
+      : undefined
+
+  const handleRibbonAction = (action: SelectionRibbonAction) => {
+    if (action.match) {
+      runSelectionFunction(action.match)
+      return
+    }
+    switch (action.id) {
+      case 'inspect':
+        if (selectedSingleNode) openAssetInspector(selectedSingleNode.id)
+        return
+      case 'rerun':
+        if (selectedSingleResource) rerunResource(selectedSingleResource.id)
+        return
+      case 'edit-rerun':
+        if (selectedSingleResource) openFunctionRunForResource(selectedSingleResource.id)
+        return
+      case 'compare':
+        if (selectedComparePair) setComparePair(selectedComparePair)
+        return
+      case 'group':
+        groupActiveSelection()
+        return
+      case 'ungroup':
+        if (selectedSingleNode?.type === 'group') {
+          ignoreSelectionSyncUntil.current = Date.now() + 250
+          ungroupNode(selectedSingleNode.id)
+        }
+        return
+      case 'template':
+        saveSelectionAsTemplate()
+        return
+      case 'duplicate':
+        duplicateNodes(activeSelectedNodeIds)
+        return
+      case 'delete':
+        deleteNodes(activeSelectedNodeIds)
+        clearCanvasSelection()
+        return
+    }
+  }
+
+  const selectionRibbon = (() => {
+    if (selectedCanvasNodes.length === 0) return undefined
+    const selectionIndexByResourceId = new Map<string, number>()
+    activeSelectedNodeIds.forEach((nodeId, index) => {
+      for (const ref of sourceResourceRefs(nodeId)) {
+        if (!selectionIndexByResourceId.has(ref.resourceId)) selectionIndexByResourceId.set(ref.resourceId, index + 1)
+      }
+    })
+    const functionActions: SelectionRibbonAction[] = selectionFunctionMatches.map((match) => {
+      const label = builtInFunctionMenuLabels[match.functionDef.id] ?? match.functionDef.name
+      const mapping = match.functionDef.inputs
+        .flatMap((input) => {
+          const value = match.inputValues[input.key]
+          const order = isResourceRefValue(value) ? selectionIndexByResourceId.get(value.resourceId) : undefined
+          return order ? [`#${order} → ${input.label || input.key}`] : []
+        })
+        .join(', ')
+      return {
+        id: `fn:${match.functionDef.id}`,
+        label,
+        title: `${label}: ${mapping}`,
+        icon:
+          match.functionDef.workflow.format === 'local_transform' ? (
+            <LocalQuickActionIcon kind={match.functionDef.localTransform?.kind} />
+          ) : (
+            <Sparkles size={15} />
+          ),
+        tone: 'primary',
+        match,
+      }
+    })
+
+    const assetActions: SelectionRibbonAction[] = []
+    if (selectedSingleNode && selectedSingleNode.type !== 'group' && sourceResourceRefs(selectedSingleNode.id).length > 0) {
+      assetActions.push({ id: 'inspect', label: 'Inspect', icon: <Info size={15} /> })
+    }
+    const singleTask = selectedSingleResource?.source.taskId ? project.tasks[selectedSingleResource.source.taskId] : undefined
+    if (selectedSingleResource?.source.kind === 'function_output' && singleTask) {
+      const functionId = singleTask.functionId || selectedSingleResource.metadata?.workflowFunctionId
+      const hasFunction = Boolean(
+        functionId &&
+          (project.functions[functionId] ?? singleTask.functionSnapshot ?? selectedSingleResource.metadata?.functionSnapshot),
+      )
+      if (hasFunction && (singleTask.status === 'failed' || singleTask.status === 'canceled')) {
+        assetActions.push({ id: 'rerun', label: 'Rerun', icon: <RefreshCcw size={15} /> })
+      }
+      if (hasFunction && ['failed', 'canceled', 'succeeded'].includes(singleTask.status)) {
+        assetActions.push({ id: 'edit-rerun', label: 'Edit & Rerun', title: 'Edit inputs and rerun', icon: <SlidersHorizontal size={15} /> })
+      }
+    }
+    if (selectedComparePair) {
+      assetActions.push({ id: 'compare', label: 'Compare selected runs', icon: <GitCompareArrows size={15} /> })
+    }
+
+    const selectionActions: SelectionRibbonAction[] = []
+    const groupableCount = selectedCanvasNodes.filter((node) => node.type !== 'group').length
+    const singleGroup = selectedSingleNode?.type === 'group'
+    if (groupableCount >= 2) {
+      selectionActions.push({ id: 'group', label: 'Group', title: 'Group selection (Ctrl+G)', icon: <Layers size={15} />, iconOnly: true })
+    }
+    if (singleGroup) selectionActions.push({ id: 'ungroup', label: 'Ungroup', icon: <Scissors size={15} />, iconOnly: true })
+    if (groupableCount >= 2 || singleGroup) {
+      selectionActions.push({ id: 'template', label: 'Save as Template', icon: <BookmarkPlus size={15} />, iconOnly: true })
+    }
+    selectionActions.push(
+      { id: 'duplicate', label: 'Duplicate', title: 'Duplicate (Ctrl+D)', icon: <Copy size={15} />, iconOnly: true },
+      { id: 'delete', label: 'Delete', title: 'Delete (Del)', icon: <Trash2 size={15} />, tone: 'danger', iconOnly: true },
+    )
+
+    const typeCounts = new Map<string, number>()
+    for (const node of selectedCanvasNodes) {
+      const resource =
+        node.type === 'resource' && typeof node.data.resourceId === 'string' ? project.resources[node.data.resourceId] : undefined
+      const kind = node.type === 'group' ? 'group' : (resource?.type ?? node.type)
+      typeCounts.set(kind, (typeCounts.get(kind) ?? 0) + 1)
+    }
+    const summary = [`${selectedCanvasNodes.length} selected`, ...[...typeCounts].map(([kind, count]) => `${kind} ${count}`)].join(' · ')
+
+    return {
+      summary,
+      functionActions: functionActions.slice(0, 4),
+      overflowFunctionActions: functionActions.slice(4),
+      assetActions,
+      selectionActions,
+    }
+  })()
 
   return (
     <section
@@ -4142,7 +4321,7 @@ function CanvasSurface() {
         if (eventHitsCanvasNode(event, target)) return
         if (
           target?.closest(
-            '.react-flow__node, .react-flow__edge, button, input, select, textarea, .react-flow__controls, .comfy-minimap, .add-node-menu, .resource-quick-actions, .function-node-actions',
+            '.react-flow__node, .react-flow__edge, button, input, select, textarea, .react-flow__controls, .comfy-minimap, .add-node-menu, .resource-quick-actions, .function-node-actions, .selection-ribbon',
           )
         ) {
           return
@@ -4157,7 +4336,7 @@ function CanvasSurface() {
         const target = event.target as HTMLElement
         if (
           eventHitsCanvasNode(event, target) ||
-          target.closest('button, input, textarea, .react-flow__controls, .comfy-minimap, .add-node-menu')
+          target.closest('button, input, textarea, .react-flow__controls, .comfy-minimap, .add-node-menu, .selection-ribbon')
         ) {
           return
         }
@@ -4169,7 +4348,7 @@ function CanvasSurface() {
         if (
           eventHitsCanvasNode(event, target) ||
           target.closest(
-            'button, input, textarea, .react-flow__controls, .comfy-minimap, .add-node-menu, .resource-quick-actions, .function-node-actions',
+            'button, input, textarea, .react-flow__controls, .comfy-minimap, .add-node-menu, .resource-quick-actions, .function-node-actions, .selection-ribbon',
           )
         ) {
           return
@@ -4608,14 +4787,7 @@ function CanvasSurface() {
           onClose={() => setFunctionEditor(undefined)}
         />
       ) : null}
-      {selectedComparePair ? (
-        <div className="compare-toolbar">
-          <button type="button" aria-label="Compare selected runs" onClick={() => setComparePair(selectedComparePair)}>
-            <GitCompareArrows size={15} />
-            Compare
-          </button>
-        </div>
-      ) : null}
+      {selectionRibbon && !inputPickMode ? <SelectionRibbon {...selectionRibbon} onAction={handleRibbonAction} /> : null}
       {comparePair ? <CompareRunResultsModal pair={comparePair} onClose={() => setComparePair(null)} /> : null}
     </section>
   )
