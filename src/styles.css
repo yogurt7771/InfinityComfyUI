@@ -9317,3 +9317,11 @@ body[data-theme='light'] .function-run-dialog .local-action-footer button:not(.p
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* An output slot on one output socket of a node (function settings) */
+:is(body[data-theme], body) .binding-note {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}

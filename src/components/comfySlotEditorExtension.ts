@@ -1,13 +1,16 @@
 import {
-  editorNodeInputFields,
+  editorNodeInputs,
+  editorNodeOutputs,
   editorNodeOutputType,
   effectiveEditorSlots,
+  outputSlotId,
   renameEditorSlot,
   toggleEditorInput,
-  toggleEditorOutput,
+  toggleEditorOutputSlot,
   type EditorNode,
   type EditorSlotState,
 } from '../domain/comfySlotEditor'
+import { comfyNodeTypesFromObjectInfo } from '../domain/comfyNodeTypes'
 
 /**
  * Lets the embedded ComfyUI editor (iframe or separate window) set a function's input / output slots: a node's
@@ -39,9 +42,10 @@ type LiteNode = {
   size: ArrayLike<number>
   graph?: unknown
   inputs?: LiteInput[]
+  outputs?: Array<{ name?: string; type?: unknown }>
   widgets?: LiteWidget[]
   isInputConnected?: (slot: number) => boolean
-  constructor: { nodeData?: { output_node?: boolean }; comfyClass?: string }
+  constructor: { nodeData?: { output_node?: boolean; input?: unknown }; comfyClass?: string }
 }
 type LiteGraphLike = { _nodes?: LiteNode[]; getNodeById?: (id: number | string) => LiteNode | null | undefined }
 type MenuItem = {
@@ -88,14 +92,32 @@ export function editorNodesFromGraph(app: ComfySlotEditorApp): EditorNode[] {
       inputs.flatMap((input, index) => (input.widget?.name && isConnected(node, index, input) ? [input.widget.name] : [])),
     )
     const outputNode = node.constructor?.nodeData?.output_node
+    const classType = node.comfyClass ?? node.constructor?.comfyClass ?? node.type ?? ''
+    // The node definition's input types (INT, COMBO, IMAGE…) type each field and socket without guessing.
+    const definition = comfyNodeTypesFromObjectInfo({ [classType]: node.constructor?.nodeData ?? {} })[classType]
+    const inputTypes = Object.fromEntries(
+      Object.entries(definition?.inputTypes ?? {}).map(([name, types]) => [name, types[0] ?? '']),
+    )
     return {
       nodeId: String(node.id),
       title: node.title ?? node.type ?? String(node.id),
-      classType: node.comfyClass ?? node.constructor?.comfyClass ?? node.type ?? '',
+      classType,
       outputNode: typeof outputNode === 'boolean' ? outputNode : undefined,
       linkedInputTypes: inputs.flatMap((input, index) =>
         isConnected(node, index, input) && !input.widget ? [String(input.type ?? '')] : [],
       ),
+      // Sockets: plain inputs, plus widgets turned into a connected input (their value comes from the link).
+      inputSockets: inputs.flatMap((input, index) => {
+        const linked = isConnected(node, index, input)
+        if (!input.name || (input.widget && !linked)) return []
+        return [{ name: input.name, type: String(input.type ?? ''), linked }]
+      }),
+      outputSockets: (node.outputs ?? []).map((output, index) => ({
+        index,
+        name: output.name ?? String(output.type ?? index),
+        type: String(output.type ?? ''),
+      })),
+      inputTypes,
       fields: (node.widgets ?? [])
         .filter(
           (widget) =>
@@ -139,25 +161,35 @@ export function slotMenuItems(win: SlotEditorWindow, app: ComfySlotEditorApp, no
     app.canvas?.setDirty?.(true, true)
   }
 
-  const output = effective.outputs.find((slot) => slot.bind.nodeId === nodeId)
-  const outputType = editorNodeOutputType(editorNode)
-  const outputItem: MenuItem = output
-    ? {
-        content: `✓ Output slot: ${output.label} · ${output.type}${output.auto ? ' (default)' : ''}`,
-        callback: () => update(toggleEditorOutput(controller.getState(), editorNodesFromGraph(app), nodeId)),
-      }
-    : outputType.type
-      ? {
-          content: `Use as output slot (${outputType.type})`,
-          callback: () => update(toggleEditorOutput(controller.getState(), editorNodesFromGraph(app), nodeId)),
-        }
-      : { content: `Output slot unavailable: ${outputReason[outputType.reason ?? 'not_output_node']}`, disabled: true }
-
-  const fields = editorNodeInputFields(editorNode)
-  const inputOptions: MenuItem[] = fields.map(({ field, type }) => {
-    const slot = effective.inputs.find((input) => input.bind.nodeId === nodeId && input.bind.path === `inputs.${field}`)
+  const nodeOutputs = effective.outputs.filter((slot) => slot.bind.nodeId === nodeId)
+  const outputCandidates = editorNodeOutputs(editorNode)
+  const outputOptions: MenuItem[] = outputCandidates.map((candidate) => {
+    const slot = nodeOutputs.find((item) => outputSlotId(item.bind) === candidate.slotId)
+    const what = candidate.outputIndex === undefined ? 'Node result' : `${candidate.outputName} #${candidate.outputIndex}`
     return {
-      content: slot ? `✓ ${field} → ${slot.label}${slot.auto ? ' (default)' : ''}` : `${field} (${type})`,
+      content: slot
+        ? `✓ ${what} → ${slot.label} · ${slot.type}${slot.auto ? ' (default)' : ''}`
+        : `${what} (${candidate.type})`,
+      callback: () => update(toggleEditorOutputSlot(controller.getState(), editorNodesFromGraph(app), candidate.slotId)),
+    }
+  })
+  const outputItem: MenuItem = outputOptions.length
+    ? { content: 'Output slots', has_submenu: true, submenu: { options: outputOptions } }
+    : {
+        content: `Output slots unavailable: ${
+          (editorNode.outputSockets ?? []).length
+            ? `outputs are ${[...new Set((editorNode.outputSockets ?? []).map((socket) => socket.type))].join(', ')} (not image, video, audio or text)`
+            : outputReason[editorNodeOutputType(editorNode).reason ?? 'not_output_node']
+        }`,
+        disabled: true,
+      }
+
+  const inputCandidates = editorNodeInputs(editorNode)
+  const inputOptions: MenuItem[] = inputCandidates.map(({ field, type, socketType, linked }) => {
+    const slot = effective.inputs.find((input) => input.bind.nodeId === nodeId && input.bind.path === `inputs.${field}`)
+    const what = socketType ? `${field} ⟵ ${socketType}${linked ? ', connected' : ''}` : field
+    return {
+      content: slot ? `✓ ${what} → ${slot.label}${slot.auto ? ' (default)' : ''}` : `${what} (${type})`,
       callback: () => update(toggleEditorInput(controller.getState(), editorNodesFromGraph(app), nodeId, field)),
     }
   })
@@ -168,8 +200,13 @@ export function slotMenuItems(win: SlotEditorWindow, app: ComfySlotEditorApp, no
   const nodeSlots = [
     ...effective.inputs
       .filter((input) => input.bind.nodeId === nodeId)
-      .map((input) => ({ kind: 'input' as const, key: input.key, label: input.label, field: input.bind.path?.replace(/^inputs\./, '') })),
-    ...(output ? [{ kind: 'output' as const, key: output.key, label: output.label, field: undefined }] : []),
+      .map((input) => ({ kind: 'input' as const, key: input.key, label: input.label, detail: input.bind.path?.replace(/^inputs\./, '') })),
+    ...nodeOutputs.map((slot) => ({
+      kind: 'output' as const,
+      key: slot.key,
+      label: slot.label,
+      detail: slot.bind.outputIndex === undefined ? undefined : slot.bind.outputName,
+    })),
   ]
   const renameItem: MenuItem | undefined = nodeSlots.length
     ? {
@@ -177,7 +214,7 @@ export function slotMenuItems(win: SlotEditorWindow, app: ComfySlotEditorApp, no
         has_submenu: true,
         submenu: {
           options: nodeSlots.map((slot) => ({
-            content: slot.kind === 'input' ? `IN ${slot.label} (${slot.field})…` : `OUT ${slot.label}…`,
+            content: `${slot.kind === 'input' ? 'IN' : 'OUT'} ${slot.label}${slot.detail ? ` (${slot.detail})` : ''}…`,
             callback: () => {
               void askLabel(win, app, slot.label).then((label) => {
                 if (label === undefined) return
@@ -213,17 +250,28 @@ function drawSlotTags(ctx: CanvasRenderingContext2D, app: ComfySlotEditorApp, co
   if (!graph || (app.canvas?.graph && app.canvas.graph !== graph)) return
   const nodes = editorNodesFromGraph(app)
   const effective = effectiveEditorSlots(controller.getState(), nodes)
-  const tagsByNode = new Map<string, Array<{ text: string; color: string; auto: boolean }>>()
-  const push = (nodeId: string, tag: { text: string; color: string; auto: boolean }) =>
-    tagsByNode.set(nodeId, [...(tagsByNode.get(nodeId) ?? []), tag])
+  type Tag = { text: string; short: string; color: string; auto: boolean }
+  const tagsByNode = new Map<string, Tag[]>()
+  const push = (nodeId: string, tag: Tag) => tagsByNode.set(nodeId, [...(tagsByNode.get(nodeId) ?? []), tag])
   for (const input of effective.inputs) {
     if (!input.bind.nodeId) continue
     const field = input.bind.path?.replace(/^inputs\./, '') ?? ''
-    push(input.bind.nodeId, { text: `IN: ${input.label} ← ${field}${input.auto ? ' (default)' : ''}`, color: IN_COLOR, auto: input.auto })
+    push(input.bind.nodeId, {
+      text: `IN: ${input.label} ← ${field}${input.auto ? ' (default)' : ''}`,
+      short: `IN: ${input.label}`,
+      color: IN_COLOR,
+      auto: input.auto,
+    })
   }
   for (const output of effective.outputs) {
     if (!output.bind.nodeId) continue
-    push(output.bind.nodeId, { text: `OUT: ${output.label} · ${output.type}${output.auto ? ' (default)' : ''}`, color: OUT_COLOR, auto: output.auto })
+    const socket = output.bind.outputIndex === undefined ? '' : ` ← ${output.bind.outputName ?? `#${output.bind.outputIndex}`}`
+    push(output.bind.nodeId, {
+      text: `OUT: ${output.label} · ${output.type}${socket}${output.auto ? ' (default)' : ''}`,
+      short: `OUT: ${output.label}${socket}`,
+      color: OUT_COLOR,
+      auto: output.auto,
+    })
   }
   if (!tagsByNode.size) return
 
@@ -238,15 +286,25 @@ function drawSlotTags(ctx: CanvasRenderingContext2D, app: ComfySlotEditorApp, co
     const node = graphNodes(graph).find((item) => String(item.id) === nodeId)
     if (!node) continue
     const [x, y] = [node.pos[0]!, node.pos[1]!]
+    // Keep each tag over its own node: full text if it fits, else the short form, else cut with an ellipsis.
+    const maxText = Math.max(Number(node.size[0]) || 0, 120) - 16 * k
+    const fit = (tag: Tag) => {
+      if (ctx.measureText(tag.text).width <= maxText) return tag.text
+      if (ctx.measureText(tag.short).width <= maxText) return tag.short
+      let text = tag.short
+      while (text.length > 1 && ctx.measureText(`${text}…`).width > maxText) text = text.slice(0, -1)
+      return `${text}…`
+    }
     tags.forEach((tag, index) => {
-      const width = ctx.measureText(tag.text).width + 16 * k
+      const text = fit(tag)
+      const width = ctx.measureText(text).width + 16 * k
       const top = y - TITLE_HEIGHT - 6 - (tags.length - index) * (tagHeight + 4 * k)
       ctx.globalAlpha = tag.auto ? 0.6 : 1
       ctx.fillStyle = tag.color
       roundRect(ctx, x, top, width, tagHeight, 6 * k)
       ctx.fill()
       ctx.fillStyle = '#111827'
-      ctx.fillText(tag.text, x + 8 * k, top + tagHeight / 2 + 0.5)
+      ctx.fillText(text, x + 8 * k, top + tagHeight / 2 + 0.5)
     })
     // Mark the bound widgets themselves (classic canvas rendering exposes each widget's row position).
     for (const input of effective.inputs) {

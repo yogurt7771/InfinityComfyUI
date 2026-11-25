@@ -3343,6 +3343,13 @@ export function FunctionManager({
                         bindingStatus(selectedFunction.workflow.rawJson, output.bind).titleInvalid) ? (
                           <span className="field-error">Workflow node not found</span>
                         ) : null}
+                      {!selectedIsRequest && output.bind.outputIndex !== undefined ? (
+                        <span className="binding-note">
+                          Output socket {output.bind.outputName ?? output.bind.outputIndex}
+                          {output.bind.outputType ? ` (${output.bind.outputType})` : ''}: Infinity adds a preview node behind it
+                          when running, so its result comes back.
+                        </span>
+                      ) : null}
                     </div>
                   )})}
                 </div>

@@ -471,7 +471,10 @@ export function workflowOutputCandidates(
   existingOutputs: FunctionOutputDef[],
   nodeTypes?: ComfyNodeTypes,
 ): FunctionOutputDef[] {
-  const boundNodeIds = new Set(existingOutputs.map((output) => output.bind.nodeId).filter(Boolean))
+  // Only a slot on the node's own result takes it; slots on its output sockets do not.
+  const boundNodeIds = new Set(
+    existingOutputs.filter((output) => output.bind.outputIndex === undefined).map((output) => output.bind.nodeId).filter(Boolean),
+  )
   const usedKeys = new Set(existingOutputs.map((output) => output.key))
   return workflowOutputNodes(workflow, nodeTypes)
     .filter((node) => !boundNodeIds.has(node.nodeId))
@@ -517,7 +520,9 @@ export function mergeWorkflowOutputs(
 
   const kept = current.filter((output) => !output.bind.nodeId || Object.hasOwn(nextWorkflow, output.bind.nodeId))
   const usedKeys = new Set(kept.map((output) => output.key))
-  const boundNodeIds = new Set(kept.map((output) => output.bind.nodeId).filter(Boolean))
+  const boundNodeIds = new Set(
+    kept.filter((output) => output.bind.outputIndex === undefined).map((output) => output.bind.nodeId).filter(Boolean),
+  )
   const appended: FunctionOutputDef[] = []
   for (const output of inferred) {
     const nodeId = output.bind.nodeId
@@ -590,7 +595,8 @@ export function injectWorkflowInputs(
     }
 
     const workflowNode = resolved.node
-    const bindPath = resolvedWorkflowBindPath(workflowNode, input)
+    // A socket slot names its exact input; never re-match it to a differently named field.
+    const bindPath = input.bind.socketType ? input.bind.path : resolvedWorkflowBindPath(workflowNode, input)
     setByPath(workflowNode as Record<string, unknown>, bindPath, valueForWorkflow(rawValue, resources))
   }
 

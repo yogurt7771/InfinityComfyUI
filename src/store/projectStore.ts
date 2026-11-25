@@ -64,12 +64,14 @@ import {
   hasFallbackComfyOutputs,
   inferWorkflowOutputs,
   injectWorkflowInputs,
+  isWorkflowLinkValue,
   mergeWorkflowOutputs,
   repairFallbackComfyOutputs,
   workflowPrimitiveInputValue,
 } from '../domain/workflow'
 import { comfyNodeTypesFromObjectInfo, type ComfyNodeTypes } from '../domain/comfyNodeTypes'
 import { applyEditorSlots, type EditorSlotState } from '../domain/comfySlotEditor'
+import { attachOutputSockets, injectSocketInputs } from '../domain/comfySlotRuntime'
 import { isBuiltInFunction, withoutBuiltInProjectFunctions } from '../domain/builtInFunctions'
 import { normalizeTextDisplayMode } from '../domain/textDisplay'
 import { readFileAsDataUrl, type MediaResourcePayload, type MediaResourceKind } from '../domain/resourceFiles'
@@ -1152,6 +1154,21 @@ const positionBelowNode = (
   return nonOverlappingNodePosition(existingNodes, functions, fallback, size)
 }
 
+/**
+ * The copy sent to ComfyUI for slots on sockets: input sockets take their (already injected) value directly or through a
+ * loader node, and output sockets get a preview / save node so their results come back in history. The saved workflow
+ * is never changed; results are read back with the returned outputs.
+ */
+const workflowForSocketSlots = (workflow: ComfyWorkflow, functionDef: GenerationFunction) => {
+  const socketValues: Record<string, unknown> = {}
+  for (const input of functionDef.inputs) {
+    if (!input.bind.socketType || !input.bind.nodeId) continue
+    const value = workflow[input.bind.nodeId]?.inputs?.[input.bind.path.replace(/^inputs\./, '')]
+    if (value !== undefined && value !== null && !isWorkflowLinkValue(value)) socketValues[input.key] = value
+  }
+  return attachOutputSockets(injectSocketInputs(workflow, functionDef.inputs, socketValues), functionDef.outputs)
+}
+
 const markNewCanvasNode = (node: CanvasNode, now: string): CanvasNode => ({
   ...node,
   data: {
@@ -2199,9 +2216,10 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         }))
 
         if (taskWasCanceled(item.taskId)) return
-        const result = await runComfyPrompt(client, randomized.workflow, runtime.comfyRunOptions)
+        const submitted = workflowForSocketSlots(randomized.workflow, item.functionDef)
+        const result = await runComfyPrompt(client, submitted.workflow, runtime.comfyRunOptions)
         if (taskWasCanceled(item.taskId)) return
-        const outputs = extractComfyOutputs(result.history, randomized.workflow, item.functionDef.outputs)
+        const outputs = extractComfyOutputs(result.history, submitted.workflow, submitted.outputs)
         const completedAt = runtime.now()
         const nextResources: Record<string, Resource> = {}
         const nextAssets: ProjectState['assets'] = {}
@@ -2572,9 +2590,10 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         }))
 
         if (taskWasCanceled(item.taskId)) return
-        const result = await runComfyPrompt(client, workflowForRun, runtime.comfyRunOptions)
+        const submitted = workflowForSocketSlots(workflowForRun, item.functionDef)
+        const result = await runComfyPrompt(client, submitted.workflow, runtime.comfyRunOptions)
         if (taskWasCanceled(item.taskId)) return
-        const outputs = extractComfyOutputs(result.history, workflowForRun, item.functionDef.outputs)
+        const outputs = extractComfyOutputs(result.history, submitted.workflow, submitted.outputs)
         const resourceRefs: ResourceRef[] = []
         const outputRefsByKey: Record<string, ResourceRef[]> = {}
         const newResources: Record<string, Resource> = {}

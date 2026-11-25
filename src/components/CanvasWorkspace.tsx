@@ -1243,6 +1243,7 @@ function FunctionRunOutputs({
                     <small>
                       {output.bind.nodeTitle}
                       {output.bind.nodeId ? ` · #${output.bind.nodeId}` : ''}
+                      {output.bind.outputIndex !== undefined ? ` · ${output.bind.outputName ?? `output ${output.bind.outputIndex}`}` : ''}
                     </small>
                   ) : null}
                 </span>

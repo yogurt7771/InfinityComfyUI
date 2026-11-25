@@ -154,6 +154,8 @@ export type FunctionInputDef = {
     field?: string
     path: string
     requestTarget?: 'url_param' | 'header' | 'body'
+    /** ComfyUI type of an input socket the slot feeds (set for sockets; absent for widget values). */
+    socketType?: string
   }
   upload?: {
     strategy: 'comfy_upload' | 'comfy_input_path' | 'custom_endpoint' | 'manual_path' | 'none'
@@ -171,6 +173,11 @@ export type FunctionOutputDef = {
     nodeTitle?: string
     field?: string
     path?: string
+    /** Set for a slot on one output socket of a node; absent = what the node itself reports to ComfyUI history. */
+    outputIndex?: number
+    outputName?: string
+    /** ComfyUI type of that output socket, e.g. IMAGE. */
+    outputType?: string
   }
   extract: {
     source:
