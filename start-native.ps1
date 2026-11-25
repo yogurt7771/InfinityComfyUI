@@ -38,6 +38,6 @@ if ($env:INFINITY_AUTH_PASSWORD) {
 
 # 5. 打开浏览器并启动服务
 $url = "http://127.0.0.1:$port"
-Start-Process $url
+# Start-Process $url
 Write-Host "Infinity ComfyUI 正在启动: $url （按 Ctrl+C 停止）" -ForegroundColor Green
 node server\serve.mjs
