@@ -4383,6 +4383,13 @@ function CanvasSurface() {
   }
 
   const selectedSingleNode = selectedCanvasNodes.length === 1 ? selectedCanvasNodes[0] : undefined
+  // Selecting an expanded group also selects its members; that selection still means "this one group".
+  const selectedGroupNode = useMemo(() => {
+    const groups = selectedCanvasNodes.filter((node) => node.type === 'group')
+    if (groups.length !== 1) return undefined
+    const members = new Set(groupMemberIds(groups[0]))
+    return selectedCanvasNodes.every((node) => node === groups[0] || members.has(node.id)) ? groups[0] : undefined
+  }, [selectedCanvasNodes])
   const selectedSingleResource =
     selectedSingleNode?.type === 'resource' && typeof selectedSingleNode.data.resourceId === 'string'
       ? project.resources[selectedSingleNode.data.resourceId]
@@ -4422,16 +4429,16 @@ function CanvasSurface() {
         groupActiveSelection()
         return
       case 'enter-group':
-        if (selectedSingleNode?.type === 'group') enterSubgraph(selectedSingleNode.id)
+        if (selectedGroupNode) enterSubgraph(selectedGroupNode.id)
         return
       case 'collapse-group':
       case 'expand-group':
-        if (selectedSingleNode?.type === 'group') setGroupCollapsed(selectedSingleNode.id, action.id === 'collapse-group')
+        if (selectedGroupNode) setGroupCollapsed(selectedGroupNode.id, action.id === 'collapse-group')
         return
       case 'ungroup':
-        if (selectedSingleNode?.type === 'group') {
+        if (selectedGroupNode) {
           ignoreSelectionSyncUntil.current = Date.now() + 250
-          ungroupNode(selectedSingleNode.id)
+          ungroupNode(selectedGroupNode.id)
         }
         return
       case 'template':
@@ -4511,13 +4518,13 @@ function CanvasSurface() {
 
     const selectionActions: SelectionRibbonAction[] = []
     const groupableCount = selectedCanvasNodes.filter((node) => node.type !== 'group').length
-    const singleGroup = selectedSingleNode?.type === 'group'
+    const singleGroup = Boolean(selectedGroupNode)
     // Groups do not nest: grouping is not offered inside a group being edited.
-    if (groupableCount >= 2 && !subgraphGroupId) {
+    if (groupableCount >= 2 && !subgraphGroupId && !selectedGroupNode) {
       selectionActions.push({ id: 'group', label: 'Group', title: 'Group selection (Ctrl+G)', icon: <Layers size={15} />, iconOnly: true })
     }
-    if (singleGroup && selectedSingleNode) {
-      const groupCollapsed = isCollapsedGroupNode(selectedSingleNode)
+    if (selectedGroupNode) {
+      const groupCollapsed = isCollapsedGroupNode(selectedGroupNode)
       selectionActions.push(
         { id: 'enter-group', label: 'Enter group', title: 'Edit the nodes inside this group', icon: <LogIn size={15} />, iconOnly: true },
         groupCollapsed
