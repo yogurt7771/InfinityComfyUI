@@ -11,13 +11,16 @@ import {
   Image as ImageIcon,
   KeyRound,
   Layers,
+  ListOrdered,
   Network,
   Pencil,
   Plus,
+  Power,
   Route,
   RefreshCw,
   RotateCcw,
   RotateCw,
+  ScrollText,
   Server,
   Settings,
   Trash2,
@@ -87,6 +90,8 @@ import { ModalFrame } from './ModalFrame'
 import { ConfirmationDialog } from './ConfirmationDialog'
 import { BatchRunDialog } from './batch/BatchRunDialog'
 import { BatchPanel } from './batch/BatchPanel'
+import { ComfyLogsDialog, ComfyQueueDialog } from './ComfyServerTools'
+import { serverLiveSummary, useComfyServerMonitor } from './comfyServerMonitor'
 
 const resourceTypes: ResourceType[] = ['text', 'number', 'boolean', 'image', 'video', 'audio']
 const outputSources: FunctionOutputDef['extract']['source'][] = [
@@ -4098,6 +4103,7 @@ export function LeftPanel() {
   const [functionManagerOpen, setFunctionManagerOpen] = useState(false)
   const [createFunctionOpen, setCreateFunctionOpen] = useState(false)
   const [endpointEditorId, setEndpointEditorId] = useState<'new' | string>()
+  const [serverTool, setServerTool] = useState<{ kind: 'queue' | 'logs'; endpointId: string }>()
   const [dockError, setDockError] = useState<string>()
   const [pendingConfirmation, setPendingConfirmation] = useState<
     | { kind: 'function'; functionId: string; name: string }
@@ -4117,6 +4123,10 @@ export function LeftPanel() {
   const historyOpen = openDock === 'history'
   const functionsOpen = openDock === 'functions'
   const serversOpen = openDock === 'servers'
+  const serverLive = useComfyServerMonitor(project.comfy.endpoints, serversOpen)
+  const serverToolEndpoint = serverTool
+    ? project.comfy.endpoints.find((endpoint) => endpoint.id === serverTool.endpointId)
+    : undefined
   const tasksOpen = openDock === 'tasks'
   const runQueueOpen = openDock === 'runQueue'
   const batchesOpen = openDock === 'batches'
@@ -4691,19 +4701,66 @@ export function LeftPanel() {
           <div className="dock-management-list endpoint-list" aria-label="ComfyUI server list">
             {project.comfy.endpoints.length > 0 ? (
               project.comfy.endpoints.map((endpoint) => {
-                const status = endpoint.enabled ? (endpoint.health?.status ?? 'unknown') : 'disabled'
+                const live = serverLive[endpoint.id]
+                const status =
+                  live?.state === 'offline'
+                    ? 'offline'
+                    : live?.state === 'online'
+                      ? live.running > 0
+                        ? 'running'
+                        : 'online'
+                      : (endpoint.health?.status ?? 'unknown')
                 const queueCount = queueCounts[endpoint.id] ?? 0
                 return (
-                  <article key={endpoint.id} className="dock-management-item server-management-item">
+                  <article
+                    key={endpoint.id}
+                    className={`dock-management-item server-management-item${endpoint.enabled ? '' : ' is-disabled'}`}
+                  >
                     <span className={`status-dot ${status}`} />
                     <span className="dock-management-copy">
                       <strong title={endpoint.name}>{endpoint.name}</strong>
                       <small title={endpoint.baseUrl}>{endpoint.baseUrl}</small>
+                      <small
+                        className={`server-live-line is-${status}`}
+                        title={live?.error ?? (live?.live ? 'Live updates over the ComfyUI websocket' : 'Refreshed every few seconds')}
+                      >
+                        {endpoint.enabled ? null : <em className="server-disabled-badge">Disabled</em>}
+                        {serverLiveSummary(live)}
+                        {live?.live ? ' · live' : ''}
+                        {queueCount ? ` · ${queueCount} from this project` : ''}
+                      </small>
                     </span>
-                    <em>
-                      {status} · queue {queueCount}
-                    </em>
-                    <span className="dock-management-actions">
+                    <span className="dock-management-actions server-management-actions">
+                      <button
+                        type="button"
+                        className={`server-toggle-button${endpoint.enabled ? '' : ' is-off'}`}
+                        aria-label={`${endpoint.enabled ? 'Disable' : 'Enable'} server ${endpoint.name}`}
+                        aria-pressed={!endpoint.enabled}
+                        title={
+                          endpoint.enabled
+                            ? 'Disable: no new runs are sent here; runs already on it finish'
+                            : 'Enable: new runs can be sent here again'
+                        }
+                        onClick={() => updateEndpoint(endpoint.id, { enabled: !endpoint.enabled })}
+                      >
+                        <Power size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`View queue of ${endpoint.name}`}
+                        title="Queue"
+                        onClick={() => setServerTool({ kind: 'queue', endpointId: endpoint.id })}
+                      >
+                        <ListOrdered size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`View logs of ${endpoint.name}`}
+                        title="Logs"
+                        onClick={() => setServerTool({ kind: 'logs', endpointId: endpoint.id })}
+                      >
+                        <ScrollText size={14} />
+                      </button>
                       <button
                         type="button"
                         aria-label={`Edit server ${endpoint.name}`}
@@ -4715,8 +4772,8 @@ export function LeftPanel() {
                         type="button"
                         className="danger-button"
                         aria-label={`Delete server ${endpoint.name}`}
-                      onClick={() => removeEndpoint(endpoint)}
-                    >
+                        onClick={() => removeEndpoint(endpoint)}
+                      >
                         <Trash2 size={14} />
                       </button>
                     </span>
@@ -4810,6 +4867,12 @@ export function LeftPanel() {
       ) : null}
       {batchDialogTaskId ? (
         <BatchRunDialog sourceTaskId={batchDialogTaskId} onClose={() => setBatchDialogTaskId(undefined)} />
+      ) : null}
+      {serverTool?.kind === 'queue' && serverToolEndpoint ? (
+        <ComfyQueueDialog endpoint={serverToolEndpoint} onClose={() => setServerTool(undefined)} />
+      ) : null}
+      {serverTool?.kind === 'logs' && serverToolEndpoint ? (
+        <ComfyLogsDialog endpoint={serverToolEndpoint} onClose={() => setServerTool(undefined)} />
       ) : null}
       <FullResourcePreviewModal
         resource={previewResource}

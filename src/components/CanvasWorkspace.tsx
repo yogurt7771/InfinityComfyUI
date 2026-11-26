@@ -97,6 +97,7 @@ import {
   migrateProviderFunction,
 } from '../domain/providerFunctions'
 import { findModel } from '../domain/modelCatalog'
+import { comfyRunAvailability } from '../domain/comfyAvailability'
 import { ProviderModelSettings } from './ProviderModelSettings'
 import {
   isRequestFunction,
@@ -1382,12 +1383,21 @@ export function FunctionRunDialog({
     : isLlmFunction(functionDef)
       ? customParamsError(functionDef.llm)
       : undefined
+  const comfyEndpoints = useProjectStore((state) => state.project.comfy.endpoints)
+  // Saved ComfyUI functions go to the servers allowed for them; drafts from the editor use the editor's server.
+  const savedComfyFunction = useProjectStore(
+    (state) => functionDef.workflow.format === 'comfyui_api_json' && Boolean(state.project.functions[functionDef.id]),
+  )
+  const availability = savedComfyFunction
+    ? comfyRunAvailability(comfyEndpoints, functionDef.id, functionDef.name)
+    : undefined
+  const serverBlock = availability && !availability.ok ? availability.message : undefined
   const disabledRunTitle =
     missingRequiredInputs.length > 0
       ? `Missing ${missingRequiredInputs.map((input) => input.label || input.key).join(', ')}`
       : invalidCustomParams
         ? `Custom parameters: ${invalidCustomParams}`
-        : undefined
+        : serverBlock
   const runBlocked = Boolean(disabledRunTitle)
   const handleRun = (mode: FunctionRunMode) => {
     onRun(values, runCount, mode)
@@ -1777,6 +1787,11 @@ export function FunctionRunDialog({
             </details>
           ) : null}
         </div>
+        {serverBlock ? (
+          <p className="dialog-note is-warning function-run-server-block" role="alert">
+            {serverBlock}
+          </p>
+        ) : null}
         <div className="local-action-footer">
           <label className="function-run-count dialog-footer-start">
             <span>Runs</span>

@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import { FolderOpen, Play } from 'lucide-react'
 import type { BatchSeedMode, FunctionInputDef, GenerationFunction } from '../../domain/types'
 import { useProjectStore } from '../../store/projectStore'
+import { comfyRunAvailability } from '../../domain/comfyAvailability'
 import { ModalFrame } from '../ModalFrame'
 
 const BATCH_FILE_EXTENSIONS: Record<string, string[]> = {
@@ -50,6 +51,9 @@ export function BatchRunDialog({ sourceTaskId, onClose }: { sourceTaskId: string
   const functionDef: GenerationFunction | undefined = task
     ? (task.functionSnapshot ?? project.functions[task.functionId])
     : undefined
+  // Batch items are scheduled like any run of the source function: only on enabled servers allowed for it.
+  const availability =
+    task && functionDef ? comfyRunAvailability(project.comfy.endpoints, task.functionId, functionDef.name) : undefined
   const batchableInputs = useMemo(
     () =>
       (functionDef?.inputs ?? []).filter(
@@ -246,6 +250,11 @@ export function BatchRunDialog({ sourceTaskId, onClose }: { sourceTaskId: string
         </label>
       </div>
 
+      {availability && !availability.ok ? (
+        <p className="dialog-note is-warning" role="alert">
+          {availability.message}
+        </p>
+      ) : null}
       {error ? <div className="toast-error dock-toast-error">{error}</div> : null}
 
       <div className="local-action-footer">
@@ -255,7 +264,7 @@ export function BatchRunDialog({ sourceTaskId, onClose }: { sourceTaskId: string
         <button
           type="button"
           className="primary"
-          disabled={starting || completeGroups.length === 0}
+          disabled={starting || completeGroups.length === 0 || (availability ? !availability.ok : false)}
           onClick={() => void handleStart()}
         >
           <Play size={14} />

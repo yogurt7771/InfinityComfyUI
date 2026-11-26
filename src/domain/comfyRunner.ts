@@ -9,6 +9,10 @@ type RunComfyPromptOptions = {
   maxPollAttempts?: number
   pollIntervalMs?: number
   wait?: (ms: number) => Promise<void>
+  /** Called once ComfyUI has accepted the prompt, before waiting for its result. */
+  onQueued?: (promptId: string) => void
+  /** Checked before every poll; true stops waiting (the run was canceled here). */
+  stopWhen?: () => boolean
 }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms))
@@ -30,8 +34,10 @@ export async function runComfyPrompt(
   const wait = options.wait ?? sleep
   const queued = await client.queuePrompt(workflow)
   const promptId = queued.prompt_id
+  options.onQueued?.(promptId)
 
   for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) {
+    if (options.stopWhen?.()) throw new Error(`ComfyUI run was canceled (prompt_id=${promptId})`)
     const history = await client.getHistory(promptId)
     if (hasOutputs(history, promptId)) {
       return { promptId, history }

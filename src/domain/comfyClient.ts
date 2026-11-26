@@ -1,3 +1,4 @@
+import { parseComfyLogs, parseComfyQueue, type ComfyLogEntry, type ComfyQueueSnapshot } from './comfyQueue'
 import type { ComfyWorkflow } from './types'
 
 type FetchLike = typeof fetch
@@ -20,6 +21,8 @@ export type ComfyUploadImageOptions = {
   subfolder?: string
   overwrite?: boolean
 }
+
+export type ComfyLogsResult = { supported: true; entries: ComfyLogEntry[] } | { supported: false }
 
 export type ComfyUploadImageResult = {
   name: string
@@ -148,15 +151,47 @@ export class ComfyClient {
     return this.getJson(`/history/${encodeURIComponent(promptId)}`)
   }
 
-  async interrupt() {
+  /** With a prompt id ComfyUI interrupts only that prompt, and only while it runs; without one, whatever runs. */
+  async interrupt(promptId?: string) {
     const url = `${this.baseUrl}/interrupt`
-    const response = await this.fetchImpl(url, {
-      method: 'POST',
-      headers: this.requestHeaders(),
-    })
+    const response = await this.fetchImpl(
+      url,
+      promptId
+        ? {
+            method: 'POST',
+            headers: { ...this.requestHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt_id: promptId }),
+          }
+        : { method: 'POST', headers: this.requestHeaders() },
+    )
 
     if (!response.ok) throw await failedRequest('POST', url, response)
     return response
+  }
+
+  async getQueue(): Promise<ComfyQueueSnapshot> {
+    return parseComfyQueue(await this.getJson('/queue'))
+  }
+
+  /** Removes pending prompts; running ones are left alone (see `interrupt`). */
+  async deleteQueueItems(promptIds: string[]) {
+    await this.post('/queue', { delete: promptIds })
+  }
+
+  /** Removes every pending prompt, from any client. */
+  async clearPendingQueue() {
+    await this.post('/queue', { clear: true })
+  }
+
+  /** ComfyUI's log buffer. `/internal/*` is meant for its own frontend and older versions lack it. */
+  async getLogs(): Promise<ComfyLogsResult> {
+    for (const path of ['/internal/logs/raw', '/internal/logs']) {
+      const url = `${this.baseUrl}${path}`
+      const response = await this.fetchImpl(url, { method: 'GET', headers: this.requestHeaders() })
+      if (response.status === 404) continue
+      return { supported: true, entries: parseComfyLogs(await this.readJson('GET', url, response)) }
+    }
+    return { supported: false }
   }
 
   async viewFile(params: ComfyViewFileParams): Promise<Blob> {
@@ -212,7 +247,7 @@ export class ComfyClient {
     return this.readJson('GET', url, response)
   }
 
-  private async postJson(path: string, body: unknown) {
+  private async post(path: string, body: unknown) {
     const url = `${this.baseUrl}${path}`
     const response = await this.fetchImpl(url, {
       method: 'POST',
@@ -222,8 +257,13 @@ export class ComfyClient {
       },
       body: JSON.stringify(body),
     })
+    if (!response.ok) throw await failedRequest('POST', url, response)
+    return response
+  }
 
-    return this.readJson('POST', url, response)
+  private async postJson(path: string, body: unknown) {
+    const response = await this.post(path, body)
+    return response.json()
   }
 
   private async readJson(method: string, url: string, response: Response) {

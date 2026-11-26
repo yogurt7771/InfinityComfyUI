@@ -1,7 +1,14 @@
 import { useStore } from 'zustand'
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import { get as getIdb, set as setIdb } from 'idb-keyval'
-import { ComfyClient, type ComfyUploadImageOptions, type ComfyUploadImageResult } from '../domain/comfyClient'
+import {
+  ComfyClient,
+  type ComfyLogsResult,
+  type ComfyUploadImageOptions,
+  type ComfyUploadImageResult,
+} from '../domain/comfyClient'
+import { comfyRunAvailability } from '../domain/comfyAvailability'
+import type { ComfyQueueItem, ComfyQueueSnapshot } from '../domain/comfyQueue'
 import {
   assertSafeComfyEndpoints,
   normalizeComfyEndpointCredentials,
@@ -143,7 +150,12 @@ type FunctionEditScope = 'node' | 'all'
 type RuntimeComfyClient = ComfyPromptClient & {
   testConnection?: () => Promise<unknown>
   getObjectInfo?: () => Promise<unknown>
-  interrupt?: () => Promise<unknown>
+  interrupt?: (promptId?: string) => Promise<unknown>
+  getQueue?: () => Promise<ComfyQueueSnapshot>
+  deleteQueueItems?: (promptIds: string[]) => Promise<unknown>
+  clearPendingQueue?: () => Promise<unknown>
+  getLogs?: () => Promise<ComfyLogsResult>
+  createWebSocketUrl?: () => string
   uploadImage?: (file: File, options?: ComfyUploadImageOptions) => Promise<ComfyUploadImageResult>
   viewFile?: (params: ComfyFileRef) => Promise<Blob>
 }
@@ -316,6 +328,15 @@ export type ProjectStoreState = {
   checkComfyEndpointStatuses: () => Promise<void>
   fetchResourceBlob: (resourceId: string) => Promise<Blob>
   fetchComfyHistory: (endpointId: string, promptId: string) => Promise<unknown>
+  /** ComfyUI's live queue on that server; items this project submitted carry their task id. */
+  fetchComfyServerQueue: (endpointId: string) => Promise<ComfyServerQueue>
+  /** Takes one prompt off that server (interrupts it if running, removes it if pending) and cancels its task here. */
+  cancelComfyQueueItem: (endpointId: string, promptId: string) => Promise<void>
+  /** Removes every pending prompt on that server (from any client); this project's runs among them end canceled. */
+  clearComfyPendingQueue: (endpointId: string) => Promise<void>
+  fetchComfyServerLogs: (endpointId: string) => Promise<ComfyLogsResult>
+  /** ComfyUI's status websocket for live queue updates, when the client can build its address. */
+  comfyServerWebSocketUrl: (endpointId: string) => string | undefined
   addTextResource: (name: string, value: string) => void
   addTextResourceAtPosition: (name: string, value: string, position: { x: number; y: number }) => string
   addEmptyResourceAtPosition: (
@@ -431,6 +452,9 @@ export type ProjectStoreState = {
   importProject: (payload: ImportableProject) => void
   importConfig: (payload: ImportableConfig) => void
 }
+
+export type ComfyServerQueueItem = ComfyQueueItem & { taskId?: string }
+export type ComfyServerQueue = { running: ComfyServerQueueItem[]; pending: ComfyServerQueueItem[] }
 
 const defaultDeps: ProjectStoreDeps = {
   idFactory: () => crypto.randomUUID(),
@@ -1900,7 +1924,8 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         return 'Temporary ComfyUI workflow has no selected endpoint. Choose a ComfyUI server and retry.'
       }
       if (!requiredEndpointId) {
-        return 'No eligible ComfyUI endpoint'
+        const availability = comfyRunAvailability(get().project.comfy.endpoints, functionDef.id, functionDef.name)
+        return availability.ok ? 'No eligible ComfyUI endpoint' : availability.message
       }
 
       const selectedEndpoint = get().project.comfy.endpoints.find((endpoint) => endpoint.id === requiredEndpointId)
@@ -1954,6 +1979,89 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
     }
 
     const taskWasCanceled = (taskId: string) => get().project.tasks[taskId]?.status === 'canceled'
+
+    /** Interrupts the prompt if it runs and removes it if it waits; each call is a no-op in the other case. */
+    const withdrawComfyPrompt = (client: RuntimeComfyClient, promptId: string) => {
+      void client.interrupt?.(promptId).catch(() => undefined)
+      void client.deleteQueueItems?.([promptId]).catch(() => undefined)
+    }
+
+    /** Run options that record the prompt id as soon as ComfyUI accepts it and stop waiting once the run is canceled. */
+    const comfyRunOptionsForTask = (taskId: string, client: RuntimeComfyClient) => ({
+      ...runtime.comfyRunOptions,
+      onQueued: (promptId: string) => {
+        if (taskWasCanceled(taskId)) {
+          // Canceled while it was being submitted: take it back off the server.
+          withdrawComfyPrompt(client, promptId)
+          return
+        }
+        set((current) => {
+          const task = current.project.tasks[taskId]
+          if (!task) return current
+          return {
+            project: { ...current.project, tasks: { ...current.project.tasks, [taskId]: { ...task, comfyPromptId: promptId } } },
+          }
+        })
+      },
+      stopWhen: () => taskWasCanceled(taskId),
+    })
+
+    /** Ends an active run as canceled; `withdraw` also takes its prompt back from ComfyUI. */
+    const cancelTask = (taskId: string, withdraw: boolean) => {
+      const state = get()
+      const task = state.project.tasks[taskId]
+      if (!task || !activeTaskStatuses.has(task.status)) return
+
+      if (withdraw && task.comfyPromptId && task.endpointId) {
+        const endpoint = state.project.comfy.endpoints.find((item) => item.id === task.endpointId)
+        if (endpoint) withdrawComfyPrompt(runtime.createComfyClient(endpoint), task.comfyPromptId)
+      }
+
+      const queuedIndex = comfyQueue.findIndex((item) => item.taskId === taskId)
+      if (queuedIndex >= 0) {
+        const [queuedRun] = comfyQueue.splice(queuedIndex, 1)
+        queuedRun?.resolveCompletion()
+      }
+
+      const canceledAt = runtime.now()
+      set((current) => ({
+        project: {
+          ...current.project,
+          project: { ...current.project.project, updatedAt: canceledAt },
+          tasks: {
+            ...current.project.tasks,
+            [taskId]: {
+              ...current.project.tasks[taskId]!,
+              status: 'canceled',
+              updatedAt: canceledAt,
+              completedAt: canceledAt,
+            },
+          },
+          canvas: {
+            ...current.project.canvas,
+            // The run's result group, or the output placeholders it fills (runs started from a popup).
+            nodes: current.project.canvas.nodes.map((node) =>
+              node.data.taskId === taskId
+                ? { ...node, data: { ...node.data, status: 'canceled', completedAt: canceledAt } }
+                : node,
+            ),
+          },
+        },
+      }))
+      syncBatchItemFromTask(taskId)
+      void resolvePendingDependencyTasks()
+    }
+
+    const endpointClient = (endpointId: string) => {
+      const endpoint = get().project.comfy.endpoints.find((item) => item.id === endpointId)
+      if (!endpoint) throw new Error(`ComfyUI endpoint not found: ${endpointId}`)
+      return runtime.createComfyClient(endpoint)
+    }
+
+    const activeTaskForPrompt = (endpointId: string, promptId: string) =>
+      Object.values(get().project.tasks).find(
+        (task) => task.endpointId === endpointId && task.comfyPromptId === promptId && activeTaskStatuses.has(task.status),
+      )
 
     const syncBatchItemFromTask = (taskId: string) => {
       const current = get()
@@ -2284,7 +2392,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
         if (taskWasCanceled(item.taskId)) return
         const submitted = workflowForSocketSlots(randomized.workflow, item.functionDef)
-        const result = await runComfyPrompt(client, submitted.workflow, runtime.comfyRunOptions)
+        const result = await runComfyPrompt(client, submitted.workflow, comfyRunOptionsForTask(item.taskId, client))
         if (taskWasCanceled(item.taskId)) return
         const outputs = extractComfyOutputs(result.history, submitted.workflow, submitted.outputs)
         const completedAt = runtime.now()
@@ -2658,7 +2766,7 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
 
         if (taskWasCanceled(item.taskId)) return
         const submitted = workflowForSocketSlots(workflowForRun, item.functionDef)
-        const result = await runComfyPrompt(client, submitted.workflow, runtime.comfyRunOptions)
+        const result = await runComfyPrompt(client, submitted.workflow, comfyRunOptionsForTask(item.taskId, client))
         if (taskWasCanceled(item.taskId)) return
         const outputs = extractComfyOutputs(result.history, submitted.workflow, submitted.outputs)
         const resourceRefs: ResourceRef[] = []
@@ -5610,6 +5718,52 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
         return server.getHistory(promptId)
       },
 
+      fetchComfyServerQueue: async (endpointId) => {
+        const client = endpointClient(endpointId)
+        if (!client.getQueue) throw new Error('Reading the ComfyUI queue is not supported')
+        let snapshot: ComfyQueueSnapshot
+        try {
+          snapshot = await client.getQueue()
+        } catch (err) {
+          get().markEndpoint(endpointId, 'offline', err instanceof Error ? err.message : 'Connection failed')
+          throw err
+        }
+        get().markEndpoint(endpointId, 'online')
+        const withTask = (item: ComfyQueueItem): ComfyServerQueueItem => {
+          const task = Object.values(get().project.tasks).find(
+            (candidate) => candidate.endpointId === endpointId && candidate.comfyPromptId === item.promptId,
+          )
+          return task ? { ...item, taskId: task.id } : item
+        }
+        return { running: snapshot.running.map(withTask), pending: snapshot.pending.map(withTask) }
+      },
+
+      cancelComfyQueueItem: async (endpointId, promptId) => {
+        const client = endpointClient(endpointId)
+        await Promise.all([client.interrupt?.(promptId), client.deleteQueueItems?.([promptId])])
+        const task = activeTaskForPrompt(endpointId, promptId)
+        if (task) cancelTask(task.id, false)
+      },
+
+      clearComfyPendingQueue: async (endpointId) => {
+        const client = endpointClient(endpointId)
+        if (!client.getQueue || !client.clearPendingQueue) throw new Error('Clearing the ComfyUI queue is not supported')
+        const { pending } = await client.getQueue()
+        await client.clearPendingQueue()
+        for (const item of pending) {
+          const task = activeTaskForPrompt(endpointId, item.promptId)
+          if (task) cancelTask(task.id, false)
+        }
+      },
+
+      fetchComfyServerLogs: async (endpointId) => {
+        const client = endpointClient(endpointId)
+        if (!client.getLogs) return { supported: false }
+        return client.getLogs()
+      },
+
+      comfyServerWebSocketUrl: (endpointId) => endpointClient(endpointId).createWebSocketUrl?.(),
+
     addTextResource: (name, value) => {
       get().addTextResourceAtPosition(name, value, {
         x: DEFAULT_RESOURCE_X,
@@ -8284,63 +8438,9 @@ export function createProjectSlice(deps: Partial<ProjectStoreDeps> = {}): StoreA
     },
 
     cancelResultRun: (resultNodeId) => {
-      const state = get()
-      const resultNode = state.project.canvas.nodes.find((node) => node.id === resultNodeId && node.type === 'result_group')
+      const resultNode = get().project.canvas.nodes.find((node) => node.id === resultNodeId)
       if (!resultNode || typeof resultNode.data.taskId !== 'string') return
-
-      const taskId = resultNode.data.taskId
-      const task = state.project.tasks[taskId]
-      if (!task || !activeTaskStatuses.has(task.status)) return
-
-      if (task.status === 'running' && task.endpointId) {
-        const endpoint = state.project.comfy.endpoints.find((item) => item.id === task.endpointId)
-        if (endpoint) {
-          void runtime
-            .createComfyClient(endpoint)
-            .interrupt?.()
-            .catch(() => undefined)
-        }
-      }
-
-      const queuedIndex = comfyQueue.findIndex((item) => item.taskId === taskId)
-      if (queuedIndex >= 0) {
-        const [queuedRun] = comfyQueue.splice(queuedIndex, 1)
-        queuedRun?.resolveCompletion()
-      }
-
-      const canceledAt = runtime.now()
-      set((current) => ({
-        project: {
-          ...current.project,
-          project: { ...current.project.project, updatedAt: canceledAt },
-          tasks: {
-            ...current.project.tasks,
-            [taskId]: {
-              ...current.project.tasks[taskId]!,
-              status: 'canceled',
-              updatedAt: canceledAt,
-              completedAt: canceledAt,
-            },
-          },
-          canvas: {
-            ...current.project.canvas,
-            nodes: current.project.canvas.nodes.map((node) =>
-              node.id === resultNodeId
-                ? {
-                    ...node,
-                    data: {
-                      ...node.data,
-                      status: 'canceled',
-                      completedAt: canceledAt,
-                    },
-                  }
-                : node,
-            ),
-          },
-        },
-      }))
-      syncBatchItemFromTask(taskId)
-      void resolvePendingDependencyTasks()
+      cancelTask(resultNode.data.taskId, true)
     },
 
     startBatchRunFromResult: async (sourceTaskId, config) => {
