@@ -359,11 +359,7 @@ export const workflowInputCandidates = (
         required: mediaInput,
         ...(primitiveDefault !== undefined ? { defaultValue: primitiveDefault } : {}),
         bind: { nodeId: id, nodeTitle: title, path },
-        upload: mediaInput
-          ? type === 'image'
-            ? { strategy: 'comfy_upload', targetSubfolder: 'infinity-comfyui' }
-            : { strategy: 'manual_path' }
-          : { strategy: 'none' },
+        upload: mediaInput ? { strategy: 'comfy_upload', targetSubfolder: 'infinity-comfyui' } : { strategy: 'none' },
       })
       usedBindings.add(inputBindKey(id, path))
     }

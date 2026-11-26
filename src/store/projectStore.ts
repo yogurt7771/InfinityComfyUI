@@ -1616,20 +1616,21 @@ const decodeResponseBuffer = (buffer: ArrayBuffer, encoding: string) => {
 const uploadedImageValue = (result: ComfyUploadImageResult) =>
   result.subfolder ? `${result.subfolder}/${result.name}` : result.name
 
-const resourceFilename = (resource: Resource) => {
+const resourceMimeType = (resource: Resource) => {
+  if (typeof resource.value === 'object' && resource.value !== null && 'mimeType' in resource.value && resource.value.mimeType) {
+    return resource.value.mimeType
+  }
+
+  return outputMimeType(resource.type, '')
+}
+
+/** ComfyUI's loaders list input files by extension, so a video must not be uploaded as "name.png". */
+const resourceFilename = (resource: Resource, mimeType = resourceMimeType(resource)) => {
   if (typeof resource.value === 'object' && resource.value !== null && 'filename' in resource.value && resource.value.filename) {
     return resource.value.filename
   }
 
-  return `${resource.name ?? resource.id}.png`
-}
-
-const resourceMimeType = (resource: Resource) => {
-  if (typeof resource.value === 'object' && resource.value !== null && 'mimeType' in resource.value) {
-    return resource.value.mimeType
-  }
-
-  return 'image/png'
+  return `${resource.name ?? resource.id}.${extensionForMimeType(resource.type, mimeType)}`
 }
 
 const resourceUrl = (resource: Resource) => {
@@ -1756,7 +1757,8 @@ const prepareComfyInputValues = async (
 
   for (const input of inputs) {
     if (input.type !== 'image' && input.type !== 'video' && input.type !== 'audio') continue
-    if (input.upload?.strategy !== 'comfy_upload') continue
+    // A connected file only reaches ComfyUI's loader nodes as a file in its input folder, whatever the saved strategy
+    // says: functions saved before v5.38.1 marked video / audio fields "manual_path", which sent the resource URL.
     const value = prepared[input.key]
     if (!value || !isResourceRef(value)) continue
 
@@ -1767,10 +1769,11 @@ const prepareComfyInputValues = async (
     if (!url) throw new Error(`Media resource is missing a URL: ${value.resourceId}`)
 
     const blob = await loadResourceBlob(resource)
-    const uploadFilename = await contentHashedUploadFilename(resourceFilename(resource), blob)
-    const file = new File([blob], uploadFilename, { type: blob.type || resourceMimeType(resource) })
+    const mimeType = blob.type || resourceMimeType(resource)
+    const uploadFilename = await contentHashedUploadFilename(resourceFilename(resource, mimeType), blob)
+    const file = new File([blob], uploadFilename, { type: mimeType })
     const uploaded = await client.uploadImage(file, {
-      subfolder: input.upload.targetSubfolder,
+      subfolder: input.upload?.targetSubfolder ?? 'infinity-comfyui',
       overwrite: false,
     })
 

@@ -194,11 +194,7 @@ const inputSlot = (
     required: media,
     ...(defaultValue !== undefined ? { defaultValue } : {}),
     bind: { nodeId: node.nodeId, nodeTitle: node.title, path: `inputs.${field}` },
-    upload: media
-      ? type === 'image'
-        ? { strategy: 'comfy_upload', targetSubfolder: 'infinity-comfyui' }
-        : { strategy: 'manual_path' }
-      : { strategy: 'none' },
+    upload: media ? { strategy: 'comfy_upload', targetSubfolder: 'infinity-comfyui' } : { strategy: 'none' },
   }
 }
 

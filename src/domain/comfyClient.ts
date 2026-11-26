@@ -27,6 +27,85 @@ export type ComfyUploadImageResult = {
   type: string
 }
 
+const MAX_ERROR_BODY_LENGTH = 8000
+
+type ComfyErrorItem = { type?: unknown; message?: unknown; details?: unknown }
+
+const errorItemText = (item: ComfyErrorItem) =>
+  [item.message, item.details].filter((part) => typeof part === 'string' && part.trim()).join(': ')
+
+/**
+ * The readable part of ComfyUI's error body. `/prompt` answers a failed validation with
+ * `{error: {type, message, details}, node_errors: {[nodeId]: {class_type, errors: [{message, details}]}}}`.
+ */
+const comfyErrorSummary = (body: string) => {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(body)
+  } catch {
+    return []
+  }
+  if (!parsed || typeof parsed !== 'object') return []
+  const { error, node_errors: nodeErrors } = parsed as { error?: unknown; node_errors?: unknown }
+  const lines: string[] = []
+  if (typeof error === 'string') lines.push(error)
+  else if (error && typeof error === 'object' && typeof (error as ComfyErrorItem).message === 'string') {
+    lines.push(String((error as ComfyErrorItem).message))
+  }
+  if (nodeErrors && typeof nodeErrors === 'object') {
+    for (const [nodeId, entry] of Object.entries(nodeErrors as Record<string, unknown>)) {
+      const { class_type: classType, errors } = (entry ?? {}) as { class_type?: unknown; errors?: unknown }
+      const node = `${typeof classType === 'string' ? classType : 'Node'} #${nodeId}`
+      for (const item of Array.isArray(errors) ? errors : []) {
+        const text = errorItemText((item ?? {}) as ComfyErrorItem)
+        if (text) lines.push(`${node}: ${text}`)
+      }
+    }
+  }
+  return lines
+}
+
+/** A non-2xx answer from ComfyUI, with the response body as ComfyUI sent it. */
+export class ComfyRequestError extends Error {
+  readonly status: number
+  readonly body: string
+
+  constructor(method: string, path: string, status: number, body: string) {
+    const shownBody =
+      body.length > MAX_ERROR_BODY_LENGTH
+        ? `${body.slice(0, MAX_ERROR_BODY_LENGTH)}… (${body.length - MAX_ERROR_BODY_LENGTH} more characters)`
+        : body
+    super(
+      [
+        `ComfyUI request failed: ${status} (${method} ${path})`,
+        ...comfyErrorSummary(body),
+        ...(shownBody.trim() ? [`Response body: ${shownBody}`] : []),
+      ].join('\n'),
+    )
+    this.name = 'ComfyRequestError'
+    this.status = status
+    this.body = body
+  }
+}
+
+const requestPath = (url: string) => {
+  try {
+    return new URL(url).pathname
+  } catch {
+    return url
+  }
+}
+
+const failedRequest = async (method: string, url: string, response: Response) => {
+  let body = ''
+  try {
+    body = await response.text()
+  } catch {
+    // The status alone still says what failed.
+  }
+  return new ComfyRequestError(method, requestPath(url), response.status, body)
+}
+
 export class ComfyClient {
   private readonly baseUrl: string
   private readonly clientId: string
@@ -62,16 +141,7 @@ export class ComfyClient {
   }
 
   async queuePrompt(workflow: ComfyWorkflow): Promise<{ prompt_id: string; number: number }> {
-    const response = await this.fetchImpl(`${this.baseUrl}/prompt`, {
-      method: 'POST',
-      headers: {
-        ...this.requestHeaders(),
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ prompt: workflow, client_id: this.clientId }),
-    })
-
-    return this.readJson(response)
+    return this.postJson('/prompt', { prompt: workflow, client_id: this.clientId })
   }
 
   async getHistory(promptId: string): Promise<unknown> {
@@ -79,12 +149,13 @@ export class ComfyClient {
   }
 
   async interrupt() {
-    const response = await this.fetchImpl(`${this.baseUrl}/interrupt`, {
+    const url = `${this.baseUrl}/interrupt`
+    const response = await this.fetchImpl(url, {
       method: 'POST',
       headers: this.requestHeaders(),
     })
 
-    if (!response.ok) throw new Error(`ComfyUI request failed: ${response.status}`)
+    if (!response.ok) throw await failedRequest('POST', url, response)
     return response
   }
 
@@ -94,12 +165,13 @@ export class ComfyClient {
       subfolder: params.subfolder ?? '',
       type: params.type,
     })
-    const response = await this.fetchImpl(`${this.baseUrl}/view?${search.toString()}`, {
+    const url = `${this.baseUrl}/view?${search.toString()}`
+    const response = await this.fetchImpl(url, {
       method: 'GET',
       headers: this.requestHeaders(),
     })
 
-    if (!response.ok) throw new Error(`ComfyUI request failed: ${response.status}`)
+    if (!response.ok) throw await failedRequest('GET', url, response)
     return response.blob()
   }
 
@@ -109,13 +181,14 @@ export class ComfyClient {
     if (options.subfolder) formData.set('subfolder', options.subfolder)
     formData.set('overwrite', options.overwrite ? 'true' : 'false')
 
-    const response = await this.fetchImpl(`${this.baseUrl}/upload/image`, {
+    const url = `${this.baseUrl}/upload/image`
+    const response = await this.fetchImpl(url, {
       method: 'POST',
       headers: this.requestHeaders(),
       body: formData,
     })
 
-    return this.readJson(response)
+    return this.readJson('POST', url, response)
   }
 
   createWebSocketUrl() {
@@ -130,16 +203,31 @@ export class ComfyClient {
   }
 
   private async getJson(path: string) {
-    const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+    const url = `${this.baseUrl}${path}`
+    const response = await this.fetchImpl(url, {
       method: 'GET',
       headers: this.requestHeaders(),
     })
 
-    return this.readJson(response)
+    return this.readJson('GET', url, response)
   }
 
-  private async readJson(response: Response) {
-    if (!response.ok) throw new Error(`ComfyUI request failed: ${response.status}`)
+  private async postJson(path: string, body: unknown) {
+    const url = `${this.baseUrl}${path}`
+    const response = await this.fetchImpl(url, {
+      method: 'POST',
+      headers: {
+        ...this.requestHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    })
+
+    return this.readJson('POST', url, response)
+  }
+
+  private async readJson(method: string, url: string, response: Response) {
+    if (!response.ok) throw await failedRequest(method, url, response)
     return response.json()
   }
 
